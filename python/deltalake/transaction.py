@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from deltalake import Schema
+from deltalake._internal import RemoveAction as RemoveAction
 from deltalake._internal import Transaction as Transaction
 from deltalake._internal import (
     create_table_with_add_actions as _create_table_with_add_actions,

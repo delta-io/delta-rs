@@ -610,7 +610,7 @@ mod tests {
             ])
             .with_partition_columns(["part"])
             .await?;
-        Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
+        Snapshot::try_new(table.log_store().as_ref(), None).await
     }
 
     fn nested_data_type(path: &[&str]) -> DeltaResult<DataType> {
@@ -630,7 +630,7 @@ mod tests {
                 nested_data_type(&["level2", "level3", "level4", "level5", "level6", "leaf"])?,
             )])
             .await?;
-        Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
+        Snapshot::try_new(table.log_store().as_ref(), None).await
     }
 
     fn assert_struct_path(schema: &StructType, path: &[&str]) {
@@ -670,7 +670,7 @@ mod tests {
                 Some(num_indexed_cols),
             )
             .await?;
-        Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
+        Snapshot::try_new(table.log_store().as_ref(), None).await
     }
 
     async fn binary_snapshot() -> DeltaResult<Snapshot> {
@@ -681,7 +681,7 @@ mod tests {
                 StructField::nullable("value", DataType::INTEGER),
             ])
             .await?;
-        Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
+        Snapshot::try_new(table.log_store().as_ref(), None).await
     }
 
     async fn boolean_snapshot() -> DeltaResult<Snapshot> {
@@ -693,7 +693,7 @@ mod tests {
                 StructField::nullable("value", DataType::STRING),
             ])
             .await?;
-        Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
+        Snapshot::try_new(table.log_store().as_ref(), None).await
     }
 
     async fn nested_boolean_snapshot() -> DeltaResult<Snapshot> {
@@ -709,12 +709,12 @@ mod tests {
                 StructField::nullable("user", DataType::Struct(Box::new(user))),
             ])
             .await?;
-        Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
+        Snapshot::try_new(table.log_store().as_ref(), None).await
     }
 
     async fn column_mapping_snapshot() -> DeltaResult<Snapshot> {
         let log_store = column_mapping_builder()?.build_storage()?;
-        Snapshot::try_new(log_store.as_ref(), Default::default(), None).await
+        Snapshot::try_new(log_store.as_ref(), None).await
     }
 
     fn projection_for_predicate(

@@ -1,6 +1,7 @@
 //! Helper module to check if a transaction can be committed in case of conflicting commits.
 use std::collections::HashSet;
 
+use delta_kernel::table_features::TableFeature;
 use delta_kernel::table_properties::IsolationLevel;
 
 use super::CommitInfo;
@@ -9,7 +10,8 @@ use crate::DeltaTableError;
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::DeltaResult;
 use crate::kernel::{
-    Action, Add, ConflictReadSet, Metadata, Protocol, Remove, Transaction, Version,
+    Action, Add, ConflictReadSet, Metadata, Protocol, ProtocolExt as _, Remove, Transaction,
+    Version,
 };
 use crate::logstore::{LogStore, get_actions};
 use crate::protocol::DeltaOperation;
@@ -132,13 +134,7 @@ impl<'a> TransactionInfo<'a> {
             .map(|pred| log_data.parse_predicate_expression(pred, &session.state()))
             .transpose()?;
 
-        let mut read_app_ids = HashSet::<String>::new();
-        for action in actions.iter() {
-            if let Action::Txn(Transaction { app_id, .. }) = action {
-                read_app_ids.insert(app_id.clone());
-            }
-        }
-
+        // read_app_ids is computed from `actions` inside Self::new; no need to duplicate it here.
         Ok(Self::new(
             read_snapshot,
             read_predicates,
@@ -436,9 +432,41 @@ impl<'a> ConflictChecker<'a> {
                     .protocol()
                     .min_writer_version(),
             );
-            if curr_read < win_read || win_write < curr_write {
+            // curr_read < win_read: our reader capability is below the new minimum — can't read this format.
+            // curr_write < win_write: our writer capability is below the new minimum — can't safely write.
+            if curr_read < win_read || curr_write < win_write {
                 return Err(CommitConflictError::ProtocolChanged(format!(
                     "required read/write {win_read}/{win_write}, current read/write {curr_read}/{curr_write}"
+                )));
+            };
+
+            // A table feature can be enabled without moving the protocol versions, in which
+            // case the comparison above sees nothing. Enabling one still changes what a valid
+            // commit looks like, and the requirement may live outside the Metadata action that
+            // `check_no_metadata_updates` guards: clustering, for example, carries its
+            // per-column statistics requirement in a DomainMetadata action. Our transaction was
+            // built without knowing about the feature, so treat it as a protocol change.
+            let curr_reader_features = self
+                .txn_info
+                .read_snapshot
+                .log_data()
+                .protocol()
+                .reader_features_set();
+            let curr_writer_features = self
+                .txn_info
+                .read_snapshot
+                .log_data()
+                .protocol()
+                .writer_features_set();
+            let added_reader =
+                newly_enabled_features(&p.reader_features_set(), &curr_reader_features);
+            let added_writer =
+                newly_enabled_features(&p.writer_features_set(), &curr_writer_features);
+            if !added_reader.is_empty() || !added_writer.is_empty() {
+                return Err(CommitConflictError::ProtocolChanged(format!(
+                    "winning commit enabled table features, reader [{}], writer [{}]",
+                    added_reader.join(", "),
+                    added_writer.join(", ")
                 )));
             };
         }
@@ -593,8 +621,8 @@ impl<'a> ConflictChecker<'a> {
             .winning_commit_summary
             .removed_files()
             .iter()
-            .cloned()
-            .map(|r| r.path)
+            .filter(|r| r.data_change)
+            .map(|r| r.path.clone())
             .collect();
         let intersection: HashSet<&String> = txn_deleted_files
             .intersection(&winning_deleted_files)
@@ -626,6 +654,24 @@ impl<'a> ConflictChecker<'a> {
             Ok(())
         }
     }
+}
+
+/// Names of the features present in `winning` but not in `current`, sorted for a stable message.
+fn newly_enabled_features(
+    winning: &Option<HashSet<TableFeature>>,
+    current: &Option<HashSet<TableFeature>>,
+) -> Vec<String> {
+    let Some(winning) = winning else {
+        return Vec::new();
+    };
+    let empty = HashSet::new();
+    let current = current.as_ref().unwrap_or(&empty);
+    let mut added: Vec<String> = winning
+        .difference(current)
+        .map(|feature| feature.to_string())
+        .collect();
+    added.sort();
+    added
 }
 
 // implementation and comments adopted from
@@ -894,6 +940,142 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "datafusion")]
+    async fn test_protocol_writer_upgrade_conflicts_with_lower_version_writer() {
+        // Winning commit raises min_writer_version from the default to 4.
+        // Our transaction was written against a lower-version table — it must be rejected.
+        // This specifically validates the direction of the writer-version comparison
+        // (curr_write < win_write must fire, NOT the old win_write < curr_write).
+        let file = simple_add(true, "1", "10").into();
+        let result = execute_test(
+            None,
+            None,
+            // winning commit: protocol with higher min_writer_version
+            vec![ActionFactory::protocol(Some(1), Some(4), None::<Vec<_>>, None::<Vec<_>>).into()],
+            vec![file],
+            false,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(CommitConflictError::ProtocolChanged(_))),
+            "A winning commit that raises min_writer_version must be rejected: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_concurrent_writer_feature_enabled_without_version_bump() {
+        // Winning commit keeps min_reader/min_writer at (3, 7) and enables a writer
+        // feature the read snapshot did not have. The protocol numbers are unchanged, so
+        // the version comparison cannot see it, but the set of valid commits did change.
+        let setup = vec![
+            ActionFactory::protocol(
+                Some(3),
+                Some(7),
+                Some(vec![TableFeature::DeletionVectors]),
+                Some(vec![TableFeature::DeletionVectors]),
+            )
+            .into(),
+            ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, None).into(),
+        ];
+        let file = simple_add(true, "1", "10").into();
+        let result = execute_test(
+            Some(setup),
+            None,
+            vec![
+                ActionFactory::protocol(
+                    Some(3),
+                    Some(7),
+                    Some(vec![TableFeature::DeletionVectors]),
+                    Some(vec![
+                        TableFeature::DeletionVectors,
+                        TableFeature::ClusteredTable,
+                    ]),
+                )
+                .into(),
+            ],
+            vec![file],
+            false,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(CommitConflictError::ProtocolChanged(_))),
+            "A winning commit enabling a new writer feature must be rejected: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_concurrent_reader_writer_feature_enabled_without_version_bump() {
+        // Same as above for a feature that is listed on both sides. The kernel rejects a
+        // ReaderWriter feature that appears in readerFeatures alone, so a reader-only
+        // difference cannot be constructed: ColumnMapping lands in both sets.
+        let setup = vec![
+            ActionFactory::protocol(Some(3), Some(7), Some(vec![]), Some(vec![])).into(),
+            ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, None).into(),
+        ];
+        let file = simple_add(true, "1", "10").into();
+        let result = execute_test(
+            Some(setup),
+            None,
+            vec![
+                ActionFactory::protocol(
+                    Some(3),
+                    Some(7),
+                    Some(vec![TableFeature::ColumnMapping]),
+                    Some(vec![TableFeature::ColumnMapping]),
+                )
+                .into(),
+            ],
+            vec![file],
+            false,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(CommitConflictError::ProtocolChanged(_))),
+            "A winning commit enabling a new reader feature must be rejected: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_concurrent_protocol_rewrite_without_new_features_is_allowed() {
+        // A winning commit that re-states the same protocol adds no capability
+        // requirement, so an ordinary append must still be allowed through.
+        let setup = vec![
+            ActionFactory::protocol(
+                Some(3),
+                Some(7),
+                Some(vec![TableFeature::DeletionVectors]),
+                Some(vec![TableFeature::DeletionVectors]),
+            )
+            .into(),
+            ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, None).into(),
+        ];
+        let file = simple_add(true, "1", "10").into();
+        let result = execute_test(
+            Some(setup),
+            None,
+            vec![
+                ActionFactory::protocol(
+                    Some(3),
+                    Some(7),
+                    Some(vec![TableFeature::DeletionVectors]),
+                    Some(vec![TableFeature::DeletionVectors]),
+                )
+                .into(),
+            ],
+            vec![file],
+            false,
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "Re-stating the same protocol must not conflict: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
     async fn test_read_whole_table_disallows_concurrent_append() {
         // `read_whole_table` should disallow any concurrent change, even if the change
         // is disjoint with the earlier filter
@@ -1094,10 +1276,44 @@ mod tests {
             false,
         )
         .await;
-        // Should still fail - even with data_change = false, can't delete the same file twice
+        // Should succeed because two compaction removes (data_change=false) on the same file
+        // are physical-layout-only and do not logically delete anything — mirroring the filter
+        // on the read-delete check and matching the Spark reference implementation.
         assert!(
-            matches!(result, Err(CommitConflictError::ConcurrentDeleteDelete)),
-            "Concurrent double delete should conflict even with data_change=false"
+            result.is_ok(),
+            "Concurrent compaction removes (data_change=false) on the same file should not raise ConcurrentDeleteDelete: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_compaction_remove_does_not_conflict_with_real_delete() {
+        // OPTIMIZE compaction removed file F (data_change=false).
+        // Current transaction also wants to delete F (data_change=true, real logical delete).
+        // With the old unfiltered check this raised ConcurrentDeleteDelete spuriously.
+        let file = simple_add(true, "1", "10");
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file.clone().into());
+
+        // Winning commit: OPTIMIZE removes the file (physical-only, data_change=false)
+        let compaction_remove = ActionFactory::remove(&file, false);
+
+        // Current txn: real delete of the same file (data_change=true)
+        let real_remove = ActionFactory::remove(&file, true);
+
+        let result = execute_test(
+            Some(setup_actions),
+            None,
+            vec![compaction_remove.into()],
+            vec![real_remove.into()],
+            false,
+        )
+        .await;
+        // The compaction removed the file physically but not logically; our real delete
+        // should be allowed through (idempotent — the file is gone either way).
+        assert!(
+            result.is_ok(),
+            "Compaction remove (data_change=false) should not conflict with a concurrent real delete: {result:?}"
         );
     }
 

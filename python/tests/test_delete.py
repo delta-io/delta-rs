@@ -198,3 +198,42 @@ def test_delete_stats_columns_stats_provided(tmp_path: pathlib.Path):
 
     with pytest.raises(Exception):
         get_value("null_count.bar")
+
+
+@pytest.mark.pandas
+def test_delete_concurrent_with_non_overlapping_append(tmp_path: pathlib.Path):
+    """A delete must not report an error for a commit that succeeded.
+
+    Regression test for https://github.com/delta-io/delta-rs/issues/2509.
+    """
+    import pandas as pd
+
+    df = pd.DataFrame.from_dict({"k": [1], "v": [1]})
+    write_deltalake(tmp_path, df, mode="overwrite")
+
+    # Read the table before the append, so that the delete below is concurrent.
+    table_2 = DeltaTable(tmp_path)
+
+    data_1 = pd.DataFrame.from_dict({"k": [3], "v": [-3]})
+    write_deltalake(tmp_path, data_1, mode="append")
+
+    table_2.delete("k = 1")
+
+    assert table_2.version() == 2
+    assert table_2.history(1)[0]["operation"] == "DELETE"
+
+    from deltalake.query import QueryBuilder
+
+    expected = Table.from_pydict(
+        {
+            "k": Array([3], Field("k", type=DataType.int64(), nullable=True)),
+            "v": Array([-3], Field("v", type=DataType.int64(), nullable=True)),
+        }
+    )
+    result = (
+        QueryBuilder()
+        .register("tbl", DeltaTable(tmp_path))
+        .execute("select k, v from tbl")
+        .read_all()
+    )
+    assert result == expected

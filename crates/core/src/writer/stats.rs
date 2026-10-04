@@ -6,12 +6,13 @@ use std::{
     ops::AddAssign,
 };
 
+use chrono::Timelike;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use parquet::basic::Type;
-use parquet::basic::{ConvertedType, DecimalType, IntType, LogicalType, TimestampType};
+use parquet::basic::{ConvertedType, DecimalType, LogicalType};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{
@@ -334,7 +335,12 @@ impl StatsScalar {
                 }
             }
             (Statistics::Int64(v), Some(LogicalType::Decimal(decimal_type))) => {
-                let val = get_stat!(v) as f64 / 10.0_f64.powi(decimal_type.scale);
+                let val = get_stat!(v);
+                if decimal_type.scale == 0 {
+                    // Preserve exact integer bounds instead of rounding through f64.
+                    return Ok(Self::Int64(val));
+                }
+                let val = val as f64 / 10.0_f64.powi(decimal_type.scale);
                 // Spark serializes these as numbers
                 Ok(Self::Decimal {
                     value: val,
@@ -455,10 +461,23 @@ impl From<StatsScalar> for serde_json::Value {
             StatsScalar::Float64(v) => serde_json::Value::from(v),
             StatsScalar::Date(v) => serde_json::Value::from(v.format("%Y-%m-%d").to_string()),
             StatsScalar::Timestamp(v) => {
-                serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+                // Timestamps must be truncated to millisecond precision when writing
+                // to JSON for compatibility with the Delta Protocol.
+                let format = if v.nanosecond() == 0 {
+                    // Omit the sub-second component if it is zero
+                    "%Y-%m-%dT%H:%M:%SZ"
+                } else {
+                    "%Y-%m-%dT%H:%M:%S%.3fZ"
+                };
+                serde_json::Value::from(v.format(format).to_string())
             }
             StatsScalar::TimestampNtz(v) => {
-                serde_json::Value::from(v.format("%Y-%m-%d %H:%M:%S%.f").to_string())
+                let format = if v.nanosecond() == 0 {
+                    "%Y-%m-%d %H:%M:%S"
+                } else {
+                    "%Y-%m-%d %H:%M:%S%.3f"
+                };
+                serde_json::Value::from(v.format(format).to_string())
             }
             StatsScalar::Decimal { value, scale } => {
                 // For scale=0, serialize as integer since serde_json would otherwise
@@ -643,9 +662,10 @@ mod tests {
         protocol::{ColumnCountStat, ColumnValueStat},
         table::builder::DeltaTableBuilder,
     };
+    use parquet::basic::{Compression, IntType, TimestampType};
     use parquet::data_type::{ByteArray, FixedLenByteArray};
+    use parquet::file::properties::WriterProperties;
     use parquet::file::statistics::ValueStatistics;
-    use parquet::{basic::Compression, file::properties::WriterProperties};
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::path::Path;
@@ -713,20 +733,40 @@ mod tests {
                 Value::from("1998-12-01"),
             ),
             (
-                simple_parquet_stat!(Statistics::Int64, 1641040496789123456),
+                simple_parquet_stat!(Statistics::Int64, 1641040496789723456),
                 Some(LogicalType::Timestamp(TimestampType {
                     is_adjusted_to_u_t_c: true,
                     unit: parquet::basic::TimeUnit::NANOS,
                 })),
-                Value::from("2022-01-01T12:34:56.789123456Z"),
+                // Should be truncated to millisecond precision
+                Value::from("2022-01-01T12:34:56.789Z"),
             ),
             (
-                simple_parquet_stat!(Statistics::Int64, 1641040496789123),
+                simple_parquet_stat!(Statistics::Int64, 1641040496789723456),
+                Some(LogicalType::Timestamp(TimestampType {
+                    is_adjusted_to_u_t_c: false, // Maps to TimestampNanosNtz
+                    unit: parquet::basic::TimeUnit::NANOS,
+                })),
+                // Should be truncated to millisecond precision
+                Value::from("2022-01-01 12:34:56.789"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496789723),
                 Some(LogicalType::Timestamp(TimestampType {
                     is_adjusted_to_u_t_c: true,
                     unit: parquet::basic::TimeUnit::MICROS,
                 })),
-                Value::from("2022-01-01T12:34:56.789123Z"),
+                // Should be truncated to millisecond precision
+                Value::from("2022-01-01T12:34:56.789Z"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496789723),
+                Some(LogicalType::Timestamp(TimestampType {
+                    is_adjusted_to_u_t_c: false, // Maps to TimestampNtz
+                    unit: parquet::basic::TimeUnit::MICROS,
+                })),
+                // Should be truncated to millisecond precision
+                Value::from("2022-01-01 12:34:56.789"),
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1641040496789),
@@ -735,6 +775,50 @@ mod tests {
                     unit: parquet::basic::TimeUnit::MILLIS,
                 })),
                 Value::from("2022-01-01T12:34:56.789Z"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496789),
+                Some(LogicalType::Timestamp(TimestampType {
+                    is_adjusted_to_u_t_c: false, // Maps to TimestampNtz
+                    unit: parquet::basic::TimeUnit::MILLIS,
+                })),
+                Value::from("2022-01-01 12:34:56.789"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496000000000),
+                Some(LogicalType::Timestamp(TimestampType {
+                    is_adjusted_to_u_t_c: true,
+                    unit: parquet::basic::TimeUnit::NANOS,
+                })),
+                // No sub-second component
+                Value::from("2022-01-01T12:34:56Z"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496000000000),
+                Some(LogicalType::Timestamp(TimestampType {
+                    is_adjusted_to_u_t_c: false, // Maps to TimestampNanosNtz
+                    unit: parquet::basic::TimeUnit::NANOS,
+                })),
+                // No sub-second component
+                Value::from("2022-01-01 12:34:56"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496000000500),
+                Some(LogicalType::Timestamp(TimestampType {
+                    is_adjusted_to_u_t_c: true,
+                    unit: parquet::basic::TimeUnit::NANOS,
+                })),
+                // Sub-second component truncated to zero milliseconds
+                Value::from("2022-01-01T12:34:56.000Z"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496000000500),
+                Some(LogicalType::Timestamp(TimestampType {
+                    is_adjusted_to_u_t_c: false, // Maps to TimestampNanosNtz
+                    unit: parquet::basic::TimeUnit::NANOS,
+                })),
+                // Sub-second component truncated to zero milliseconds
+                Value::from("2022-01-01 12:34:56.000"),
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1234),
@@ -855,6 +939,118 @@ mod tests {
             let actual = serde_json::Value::from(scalar);
             assert_eq!(&actual, expected);
         }
+    }
+
+    #[test]
+    fn test_int64_decimal_min_stat_respects_precision() {
+        // A decimal(18, 0) column whose true minimum is the largest value the
+        // precision allows. Converting to f64 rounds 999999999999999999 up to
+        // 1e18, which serializes to a 19 digit minValue that is greater than the
+        // true minimum and would let a reader skip a file that does match.
+        let stats = simple_parquet_stat!(Statistics::Int64, 999999999999999999i64);
+        let logical_type = LogicalType::Decimal(DecimalType {
+            scale: 0,
+            precision: 18,
+        });
+
+        let scalar = StatsScalar::try_from_stats(&stats, Some(&logical_type), true).unwrap();
+        let min_value = serde_json::Value::from(scalar);
+        let min = min_value.as_i64().unwrap();
+
+        assert!(
+            min <= 999999999999999999,
+            "minValue {min} is greater than the true minimum 999999999999999999"
+        );
+    }
+
+    #[test]
+    fn test_int64_decimal_zero_scale_bounds_are_exact() {
+        let logical_type = LogicalType::Decimal(DecimalType {
+            scale: 0,
+            precision: 18,
+        });
+        for value in [
+            -999_999_999_999_999_999_i64,
+            -9_007_199_254_740_993,
+            -9_007_199_254_740_991,
+            -1234,
+            0,
+            1234,
+            9_007_199_254_740_991,
+            9_007_199_254_740_993,
+            999_999_999_999_999_999,
+        ] {
+            let stats = simple_parquet_stat!(Statistics::Int64, value);
+            for use_min in [true, false] {
+                let scalar =
+                    StatsScalar::try_from_stats(&stats, Some(&logical_type), use_min).unwrap();
+                assert_eq!(
+                    serde_json::Value::from(scalar),
+                    serde_json::Value::from(value),
+                    "value={value}, use_min={use_min}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_int64_decimal_nonzero_scale_stats() {
+        for (scale, expected) in [(3, json!(1.234)), (-1, json!(12340.0))] {
+            let logical_type = LogicalType::Decimal(DecimalType {
+                scale,
+                precision: 4,
+            });
+            let stats = simple_parquet_stat!(Statistics::Int64, 1234);
+            for use_min in [true, false] {
+                let scalar =
+                    StatsScalar::try_from_stats(&stats, Some(&logical_type), use_min).unwrap();
+                assert_eq!(serde_json::Value::from(scalar), expected);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_int64_decimal_zero_scale_add_stats() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let schema = json!({
+            "type": "struct",
+            "fields": [
+                { "name": "amount", "type": "decimal(18,0)", "nullable": true, "metadata": {} }
+            ]
+        });
+        create_temp_table_with_schema(temp_dir.path(), &schema);
+        let table_uri = Url::from_directory_path(temp_dir.path()).unwrap();
+        let table = load_table(&table_uri, HashMap::new()).await.unwrap();
+        let mut writer = RecordBatchWriter::for_table(&table)
+            .unwrap()
+            .with_writer_properties(
+                WriterProperties::builder()
+                    .set_max_row_group_row_count(Some(1))
+                    .build(),
+            );
+        let values = arrow_array::Decimal128Array::from(vec![
+            9_007_199_254_740_993,
+            -999_999_999_999_999_999,
+            999_999_999_999_999_999,
+            -9_007_199_254_740_993,
+        ])
+        .with_precision_and_scale(18, 0)
+        .unwrap();
+        let batch =
+            arrow_array::RecordBatch::try_new(writer.arrow_schema(), vec![Arc::new(values)])
+                .unwrap();
+        writer.write(batch).await.unwrap();
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 1);
+        let stats = adds[0].get_stats().unwrap().unwrap();
+        assert_eq!(
+            stats.min_values["amount"].as_value().unwrap().as_i64(),
+            Some(-999_999_999_999_999_999)
+        );
+        assert_eq!(
+            stats.max_values["amount"].as_value().unwrap().as_i64(),
+            Some(999_999_999_999_999_999)
+        );
     }
 
     #[tokio::test]

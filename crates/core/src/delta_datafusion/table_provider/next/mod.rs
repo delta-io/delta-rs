@@ -42,11 +42,11 @@ use delta_kernel::{Engine, table_configuration::TableConfiguration, table_featur
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 use url::Url;
-use uuid::Uuid;
 
 pub use self::scan::DeltaScanExec;
 pub(crate) use self::scan::KernelScanPlan;
 use self::scan::ProjectedScanContract;
+pub(crate) use self::scan::RuntimeFileFilter;
 use super::data_sink::DeltaDataSink;
 use crate::DeltaTableError;
 use crate::delta_datafusion::DeltaScanConfig;
@@ -496,9 +496,9 @@ pub struct DeltaScan {
     file_skipping_predicate: Option<Vec<Expr>>,
     #[serde(skip)]
     log_store: Option<LogStoreRef>,
-    #[serde(skip)]
-    read_operation_id: Option<Uuid>,
     file_selection: Option<FileSelection>,
+    #[serde(skip)]
+    runtime_file_filter: Option<RuntimeFileFilter>,
 }
 
 /// Deletion vector selection for one data file.
@@ -539,8 +539,8 @@ impl DeltaScan {
             row_index_column: None,
             file_skipping_predicate: None,
             log_store: None,
-            read_operation_id: None,
             file_selection: None,
+            runtime_file_filter: None,
         })
     }
 
@@ -549,6 +549,14 @@ impl DeltaScan {
         predicate: impl IntoIterator<Item = Expr>,
     ) -> Self {
         self.file_skipping_predicate = Some(predicate.into_iter().collect());
+        self
+    }
+
+    /// Skip files during execution with the predicates that are set in `filter`.
+    ///
+    /// See [`RuntimeFileFilter`].
+    pub(crate) fn with_runtime_file_filter(mut self, filter: RuntimeFileFilter) -> Self {
+        self.runtime_file_filter = Some(filter);
         self
     }
 
@@ -596,13 +604,6 @@ impl DeltaScan {
         self
     }
 
-    /// Scope runtime object store registration to a specific operation's temporary copy when
-    /// the caller needs operation local reads.
-    pub(crate) fn with_operation_id(mut self, operation_id: Uuid) -> Self {
-        self.read_operation_id = Some(operation_id);
-        self
-    }
-
     fn validate_supported_reader_features(
         snapshot: &SnapshotWrapper,
     ) -> std::result::Result<(), TransactionError> {
@@ -626,7 +627,7 @@ impl DeltaScan {
         Self::validate_supported_reader_features(&self.snapshot)
             .map_err(crate::DeltaTableError::from)?;
         if let Some(log_store) = &self.log_store {
-            super::update_datafusion_session(session, log_store.as_ref(), self.read_operation_id)?;
+            super::update_datafusion_session(session, log_store.as_ref())?;
         }
         Ok(())
     }
@@ -763,6 +764,7 @@ impl TableProvider for DeltaScan {
             engine,
             limit,
             resolved_file_selection.as_ref(),
+            self.runtime_file_filter.as_ref(),
         )
         .await
     }
@@ -779,7 +781,7 @@ impl TableProvider for DeltaScan {
             )
         })?;
 
-        super::update_datafusion_session(state, log_store.as_ref(), self.read_operation_id)?;
+        super::update_datafusion_session(state, log_store.as_ref())?;
 
         let snapshot = match &self.snapshot {
             SnapshotWrapper::EagerSnapshot(esnap) => esnap.as_ref().clone(),
@@ -855,11 +857,12 @@ pub(crate) fn test_multi_partitioned_override_schema() -> SchemaRef {
 mod tests {
     use arrow::{
         array::{
-            BooleanArray, Date32Array, Int32Array, Int64Array, StringArray,
+            AsArray, BooleanArray, Date32Array, Int32Array, Int64Array, StringArray,
             TimestampMillisecondArray,
         },
         datatypes::{
-            DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
+            DataType as ArrowDataType, Field as ArrowField, Int64Type, Schema as ArrowSchema,
+            TimeUnit,
         },
         record_batch::RecordBatch,
     };
@@ -1071,19 +1074,22 @@ mod tests {
             .await
     }
 
-    async fn create_in_memory_id_table_with_rows(
-        values: Vec<i64>,
-    ) -> crate::DeltaResult<crate::DeltaTable> {
-        let table = create_in_memory_id_table().await?;
-        let batch = RecordBatch::try_new(
+    fn id_batch(values: Vec<i64>) -> crate::DeltaResult<RecordBatch> {
+        Ok(RecordBatch::try_new(
             Arc::new(ArrowSchema::new(vec![ArrowField::new(
                 "id",
                 ArrowDataType::Int64,
                 true,
             )])),
             vec![Arc::new(Int64Array::from(values))],
-        )?;
-        table.write(vec![batch]).await
+        )?)
+    }
+
+    async fn create_in_memory_id_table_with_rows(
+        values: Vec<i64>,
+    ) -> crate::DeltaResult<crate::DeltaTable> {
+        let table = create_in_memory_id_table().await?;
+        table.write(vec![id_batch(values)?]).await
     }
 
     async fn create_in_memory_id_table_with_unsupported_reader_protocol()
@@ -1154,7 +1160,7 @@ mod tests {
     #[derive(Debug)]
     struct RootRegistrationTrackingLogStore {
         inner: LogStoreRef,
-        root_calls: Arc<Mutex<Vec<Option<Uuid>>>>,
+        root_calls: Arc<Mutex<usize>>,
     }
 
     #[async_trait::async_trait]
@@ -1174,28 +1180,6 @@ mod tests {
             self.inner.read_commit_entry(version).await
         }
 
-        async fn write_commit_entry(
-            &self,
-            version: crate::kernel::Version,
-            commit_or_bytes: crate::logstore::CommitOrBytes,
-            operation_id: Uuid,
-        ) -> std::result::Result<(), TransactionError> {
-            self.inner
-                .write_commit_entry(version, commit_or_bytes, operation_id)
-                .await
-        }
-
-        async fn abort_commit_entry(
-            &self,
-            version: crate::kernel::Version,
-            commit_or_bytes: crate::logstore::CommitOrBytes,
-            operation_id: Uuid,
-        ) -> std::result::Result<(), TransactionError> {
-            self.inner
-                .abort_commit_entry(version, commit_or_bytes, operation_id)
-                .await
-        }
-
         async fn get_latest_version(
             &self,
             start_version: crate::kernel::Version,
@@ -1203,16 +1187,23 @@ mod tests {
             self.inner.get_latest_version(start_version).await
         }
 
-        fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn object_store::ObjectStore> {
-            self.inner.object_store(operation_id)
+        fn object_store(&self) -> Arc<dyn object_store::ObjectStore> {
+            self.inner.object_store()
         }
 
-        fn root_object_store(
+        fn root_object_store(&self) -> Arc<dyn object_store::ObjectStore> {
+            *self.root_calls.lock().unwrap() += 1;
+            self.inner.root_object_store()
+        }
+
+        fn committer(&self) -> Arc<dyn crate::logstore::Committer> {
+            self.inner.committer()
+        }
+
+        async fn begin_operation(
             &self,
-            operation_id: Option<Uuid>,
-        ) -> Arc<dyn object_store::ObjectStore> {
-            self.root_calls.lock().unwrap().push(operation_id);
-            self.inner.root_object_store(operation_id)
+        ) -> crate::DeltaResult<Option<crate::logstore::OperationContext>> {
+            self.inner.begin_operation().await
         }
 
         fn config(&self) -> &crate::logstore::LogStoreConfig {
@@ -1418,10 +1409,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_insert_into_registers_operation_scoped_root_object_store() -> TestResult {
+    async fn test_insert_into_registers_root_object_store_of_log_store() -> TestResult {
         let table = create_in_memory_id_table().await?;
-        let root_calls = Arc::new(Mutex::new(Vec::new()));
-        let operation_id = Uuid::new_v4();
+        let root_calls = Arc::new(Mutex::new(0usize));
         let tracked_log_store: LogStoreRef = Arc::new(RootRegistrationTrackingLogStore {
             inner: table.log_store(),
             root_calls: root_calls.clone(),
@@ -1429,8 +1419,7 @@ mod tests {
         let provider = DeltaScan::builder()
             .with_log_store(tracked_log_store)
             .build()
-            .await?
-            .with_operation_id(operation_id);
+            .await?;
 
         let session = Arc::new(create_session().into_inner());
         let state = session.state_ref().read().clone();
@@ -1441,8 +1430,8 @@ mod tests {
             .await?;
 
         assert!(
-            root_calls.lock().unwrap().contains(&Some(operation_id)),
-            "expected insert path to register the root object store with operation id {operation_id}",
+            *root_calls.lock().unwrap() > 0,
+            "expected insert path to register the root object store of the given log store",
         );
 
         Ok(())
@@ -1451,7 +1440,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_into_serde_roundtrip_is_read_only() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::builder()
             .with_snapshot(snapshot)
             .with_log_store(log_store.clone())
@@ -1484,7 +1473,7 @@ mod tests {
     #[tokio::test]
     async fn test_delta_scan_serde_accepts_missing_file_selection_field() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::builder().with_snapshot(snapshot).build().await?;
         let mut serialized = serde_json::to_value(&provider)?;
 
@@ -1501,7 +1490,7 @@ mod tests {
     #[tokio::test]
     async fn test_query_simple_table() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::builder().with_snapshot(snapshot).await?;
 
         let session = Arc::new(create_session().into_inner());
@@ -1522,10 +1511,9 @@ mod tests {
     async fn test_query_materialized_snapshot_avoids_log_replay() -> TestResult {
         let base = TestTables::Simple.table_builder()?.build_storage()?;
         let (log_store, mut operations) = recording_log_store(base);
-        let snapshot =
-            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?)
-                .ensure_materialized_files(log_store.as_ref())
-                .await?;
+        let snapshot = Arc::new(Snapshot::try_new(log_store.as_ref(), None).await?)
+            .ensure_materialized_files(log_store.as_ref())
+            .await?;
 
         drain_recorded_ops(&mut operations).await;
 
@@ -1560,15 +1548,14 @@ mod tests {
             .build_storage()?;
         let (log_store, mut operations) = recording_log_store(base);
 
-        let snapshot =
-            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), Some(9)).await?)
-                .ensure_materialized_files(log_store.as_ref())
-                .await?;
+        let snapshot = Arc::new(Snapshot::try_new(log_store.as_ref(), Some(9)).await?)
+            .ensure_materialized_files(log_store.as_ref())
+            .await?;
 
         let bytes = serde_json::to_vec(snapshot.as_ref())?;
         let snapshot: Snapshot = serde_json::from_slice(&bytes)?;
         let snapshot = Arc::new(snapshot)
-            .update(log_store.engine(None), Some(10))
+            .update(log_store.engine(), Some(10))
             .await?;
 
         drain_recorded_ops(&mut operations).await;
@@ -1713,7 +1700,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_simple_table() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::builder().with_snapshot(snapshot).await?;
 
         let session = Arc::new(create_session().into_inner());
@@ -1788,9 +1775,188 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_scan_keeps_file_count_when_input_is_replaced() -> TestResult {
+        let table = create_in_memory_id_table_with_rows(vec![1, 2]).await?;
+        let provider = DeltaScan::builder()
+            .with_log_store(table.log_store())
+            .build()
+            .await?;
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let plan = provider.scan(&state, None, &[], None).await?;
+
+        // Optimizer rules replace the input of the scan, for example to split files into ranges.
+        let input = Arc::clone(plan.children()[0]);
+        for options in [
+            datafusion::physical_plan::ChildrenPropertiesMode::Keep,
+            datafusion::physical_plan::ChildrenPropertiesMode::Recompute,
+        ] {
+            let replaced = Arc::clone(&plan).replace_children(
+                vec![Arc::clone(&input)],
+                datafusion::physical_plan::ReplaceChildrenOptions::new(options),
+            )?;
+            let mut visitor = DeltaScanVisitor::default();
+            visit_execution_plan(replaced.as_ref(), &mut visitor).unwrap();
+            assert_eq!(visitor.num_scanned, Some(1));
+        }
+
+        Ok(())
+    }
+
+    /// Plan a scan with a runtime file filter of a table with two files: ids 1 and 2, and ids
+    /// 11 and 12. The scan has two partitions. Returns the filter, to set its predicates.
+    async fn plan_scan_with_runtime_file_filter(
+        pushdown_filters: bool,
+    ) -> crate::DeltaResult<(
+        RuntimeFileFilter,
+        Arc<dyn ExecutionPlan>,
+        Arc<datafusion::execution::TaskContext>,
+    )> {
+        let table = create_in_memory_id_table_with_rows(vec![1, 2])
+            .await?
+            .write(vec![id_batch(vec![11, 12])?])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await?;
+        let predicates = RuntimeFileFilter::default();
+        let provider = DeltaScan::builder()
+            .with_log_store(table.log_store())
+            .build()
+            .await?
+            .with_runtime_file_filter(Arc::clone(&predicates));
+        let session = Arc::new(create_session().into_inner());
+        session
+            .state_ref()
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .pushdown_filters = pushdown_filters;
+        let state = session.state_ref().read().clone();
+        let plan = provider.scan(&state, None, &[], None).await?;
+        let mut config = datafusion::common::config::ConfigOptions::new();
+        config.optimizer.repartition_file_min_size = 0;
+        let plan = plan
+            .repartitioned(2, &config)?
+            .expect("the scan can read its files in two partitions");
+        Ok((predicates, plan, session.task_ctx()))
+    }
+
+    fn scan_metrics(plan: &Arc<dyn ExecutionPlan>) -> DeltaScanVisitor {
+        let mut visitor = DeltaScanVisitor::default();
+        visit_execution_plan(plan.as_ref(), &mut visitor).unwrap();
+        visitor
+    }
+
+    #[tokio::test]
+    async fn test_scan_runtime_file_filter_keeps_rows_with_parquet_pushdown() -> TestResult {
+        let (predicates, plan, task_ctx) = plan_scan_with_runtime_file_filter(true).await?;
+
+        // Keep only the file with id 11. A row filter must not remove 12.
+        predicates.set(vec![col("id").eq(lit(11i64))]).unwrap();
+        let batches: Vec<_> = collect_partitioned(Arc::clone(&plan), task_ctx)
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        let mut ids: Vec<i64> = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int64Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, [11, 12]);
+
+        // The Parquet scan skipped the other file with the file statistics, before it read
+        // the footer.
+        use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+        let mut parquet_metrics = None;
+        plan.apply(|node| {
+            if node.name() == "DataSourceExec" {
+                parquet_metrics = node.metrics();
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        let parquet_metrics = parquet_metrics
+            .expect("the scan has a Parquet node")
+            .aggregate_by_name();
+        let metric = |name: &str| {
+            parquet_metrics
+                .iter()
+                .find(|metric| metric.value().name() == name)
+                .map(|metric| metric.value().to_string())
+        };
+        assert_eq!(
+            metric("files_ranges_pruned_statistics").as_deref(),
+            Some("2 total → 1 matched")
+        );
+        // The row filter ran on the kept file and kept all its rows.
+        assert_eq!(metric("pushdown_rows_matched").as_deref(), Some("2"));
+        assert_eq!(metric("pushdown_rows_pruned").as_deref(), Some("0"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_runtime_file_filter_skips_files() -> TestResult {
+        let (predicates, plan, task_ctx) = plan_scan_with_runtime_file_filter(false).await?;
+
+        // Keep only the file with id 11.
+        predicates.set(vec![col("id").eq(lit(11i64))]).unwrap();
+        let batches: Vec<_> = collect_partitioned(Arc::clone(&plan), task_ctx)
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let metrics = scan_metrics(&plan);
+        assert_eq!(metrics.num_scanned, Some(1));
+        assert!(metrics.total_bytes_scanned.is_some_and(|bytes| bytes > 0));
+        // The filter skips files, not rows: the kept file is read whole, so 12 comes back too.
+        let mut ids: Vec<i64> = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int64Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, [11, 12]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_runtime_file_filter_keeps_files_of_started_scan() -> TestResult {
+        let (predicates, plan, task_ctx) = plan_scan_with_runtime_file_filter(false).await?;
+
+        // The first partition starts the scan before the predicates are set, therefore predicates
+        // are ignored.
+        let mut first = plan.execute(0, Arc::clone(&task_ctx))?;
+        let mut batches: Vec<_> = first.try_next().await?.into_iter().collect();
+        predicates.set(vec![lit(false)]).unwrap();
+        batches.extend(first.try_collect::<Vec<_>>().await?);
+        batches.extend(plan.execute(1, task_ctx)?.try_collect::<Vec<_>>().await?);
+
+        // The second partition keeps the files that the scan kept when it started.
+        assert_eq!(scan_metrics(&plan).num_scanned, Some(2));
+        let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+        assert_eq!(rows, 4);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_scan_with_file_selection_reads_only_selected_files() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
         let table_root = snapshot.inner.table_root().clone();
         let total_file_count = snapshot
             .file_views(log_store.as_ref(), None)
@@ -1864,7 +2030,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_with_file_selection_from_file_paths_reads_selected_file() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
         let session = Arc::new(create_session().into_inner());
         let state = session.state_ref().read().clone();
 
@@ -1926,7 +2092,7 @@ mod tests {
             .with_save_mode(crate::protocol::SaveMode::Overwrite)
             .await?;
         let log_store = table.log_store();
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
 
         let views = snapshot
             .file_views(log_store.as_ref(), None)
@@ -1987,7 +2153,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_with_file_selection_applies_deletion_vectors() -> TestResult {
         let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
         let table_root = snapshot.inner.table_root().clone();
 
         let session = Arc::new(create_session().into_inner());
@@ -2049,7 +2215,7 @@ mod tests {
     async fn test_scan_with_file_selection_mutated_add_uses_snapshot_deletion_vector_metadata()
     -> TestResult {
         let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
 
         let (mut selected_add, expected_raw_rows, deleted_rows) = snapshot
             .file_views(log_store.as_ref(), None)
@@ -2101,7 +2267,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_with_file_selection_strict_missing_files_errors() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
         let table_root = snapshot.inner.table_root().clone();
 
         let session = Arc::new(create_session().into_inner());
@@ -2138,7 +2304,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_with_file_selection_missing_policy_ignore_skips_missing() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
         let table_root = snapshot.inner.table_root().clone();
 
         let session = Arc::new(create_session().into_inner());
@@ -2173,7 +2339,7 @@ mod tests {
     async fn test_scan_with_empty_file_selection_returns_empty_scan() -> TestResult {
         let base = TestTables::Simple.table_builder()?.build_storage()?;
         let (log_store, mut operations) = recording_log_store(base);
-        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
         drain_recorded_ops(&mut operations).await;
 
         let session = Arc::new(create_session().into_inner());
@@ -2224,7 +2390,7 @@ mod tests {
     async fn test_scan_with_duplicate_file_selection_deduplicates() -> TestResult {
         let table = create_in_memory_id_table_with_rows(vec![1, 2]).await?;
         let log_store = table.log_store();
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
         let selected_path = snapshot
             .file_views(log_store.as_ref(), None)
             .take(1)
@@ -2315,7 +2481,7 @@ mod tests {
     async fn test_selected_active_file_pruned_by_data_skipping_returns_empty_scan() -> TestResult {
         let table = create_in_memory_id_table_with_rows(vec![1, 2]).await?;
         let log_store = table.log_store();
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
         let selected_path = snapshot
             .file_views(log_store.as_ref(), None)
             .take(1)
@@ -2587,10 +2753,78 @@ mod tests {
         }])
     }
 
+    /// Regression test for the COUNT(*) deletion-vector bug: the inner parquet
+    /// plan's row counts do not account for deleted rows, so a scan carrying
+    /// selection vectors must report `num_rows` as INEXACT — an exact value lets
+    /// DataFusion's AggregateStatistics optimizer short-circuit COUNT(*) with
+    /// the inflated (pre-deletion) count.
+    #[tokio::test]
+    async fn test_scan_statistics_num_rows_inexact_with_deletion_vectors() -> TestResult {
+        use datafusion::common::stats::Precision;
+
+        let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
+        let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let plan = provider.scan(&state, None, &[], None).await?;
+        // Stats flow through StatisticsContext (partition_statistics is
+        // deprecated in DF 55 and returns unknown for this node).
+        let stats = datafusion::physical_plan::statistics::StatisticsContext::new().compute(
+            plan.as_ref(),
+            &datafusion::physical_plan::statistics::StatisticsArgs::new(),
+        )?;
+
+        assert!(
+            !matches!(stats.num_rows, Precision::Exact(_)),
+            "num_rows must not be exact when deletion vectors are present \
+             (an exact pre-deletion count lets COUNT(*) short-circuit inflated), got {:?}",
+            stats.num_rows
+        );
+        assert!(
+            matches!(stats.num_rows, Precision::Inexact(_)),
+            "num_rows should be inexact (not absent) with statistics collection on, got {:?}",
+            stats.num_rows
+        );
+
+        Ok(())
+    }
+
+    /// End-to-end guard for the same bug: COUNT(*) over a table with deletion
+    /// vectors must return the live row count (10 raw - 2 deleted = 8), not the
+    /// raw parquet count.
+    #[tokio::test]
+    async fn test_count_star_excludes_deleted_rows() -> TestResult {
+        let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
+        let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?;
+
+        let session = Arc::new(create_session().into_inner());
+        session.register_table("dv_table", Arc::new(provider))?;
+
+        let batches = session
+            .sql("SELECT count(*) FROM dv_table")
+            .await?
+            .collect()
+            .await?;
+        let expected = vec![
+            "+----------+",
+            "| count(*) |",
+            "+----------+",
+            "| 8        |",
+            "+----------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_deletion_vectors_with_dv_table() -> TestResult {
         let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?;
 
         let session = Arc::new(create_session().into_inner());
@@ -2609,7 +2843,7 @@ mod tests {
     #[tokio::test]
     async fn test_deletion_vectors_file_selection_selects_dv_file() -> TestResult {
         let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let expected = expected_dv_small()?;
         let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?
             .with_file_paths([expected[0].filepath.clone()]);
@@ -2626,7 +2860,7 @@ mod tests {
     #[tokio::test]
     async fn test_deletion_vectors_file_selection_without_dv_is_empty() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let selected_path = snapshot
             .file_views(log_store.as_ref(), None)
             .take(1)
@@ -2652,7 +2886,7 @@ mod tests {
     #[tokio::test]
     async fn test_deletion_vectors_file_selection_strict_missing_errors() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let table_root = snapshot.inner.table_root().clone();
         let missing_path = table_root.join("__does_not_exist__.parquet")?.to_string();
         let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?
@@ -2674,7 +2908,7 @@ mod tests {
     #[tokio::test]
     async fn test_deletion_vectors_file_selection_ignore_missing_is_empty() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let table_root = snapshot.inner.table_root().clone();
         let missing_path = table_root.join("__does_not_exist__.parquet")?.to_string();
         let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?
@@ -2695,7 +2929,7 @@ mod tests {
     #[tokio::test]
     async fn test_deletion_vectors_without_dv_table_is_empty() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?;
 
         let session = Arc::new(create_session().into_inner());
@@ -2728,7 +2962,7 @@ mod tests {
     #[tokio::test]
     async fn test_deletion_vectors_with_eager_snapshot() -> TestResult {
         let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
-        let eager = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
+        let eager = EagerSnapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::new(eager, DeltaScanConfig::default())?;
 
         let session = Arc::new(create_session().into_inner());
@@ -2738,6 +2972,41 @@ mod tests {
         let deletion_vectors = provider.deletion_vectors(&state).await?;
         assert_eq!(deletion_vectors, expected);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vectors_scan() -> TestResult<()> {
+        let mut table = open_fs_path("../test/tests/data/table_with_deletion_logs");
+        table.load().await?;
+        let fresh = Snapshot::try_new(table.log_store().as_ref(), None).await?;
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let mut expected = vec![true; 100];
+        expected[2] = false;
+        expected[79] = false;
+
+        for (name, snapshot) in [
+            (
+                "cached",
+                SnapshotWrapper::from(table.snapshot()?.snapshot().clone()),
+            ),
+            ("fresh", SnapshotWrapper::from(fresh)),
+        ] {
+            for predicate in [None, Some(col("id").gt(lit(0i64)))] {
+                let provider = DeltaScan::new(snapshot.clone(), DeltaScanConfig::default())?
+                    .with_file_skipping_predicate(predicate.clone());
+                let deletion_vectors = provider.deletion_vectors(&state).await?;
+                assert_eq!(deletion_vectors.len(), 1);
+                assert!(deletion_vectors[0].filepath.ends_with(
+                    "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet"
+                ));
+                assert_eq!(
+                    deletion_vectors[0].keep_mask, expected,
+                    "{name} scan with predicate {predicate:?}"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -2954,6 +3223,73 @@ mod tests {
         assert_eq!(schema_file.fields().len(), 2);
         assert!(schema_file.column_with_name("my_files").is_some());
 
+        Ok(())
+    }
+
+    /// Time a scan whose runtime file filter keeps `BENCH_KEEP` of `BENCH_FILES` files.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "benchmark"]
+    async fn bench_runtime_file_filter() -> TestResult {
+        let env = |name: &str, default: i64| {
+            std::env::var(name)
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(default)
+        };
+        let files = env("BENCH_FILES", 10_000);
+        let keep = env("BENCH_KEEP", 1);
+        let rows_per_file = 100i64;
+
+        let schema = StructType::try_new(vec![
+            StructField::new("id", DataType::Primitive(PrimitiveType::Long), true),
+            StructField::new("part", DataType::Primitive(PrimitiveType::Long), true),
+        ])?;
+        let table = crate::DeltaTable::new_in_memory()
+            .create()
+            .with_columns(schema.fields().cloned())
+            .with_partition_columns(["part"])
+            .await?;
+        let ids: Vec<i64> = (0..files * rows_per_file).collect();
+        let parts: Vec<i64> = ids.iter().map(|id| id / rows_per_file).collect();
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                ArrowField::new("id", ArrowDataType::Int64, true),
+                ArrowField::new("part", ArrowDataType::Int64, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(ids)),
+                Arc::new(Int64Array::from(parts)),
+            ],
+        )?;
+        let table = table.write(vec![batch]).await?;
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let mut times = Vec::new();
+        for _ in 0..7 {
+            let predicates = RuntimeFileFilter::default();
+            let provider = DeltaScan::builder()
+                .with_log_store(table.log_store())
+                .build()
+                .await?
+                .with_runtime_file_filter(Arc::clone(&predicates));
+            let plan = provider.scan(&state, None, &[], None).await?;
+            predicates
+                .set(vec![col("id").lt(lit(keep * rows_per_file))])
+                .unwrap();
+            let start = std::time::Instant::now();
+            let batches = datafusion::physical_plan::collect(plan, session.task_ctx()).await?;
+            times.push(start.elapsed());
+            let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+            assert_eq!(rows as i64, keep * rows_per_file);
+        }
+        times.sort();
+        println!(
+            "BENCH files={files} keep={keep} median={:?} min={:?} max={:?}",
+            times[times.len() / 2],
+            times[0],
+            times[times.len() - 1]
+        );
         Ok(())
     }
 }

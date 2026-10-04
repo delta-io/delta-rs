@@ -959,7 +959,7 @@ impl ObjectStoreFactory for UnityCatalogFactory {
             builder = builder.with_storage_options(storage_options.clone());
         }
         let prefix = Path::parse(table_uri.path())?;
-        let store = builder.build_storage()?.object_store(None);
+        let store = builder.build_storage()?.object_store();
 
         Ok((store, prefix))
     }

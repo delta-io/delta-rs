@@ -37,6 +37,7 @@ use deltalake_core::{
     DeltaTable, DeltaTableError, ensure_table_uri, open_table, operations::write::WriteBuilder,
 };
 use deltalake_test::utils::*;
+use futures::TryStreamExt;
 use serial_test::serial;
 use url::Url;
 
@@ -1945,6 +1946,61 @@ async fn test_generated_column_spark_trunc_append_generates_date() {
     );
 }
 
+/// The first write to a location creates the table, so the generated columns come from the
+/// metadata this write commits rather than from a snapshot.
+#[tokio::test]
+async fn test_create_write_validates_generated_columns() {
+    use deltalake_core::kernel::engine::arrow_conversion::TryIntoArrow as _;
+
+    // `computed` is generated as `id + value`.
+    let arrow_schema: ArrowSchema = (&schema_with_generated_column_and_user(true))
+        .try_into_arrow()
+        .unwrap();
+    let batch = |computed: i32| {
+        RecordBatch::try_new(
+            Arc::new(arrow_schema.clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![10])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![computed])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["alice"])) as ArrayRef,
+            ],
+        )
+        .unwrap()
+    };
+
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let url = url::Url::from_directory_path(tmp_dir.path()).unwrap();
+
+    let err = deltalake_core::DeltaTableBuilder::from_url(url.clone())
+        .unwrap()
+        .build()
+        .unwrap()
+        .write(vec![batch(99)])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        err,
+        "Generic DeltaTable error: External error: Invalid data found: 1 rows failed validation check.
+Preview of invalid data:
+
++----+-------+----------+-------+
+| id | value | computed | user  |
++----+-------+----------+-------+
+| 1  | 10    | 99       | alice |
++----+-------+----------+-------+"
+    );
+
+    deltalake_core::DeltaTableBuilder::from_url(url)
+        .unwrap()
+        .build()
+        .unwrap()
+        .write(vec![batch(11)])
+        .await
+        .expect("correct generated value should be accepted");
+}
+
 #[tokio::test]
 async fn test_generated_column_spark_trunc_validation_rejects_invalid_values() {
     let tmp_dir = tempfile::tempdir().unwrap();
@@ -2415,7 +2471,7 @@ mod insert_into_tests {
         assert_eq!(partition_columns.len(), 1);
         assert_eq!(partition_columns[0], "part");
 
-        let history: Vec<_> = final_table.history(None).await?.collect();
+        let history: Vec<_> = final_table.history(None).try_collect().await?;
         assert_eq!(history.len(), 2); // CREATE + SQL INSERT
         assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
 
@@ -2556,7 +2612,7 @@ mod insert_into_tests {
 
         let final_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
         assert_eq!(final_table.version(), Some(2));
-        let history: Vec<_> = final_table.history(None).await?.collect();
+        let history: Vec<_> = final_table.history(None).try_collect().await?;
 
         assert_eq!(history.len(), 3); // CREATE + 2 INSERTTs
         assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
@@ -2662,7 +2718,7 @@ mod insert_into_tests {
 
         assert_eq!(final_table.version(), Some(1)); // CREATE + OVERWRITE = version 1 (the initial append might not commit separately)
 
-        let history: Vec<_> = final_table.history(None).await?.collect();
+        let history: Vec<_> = final_table.history(None).try_collect().await?;
         assert_eq!(history.len(), 2); // CREATE + OVERWRITE
 
         assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
@@ -2775,7 +2831,7 @@ mod insert_into_tests {
         let final_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
         assert_eq!(final_table.version(), Some(1)); // CREATE + SQL INSERT = version 1
 
-        let history: Vec<_> = final_table.history(None).await?.collect();
+        let history: Vec<_> = final_table.history(None).try_collect().await?;
         assert_eq!(history.len(), 2); // CREATE + SQL INSERT
         assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
 

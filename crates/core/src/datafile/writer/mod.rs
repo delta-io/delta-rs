@@ -1,0 +1,144 @@
+//! Abstractions and implementations for writing data to delta tables
+//!
+//! A write fans out four times: over partitions, over the files of each partition, over the
+//! columns of each file's open row group, and over the parts of each file's upload.
+//!
+//! ```text
+//!                                  RecordBatch from any source
+//!                                               │
+//!                                               ▼
+//!                                ┌─────────────────────────────┐
+//!                                │         DeltaWriter         │
+//!                                │    splits each batch by     │
+//!                                │   partition value, drops    │
+//!                                │    the partition columns    │
+//!                                └──────────────┬──────────────┘
+//!                ┌──────────────────────────────┼──────────────────────────────┐
+//!                │ a=1/                         │ a=2/                         │ a=3/
+//!                ▼                              ▼                              ▼
+//!      ┌───────────────────┐          ┌───────────────────┐          ┌───────────────────┐
+//!      │  PartitionWriter  │          │  PartitionWriter  │          │  PartitionWriter  │
+//!      └─────────┬─────┬───┘          └───────────────────┘          └───────────────────┘
+//!                │     │ file reaches target_file_size: reserve its bytes in the
+//!                │     │ UploadBudget, open the next file, spawn LazyArrowWriter::finish
+//!                │     │                                 ┌───────────────────────────────┐
+//!                │     └────────────────────────────────►│ finish tasks                  │
+//!                │ slices of write_batch_size rows       │ part-00000  part-00001        │
+//!                ▼                                       │ each: last row group, footer, │
+//!      ┌───────────────────┐                             │ last part, complete upload,   │
+//!      │  LazyArrowWriter  │                             │ then release its bytes        │
+//!      │ open: part-00002  │                             └───────────────────────────────┘
+//!      │ Initialized until │
+//!      │ the first batch,  │
+//!      │ then Writing      │
+//!      └─────────┬─────────┘
+//!                │ Writing holds
+//!                ▼
+//!      ┌─────────────────────┐
+//!      │ ParallelArrowWriter │  keeps one row group open; splits each slice into its
+//!      └─────────┬───────────┘  leaf columns and sends each one to that column's worker task
+//!    ┌───────────┼───────────┐
+//!    ▼           ▼           ▼
+//! column 0    column 1 ... column n  one task per leaf column, spawned when the row group
+//!    │           │           │       opens; each encodes and compresses its slices as they
+//!    └───────────┼───────────┘       arrive, and returns its column chunk when the row
+//!                │                   group closes at max_row_group_row_count rows
+//!                ▼
+//!      ┌──────────────────────┐
+//!      │ SerializedFileWriter │  appends the chunks in column order, then hands the row
+//!      └─────────┬────────────┘  group's bytes to ParquetObjectWriter
+//!                │
+//!                ▼
+//!      ┌───────────────────┐
+//!      │     BufWriter     │  a file under upload_part_size is one PUT at finish; a larger
+//!      └─────────┬─────────┘  one starts a multipart upload once its row groups reach that size
+//!    ┌───────────┼───────────┐
+//!    ▼           ▼           ▼
+//! part 1      part 2 ...  part n    upload concurrently; the next row group waits
+//!                                   while max_concurrency_tasks parts are in flight
+//! ```
+//!
+//! An unpartitioned table has a single [`PartitionWriter`]. A `LazyArrowWriter` creates its
+//! writers on the first batch, so a file without rows is never written. Every file, open or
+//! finishing, has its own chain from `ParallelArrowWriter` to the parts, so the column tasks
+//! of one file never wait on another file. Bytes reach the `BufWriter` only as complete row
+//! groups, by default every 1,048,576 rows. A file with several row groups uploads the earlier
+//! ones while it is written. A file with one row group is sent entirely by its finish task.
+//! All partition writers of one write reserve bytes in the same `UploadBudget`, so a slow
+//! store makes them wait instead of holding more files in memory. With
+//! [`ArrowWriterOptions::with_enable_parallel_encoding`] set to `false`, arrow-rs's
+//! `AsyncArrowWriter` takes the place of `ParallelArrowWriter` and encodes the columns of a
+//! row group one after another.
+//!
+//! [`DeltaWriter`] lives in `dataset.rs`, [`PartitionWriter`] in `partition.rs`, the
+//! `LazyArrowWriter`, its `FileArrowWriter` and its upload in `file.rs`, the
+//! `ParallelArrowWriter` and its column tasks in `parallel.rs`, and the `UploadBudget` in
+//! `upload_budget.rs`.
+
+use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
+
+use crate::errors::DeltaTableError;
+
+mod dataset;
+mod file;
+mod parallel;
+mod partition;
+mod upload_budget;
+
+#[cfg(feature = "datafusion")]
+pub(crate) use dataset::write_batches_timed;
+pub use dataset::{DeltaWriter, WriterConfig};
+pub use parallel::ArrowWriterOptions;
+pub use partition::{PartitionWriter, PartitionWriterConfig};
+pub(crate) use upload_budget::UploadBudget;
+
+#[derive(thiserror::Error, Debug)]
+enum WriteError {
+    #[error("Unexpected Arrow schema: got: {schema}, expected: {expected_schema}")]
+    SchemaMismatch {
+        schema: ArrowSchemaRef,
+        expected_schema: ArrowSchemaRef,
+    },
+
+    #[error("Error creating add action: {source}")]
+    CreateAdd {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    #[error("Error handling Arrow data: {source}")]
+    Arrow {
+        #[from]
+        source: ArrowError,
+    },
+
+    #[error("Error partitioning record batch: {0}")]
+    Partitioning(String),
+}
+
+impl From<WriteError> for DeltaTableError {
+    fn from(err: WriteError) -> Self {
+        match err {
+            WriteError::SchemaMismatch { .. } => DeltaTableError::SchemaMismatch {
+                msg: err.to_string(),
+            },
+            WriteError::Arrow { source } => DeltaTableError::Arrow { source },
+            _ => DeltaTableError::GenericError {
+                source: Box::new(err),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod test_utils {
+    use parquet::file::properties::WriterProperties;
+
+    use crate::crate_version;
+
+    pub(super) fn assert_default_created_by(writer_properties: &WriterProperties) {
+        assert_eq!(
+            writer_properties.created_by(),
+            format!("delta-rs version {}", crate_version())
+        );
+    }
+}

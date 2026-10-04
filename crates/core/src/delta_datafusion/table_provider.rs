@@ -21,7 +21,6 @@ use datafusion::{catalog::Session, common::HashSet, prelude::Expr};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use url::Url;
-use uuid::Uuid;
 
 use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{DataFusionMixins as _, FindFilesExprProperties};
@@ -252,6 +251,7 @@ pub struct TableProviderBuilder {
     /// Predicates used only for file skipping in kernel log replay
     file_skipping_predicates: Option<Vec<Expr>>,
     file_selection: Option<next::FileSelection>,
+    runtime_file_filter: Option<next::RuntimeFileFilter>,
 }
 
 impl fmt::Debug for TableProviderBuilder {
@@ -265,6 +265,7 @@ impl fmt::Debug for TableProviderBuilder {
             .field("table_version", &self.table_version)
             .field("file_skipping_predicates", &self.file_skipping_predicates)
             .field("file_selection", &self.file_selection)
+            .field("runtime_file_filter", &self.runtime_file_filter)
             .finish()
     }
 }
@@ -286,6 +287,7 @@ impl TableProviderBuilder {
             table_version: None,
             file_skipping_predicates: None,
             file_selection: None,
+            runtime_file_filter: None,
         }
     }
 
@@ -354,6 +356,14 @@ impl TableProviderBuilder {
         self
     }
 
+    /// Skip whole files during execution with the predicates that are set in `filter`.
+    ///
+    /// Like file skipping predicates, this never removes rows from a file that is read.
+    pub(crate) fn with_runtime_file_filter(mut self, filter: next::RuntimeFileFilter) -> Self {
+        self.runtime_file_filter = Some(filter);
+        self
+    }
+
     /// Restrict reads to Add action paths. File metadata comes from the selected snapshot.
     pub fn with_adds(self, adds: impl IntoIterator<Item = Add>) -> Self {
         self.with_file_selection(next::FileSelection::from_adds(adds))
@@ -384,6 +394,7 @@ impl TableProviderBuilder {
             table_version,
             file_skipping_predicates,
             file_selection,
+            runtime_file_filter,
         } = self;
 
         let mut config = session
@@ -400,9 +411,7 @@ impl TableProviderBuilder {
             None => {
                 if let Some(log_store) = log_store.as_ref() {
                     SnapshotWrapper::Snapshot(
-                        Snapshot::try_new(log_store, Default::default(), table_version)
-                            .await?
-                            .into(),
+                        Snapshot::try_new(log_store, table_version).await?.into(),
                     )
                 } else {
                     return Err(DataFusionError::Plan(
@@ -448,6 +457,10 @@ impl TableProviderBuilder {
 
         if let Some(selection) = file_selection {
             provider = provider.with_file_selection(selection);
+        }
+
+        if let Some(filter) = runtime_file_filter {
+            provider = provider.with_runtime_file_filter(filter);
         }
 
         Ok(provider)
@@ -501,7 +514,6 @@ impl DeltaTable {
         crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered(
             session,
             self.log_store().as_ref(),
-            None,
         )
     }
 }
@@ -509,13 +521,8 @@ impl DeltaTable {
 pub(crate) fn update_datafusion_session(
     session: &dyn Session,
     log_store: &dyn LogStore,
-    operation_id: Option<Uuid>,
 ) -> DeltaResult<()> {
-    crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered(
-        session,
-        log_store,
-        operation_id,
-    )
+    crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered(session, log_store)
 }
 
 /// Physical scan wrapper used by DataFusion plan serialization.
@@ -728,7 +735,7 @@ mod tests {
     use crate::test_utils::object_store::{
         drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
     };
-    use crate::{DeltaTable, DeltaTableConfig, DeltaTableError};
+    use crate::{DeltaTable, DeltaTableError};
     use arrow::array::{ArrayRef, Int64Array, StringArray, StringViewArray};
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -909,7 +916,7 @@ mod tests {
             .unwrap();
         let (log_store, mut operations) = recording_log_store(base);
 
-        let mut table = DeltaTable::new(log_store.clone(), DeltaTableConfig::default());
+        let mut table = DeltaTable::new(log_store.clone());
         table.load().await.unwrap();
 
         drain_recorded_ops(&mut operations).await;
@@ -1047,7 +1054,7 @@ mod tests {
             .build_storage()
             .unwrap();
         let snapshot = Arc::new(
-            crate::kernel::Snapshot::try_new(&log_store, Default::default(), None)
+            crate::kernel::Snapshot::try_new(&log_store, None)
                 .await
                 .unwrap(),
         );

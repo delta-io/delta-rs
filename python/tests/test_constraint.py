@@ -158,3 +158,30 @@ def test_add_multiple_constraint(tmp_path, sample_table: Table):
         )
 
         write_deltalake(tmp_path, data, mode="append")
+
+def test_constraint_null_row_preview(tmp_path, sample_table):
+    write_deltalake(tmp_path, sample_table)
+
+    dt = DeltaTable(tmp_path)
+    dt.alter.add_constraint({"check_price": '"high price" >= 0'})
+
+    invalid = Table(
+        {
+            "id": Array(["null-row"], Field("id", DataType.string(), nullable=True)),
+            "high price": Array([None], Field("high price", DataType.int64(), nullable=True)),
+        },
+    )
+
+    expected = """Generic DeltaTable error: External error: Invalid data found: 1 rows failed validation check.
+Preview of invalid data:
+
++----------+------------+
+| id       | high price |
++----------+------------+
+| null-row |            |
++----------+------------+"""
+
+    with pytest.raises(DeltaError) as exc_info:
+        write_deltalake(tmp_path, invalid, mode="append")
+
+    assert str(exc_info.value) == expected

@@ -38,6 +38,7 @@ use datafusion::common::Result;
 use datafusion::datasource::{MemTable, provider_as_source};
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
+use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_features::ColumnMappingMode;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
@@ -48,8 +49,9 @@ use url::Url;
 pub use self::configs::WriterStatsConfig;
 use self::execution::write_execution_plan_v2;
 use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
-use super::{CreateBuilder, CustomExecuteHandler, Operation};
+use super::CreateBuilder;
 use crate::DeltaTable;
+use crate::datafile::writer::ArrowWriterOptions;
 use crate::delta_datafusion::Expression;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric};
@@ -62,7 +64,9 @@ use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{Action, EagerSnapshot, StructType};
 use crate::logstore::LogStoreRef;
+use crate::logstore::with_operation;
 use crate::protocol::{DeltaOperation, SaveMode};
+use uuid::Uuid;
 
 /// Configuration types controlling how data and statistics are written.
 pub mod configs;
@@ -71,7 +75,10 @@ pub(crate) mod generated_columns;
 pub(crate) mod metrics;
 mod plan;
 pub(crate) mod schema_evolution;
-pub mod writer;
+
+/// Back-compat re-export: the writer types moved to [`crate::datafile::writer`].
+#[deprecated(note = "moved to deltalake_core::datafile::writer")]
+pub use crate::datafile::writer;
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum WriteError {
@@ -152,6 +159,8 @@ pub struct WriteBuilder {
     safe_cast: bool,
     /// Parquet writer properties
     writer_properties: Option<WriterProperties>,
+    /// Arrow writer options
+    arrow_options: Option<ArrowWriterOptions>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// Name of the table, only used when table doesn't exist yet
@@ -160,7 +169,6 @@ pub struct WriteBuilder {
     description: Option<String>,
     /// Configurations of the delta table, only used when table doesn't exist
     configuration: HashMap<String, Option<String>>,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
 #[derive(Default, Debug, Serialize, Deserialize)]
@@ -181,15 +189,6 @@ pub struct WriteMetrics {
     pub num_retries: u64,
 }
 
-impl super::Operation for WriteBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
-}
-
 impl WriteBuilder {
     /// Create a new [`WriteBuilder`]
     pub fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
@@ -207,11 +206,11 @@ impl WriteBuilder {
             safe_cast: false,
             schema_mode: None,
             writer_properties: None,
+            arrow_options: None,
             commit_properties: CommitProperties::default(),
             name: None,
             description: None,
             configuration: Default::default(),
-            custom_execute_handler: None,
         }
     }
 
@@ -304,6 +303,12 @@ impl WriteBuilder {
         self
     }
 
+    /// Specify the arrow writer options to use when writing a parquet file
+    pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
+        self.arrow_options = Some(arrow_options);
+        self
+    }
+
     /// Additional metadata to be added to commit info
     pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
         self.commit_properties = commit_properties;
@@ -320,12 +325,6 @@ impl WriteBuilder {
     /// Comment to describe the table.
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
-        self
-    }
-
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
         self
     }
 
@@ -394,7 +393,9 @@ impl WriteBuilder {
         }
     }
 
-    async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
+    /// Returns the actions that create the table when it does not exist yet, and the table
+    /// configuration this write starts from.
+    async fn check_preconditions(&self) -> DeltaResult<(Vec<Action>, TableConfiguration)> {
         if self.schema_mode == Some(SchemaMode::Overwrite) && self.mode != SaveMode::Overwrite {
             return Err(DeltaTableError::Generic(
                 "Schema overwrite not supported for Append".to_string(),
@@ -420,9 +421,6 @@ impl WriteBuilder {
 
                 if self.mode == SaveMode::Overwrite {
                     PROTOCOL.check_append_only(snapshot)?;
-                    if !snapshot.load_config().require_files {
-                        return Err(DeltaTableError::NotInitializedWithFiles("WRITE".into()));
-                    }
                 }
 
                 PROTOCOL.can_write_to(snapshot)?;
@@ -437,7 +435,7 @@ impl WriteBuilder {
                     SaveMode::ErrorIfExists => {
                         Err(WriteError::AlreadyExists(self.log_store.root_url().clone()).into())
                     }
-                    _ => Ok(vec![]),
+                    _ => Ok((vec![], snapshot.table_configuration().clone())),
                 }
             }
             None => {
@@ -457,8 +455,20 @@ impl WriteBuilder {
                     builder = builder.with_comment(desc.clone());
                 };
 
-                let (_, actions, _, _) = builder.into_table_and_actions().await?;
-                Ok(actions)
+                let (_, actions, operation) = builder.into_table_and_actions().await?;
+                let DeltaOperation::Create {
+                    metadata,
+                    protocol,
+                    location,
+                    ..
+                } = operation
+                else {
+                    unreachable!("CreateBuilder always yields a Create operation")
+                };
+                Ok((
+                    actions,
+                    TableConfiguration::try_new(metadata, protocol, location, 0)?,
+                ))
             }
         }
     }
@@ -475,16 +485,12 @@ impl std::future::IntoFuture for WriteBuilder {
 
         Box::pin(
             async move {
-                // Runs pre execution handler.
-                let operation_id = this.get_operation_id();
-                this.pre_execute(operation_id).await?;
-
                 let mut metrics = WriteMetrics::default();
                 let exec_start = Instant::now();
 
                 // Create table actions to initialize table in case it does not yet exist
                 // and should be created
-                let mut actions = this.check_preconditions().await?;
+                let (mut actions, base_config) = this.check_preconditions().await?;
 
                 let partition_columns = this.get_partition_columns()?;
 
@@ -492,148 +498,145 @@ impl std::future::IntoFuture for WriteBuilder {
                     return Err(WriteError::MissingData.into());
                 };
 
-                let (session, _) = resolve_session_state(
-                    this.session.as_deref(),
-                    this.session_fallback_policy,
-                    || create_session().state(),
-                    SessionResolveContext {
-                        operation: "write",
-                        table_uri: Some(this.log_store.root_url()),
-                        cdc: false,
-                    },
-                )?;
+                let parent = this.log_store.clone();
+                let state = with_operation(&parent, |log_store| async move {
+                    // Sets the internal marker column of this write apart from input columns.
+                    let write_id = Uuid::new_v4();
+                    let (session, _) = resolve_session_state(
+                        this.session.as_deref(),
+                        this.session_fallback_policy,
+                        || create_session().state(),
+                        SessionResolveContext {
+                            operation: "write",
+                            table_uri: Some(log_store.root_url()),
+                            cdc: false,
+                        },
+                    )?;
 
-                update_datafusion_session(&session, &this.log_store, Some(operation_id))?;
-                session.ensure_log_store_registered(this.log_store.as_ref())?;
+                    // Register the parent store: the caller's session outlives this scope, and
+                    // a scoped store refuses every call once the scope is closed.
+                    update_datafusion_session(&session, &this.log_store)?;
+                    session.ensure_log_store_registered(this.log_store.as_ref())?;
 
-                let prepared_write = plan::prepare_write(plan::WritePreparationInput {
-                    snapshot: this.snapshot.as_ref(),
-                    session: &session,
-                    source,
-                    mode: this.mode,
-                    schema_mode: this.schema_mode,
-                    safe_cast: this.safe_cast,
-                    partition_columns: partition_columns.clone(),
-                    predicate: this.predicate,
-                    target_file_size: this.target_file_size,
-                    write_batch_size: this.write_batch_size,
-                    writer_properties: this.writer_properties.clone(),
-                    configuration: &this.configuration,
-                })?;
-
-                let overwrite_plan = plan::plan_overwrite_rewrite(
-                    this.snapshot.as_ref(),
-                    &this.log_store,
-                    &session,
-                    this.mode,
-                    &prepared_write,
-                    operation_id,
-                )
-                .await?;
-
-                if overwrite_plan.diagnostics.dropped_pruning_term_count > 0 {
-                    tracing::warn!(
-                        rewrite_kind = ?overwrite_plan.kind,
-                        matched_file_count = overwrite_plan.diagnostics.matched_file_count,
-                        translated_pruning_term_count =
-                            overwrite_plan.diagnostics.translated_pruning_term_count,
-                        dropped_pruning_term_count =
-                            overwrite_plan.diagnostics.dropped_pruning_term_count,
-                        "overwrite rewrite predicate was only partially translated for pruning; exact validation remains enabled"
-                    );
-                }
-
-                let plan::PreparedWrite {
-                    schema_delta,
-                    exact_validation,
-                    exec_options,
-                    ..
-                } = prepared_write;
-                actions.extend(schema_delta.into_actions());
-
-                metrics.num_removed_files = overwrite_plan.num_removed_files();
-
-                let plan::WriteExecOptions {
-                    partition_columns,
-                    target_file_size,
-                    write_batch_size,
-                    writer_properties,
-                    writer_stats_config,
-                } = exec_options;
-                let predicate_sql = exact_validation.as_ref().map(fmt_expr_to_sql).transpose()?;
-                let (sink_plan, contains_cdc, insert_marker_column) =
-                    overwrite_plan.build_sink_plan()?;
-                let source_plan = session.create_physical_plan(&sink_plan).await?;
-
-                // Here we need to validate if the new data conforms to a predicate if one is provided
-                let (add_actions, _) = write_execution_plan_v2(
-                    this.snapshot.as_ref(),
-                    &session,
-                    source_plan.clone(),
-                    partition_columns.clone(),
-                    this.log_store.object_store(Some(operation_id)).clone(),
-                    target_file_size,
-                    write_batch_size,
-                    writer_properties,
-                    writer_stats_config,
-                    exact_validation,
-                    contains_cdc,
-                    insert_marker_column,
-                )
-                .await?;
-
-                actions.extend(
-                    overwrite_plan
-                        .matched_existing
-                        .into_actions(overwrite_plan.deletion_timestamp)?,
-                );
-
-                let source_count =
-                    find_metric_node(SOURCE_COUNT_ID, &source_plan).ok_or_else(|| {
-                        DeltaTableError::Generic("Unable to locate expected metric node".into())
+                    let prepared_write = plan::prepare_write(plan::WritePreparationInput {
+                        snapshot: this.snapshot.as_ref(),
+                        session: &session,
+                        source,
+                        mode: this.mode,
+                        schema_mode: this.schema_mode,
+                        safe_cast: this.safe_cast,
+                        partition_columns: partition_columns.clone(),
+                        predicate: this.predicate,
+                        target_file_size: this.target_file_size,
+                        write_batch_size: this.write_batch_size,
+                        writer_properties: this.writer_properties.clone(),
+                        arrow_options: this.arrow_options.clone(),
+                        configuration: &this.configuration,
                     })?;
-                let source_count_metrics = source_count.metrics().unwrap();
-                let num_added_rows = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
-                metrics.num_added_rows = num_added_rows;
 
-                metrics.num_added_files = add_actions.len();
-                actions.extend(add_actions);
-
-                metrics.execution_time_ms =
-                    Instant::now().duration_since(exec_start).as_millis() as u64;
-
-                let operation = DeltaOperation::Write {
-                    mode: this.mode,
-                    partition_by: if !partition_columns.is_empty() {
-                        Some(partition_columns)
-                    } else {
-                        None
-                    },
-                    predicate: predicate_sql,
-                };
-
-                let mut commit_properties = this.commit_properties.clone();
-                commit_properties.app_metadata.insert(
-                    "operationMetrics".to_owned(),
-                    serde_json::to_value(&metrics)?,
-                );
-
-                let commit = CommitBuilder::from(commit_properties)
-                    .with_actions(actions)
-                    .with_post_commit_hook_handler(this.custom_execute_handler.clone())
-                    .with_operation_id(operation_id)
-                    .build(
-                        this.snapshot.as_ref().map(|f| f as &dyn TableReference),
-                        this.log_store.clone(),
-                        operation.clone(),
+                    let overwrite_plan = plan::plan_overwrite_rewrite(
+                        this.snapshot.as_ref(),
+                        &log_store,
+                        &session,
+                        this.mode,
+                        &prepared_write,
+                        write_id,
                     )
                     .await?;
 
-                if let Some(handler) = this.custom_execute_handler {
-                    handler.post_execute(&this.log_store, operation_id).await?;
-                }
+                    if overwrite_plan.diagnostics.dropped_pruning_term_count > 0 {
+                        tracing::warn!(
+                            rewrite_kind = ?overwrite_plan.kind,
+                            matched_file_count = overwrite_plan.diagnostics.matched_file_count,
+                            translated_pruning_term_count =
+                                overwrite_plan.diagnostics.translated_pruning_term_count,
+                            dropped_pruning_term_count =
+                                overwrite_plan.diagnostics.dropped_pruning_term_count,
+                            "overwrite rewrite predicate was only partially translated for pruning; exact validation remains enabled"
+                        );
+                    }
 
-                Ok(DeltaTable::new_with_state(this.log_store, commit.snapshot))
+                    let plan::PreparedWrite {
+                        schema_delta,
+                        exact_validation,
+                        exec_options,
+                        ..
+                    } = prepared_write;
+
+                    // The sink is done against the configuration that is defined during this commit
+                    let table_config = schema_delta.applied_to(&base_config)?;
+                    actions.extend(schema_delta.into_actions());
+
+                    metrics.num_removed_files = overwrite_plan.num_removed_files();
+
+                    let predicate_sql = exact_validation.as_ref().map(fmt_expr_to_sql).transpose()?;
+                    let (sink_plan, contains_cdc, insert_marker_column) =
+                        overwrite_plan.build_sink_plan()?;
+                    let source_plan = session.create_physical_plan(&sink_plan).await?;
+
+                    // Here we need to validate if the new data conforms to a predicate if one is provided
+                    let (add_actions, _) = write_execution_plan_v2(
+                        &table_config,
+                        &session,
+                        source_plan.clone(),
+                        log_store.object_store(),
+                        exec_options,
+                        exact_validation,
+                        contains_cdc,
+                        insert_marker_column,
+                    )
+                    .await?;
+
+                    actions.extend(
+                        overwrite_plan
+                            .matched_existing
+                            .into_actions(overwrite_plan.deletion_timestamp)?,
+                    );
+
+                    let source_count =
+                        find_metric_node(SOURCE_COUNT_ID, &source_plan).ok_or_else(|| {
+                            DeltaTableError::Generic("Unable to locate expected metric node".into())
+                        })?;
+                    let source_count_metrics = source_count.metrics().unwrap();
+                    let num_added_rows = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
+                    metrics.num_added_rows = num_added_rows;
+
+                    metrics.num_added_files = add_actions.len();
+                    actions.extend(add_actions);
+
+                    metrics.execution_time_ms =
+                        Instant::now().duration_since(exec_start).as_millis() as u64;
+
+                    let operation = DeltaOperation::Write {
+                        mode: this.mode,
+                        partition_by: if !partition_columns.is_empty() {
+                            Some(partition_columns)
+                        } else {
+                            None
+                        },
+                        predicate: predicate_sql,
+                    };
+
+                    let mut commit_properties = this.commit_properties.clone();
+                    commit_properties.app_metadata.insert(
+                        "operationMetrics".to_owned(),
+                        serde_json::to_value(&metrics)?,
+                    );
+
+                    let commit = CommitBuilder::from(commit_properties)
+                        .with_actions(actions)
+                        .build(
+                            this.snapshot.as_ref().map(|f| f as &dyn TableReference),
+                            log_store,
+                            operation.clone(),
+                        )
+                        .await?;
+
+                    Ok(commit.snapshot)
+                })
+                .await?;
+
+                Ok(DeltaTable::new_with_state(parent, state))
             }
             .instrument(tracing::info_span!(
                 "write_operation",
@@ -674,7 +677,7 @@ mod tests {
     use serde_json::{Value, json};
 
     async fn get_write_metrics(table: &DeltaTable) -> WriteMetrics {
-        let mut commit_info: Vec<_> = table.history(Some(1)).await.unwrap().collect();
+        let mut commit_info: Vec<_> = table.history(Some(1)).try_collect().await.unwrap();
         let metrics = commit_info
             .first_mut()
             .unwrap()
@@ -804,6 +807,46 @@ mod tests {
             .expect_err("Remove action is included when Delta table is append-only. Should error");
     }
 
+    /// The first write to a location creates the table, so there is no snapshot to read the
+    /// column mapping mode from. The sink must still write physical column names.
+    #[tokio::test]
+    async fn test_create_write_column_mapped_table_writes_physical_names() {
+        let table = DeltaTable::new_in_memory()
+            .write(vec![get_record_batch(None, false)])
+            .with_configuration([("delta.columnMapping.mode", Some("name"))])
+            .await
+            .unwrap();
+
+        let snapshot = table.snapshot().unwrap().snapshot();
+        assert_eq!(
+            snapshot.table_configuration().column_mapping_mode(),
+            ColumnMappingMode::Name
+        );
+
+        let files = table.get_files_by_partitions(&[]).await.unwrap();
+        assert_eq!(files.len(), 1);
+        let reader = parquet::arrow::async_reader::ParquetObjectReader::new(
+            table.log_store().object_store(),
+            files[0].clone(),
+        );
+        let builder = parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder::new(reader)
+            .await
+            .unwrap();
+
+        let parquet_columns: Vec<&str> = builder
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect();
+        let schema = snapshot.schema();
+        let physical_names: Vec<&str> = schema
+            .fields()
+            .map(|field| field.physical_name(ColumnMappingMode::Name))
+            .collect();
+        assert_eq!(parquet_columns, physical_names);
+    }
+
     #[tokio::test]
     async fn test_create_write() {
         let table_schema = get_delta_schema();
@@ -836,7 +879,7 @@ mod tests {
         assert_common_write_metrics(write_metrics);
 
         table.load().await.unwrap();
-        let history: Vec<CommitInfo> = table.history(None).await.unwrap().collect();
+        let history: Vec<CommitInfo> = table.history(None).try_collect().await.unwrap();
         assert_eq!(history.len(), 2);
         assert_eq!(
             history[0]
@@ -865,7 +908,7 @@ mod tests {
         assert_common_write_metrics(write_metrics);
 
         table.load().await.unwrap();
-        let history: Vec<CommitInfo> = table.history(None).await.unwrap().collect();
+        let history: Vec<CommitInfo> = table.history(None).try_collect().await.unwrap();
         assert_eq!(history.len(), 3);
         assert_eq!(
             history[0]
@@ -894,7 +937,7 @@ mod tests {
         assert_common_write_metrics(write_metrics);
 
         table.load().await.unwrap();
-        let history: Vec<CommitInfo> = table.history(None).await.unwrap().collect();
+        let history: Vec<CommitInfo> = table.history(None).try_collect().await.unwrap();
         assert_eq!(history.len(), 4);
         assert_eq!(
             history[0]
@@ -1546,7 +1589,7 @@ mod tests {
                 .all(|remove| remove.deletion_timestamp.is_some())
         );
 
-        let commit_info: Vec<_> = table.history(Some(1)).await?.collect();
+        let commit_info: Vec<_> = table.history(Some(1)).try_collect().await?;
         let operation_parameters = commit_info[0].operation_parameters.as_ref().unwrap();
         assert_eq!(operation_parameters["partitionBy"], json!("[\"id\"]"));
 
@@ -2625,41 +2668,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_overwrite_without_files_is_rejected() -> TestResult {
-        let temp_dir = tempfile::tempdir()?;
-        let table_path = temp_dir.path().join("without_files_overwrite");
-        std::fs::create_dir(&table_path)?;
-        let table_uri = ensure_table_uri(table_path.to_str().unwrap())?;
-
-        DeltaTable::try_from_url(table_uri.clone())
-            .await?
-            .write(vec![get_record_batch(None, false)])
-            .await?;
-
-        let table = crate::DeltaTableBuilder::from_url(table_uri)?
-            .without_files()
-            .load()
-            .await?;
-
-        assert_eq!(table.version(), Some(0));
-
-        // Phase 3 now routes overwrite planning through matched-file discovery, so this guard
-        // stays covered here to ensure we still fail before any rewrite planning starts.
-        let err = table
-            .write(vec![get_record_batch(None, false)])
-            .with_save_mode(SaveMode::Overwrite)
-            .await
-            .expect_err("overwrite should fail when table was loaded without files");
-
-        assert!(matches!(
-            err,
-            DeltaTableError::NotInitializedWithFiles(operation) if operation == "WRITE"
-        ));
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_replace_where_partitioned() {
         let schema = get_arrow_schema(&None);
 
@@ -3254,7 +3262,7 @@ mod tests {
             let writer =
                 WriteBuilder::new(table.log_store.clone(), None).with_input_batches(vec![batch]);
 
-            let actions = writer.check_preconditions().await?;
+            let (actions, _) = writer.check_preconditions().await?;
             assert_eq!(
                 actions.len(),
                 2,

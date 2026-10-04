@@ -19,8 +19,20 @@ class QueryBuilder:
     ```
     """
 
-    def __init__(self) -> None:
-        self._query_builder = PyQueryBuilder()
+    def __init__(self, session_config: dict[str, str] | None = None) -> None:
+        """Create a QueryBuilder, optionally overriding the DataFusion session config.
+
+        Example:
+            ```py
+            from deltalake import QueryBuilder
+            qb = QueryBuilder({"datafusion.execution.batch_size": "1024"})
+            ```
+
+        Args:
+            session_config: [DataFusion configuration settings](https://datafusion.apache.org/user-guide/configs.html)
+                applied on top of the defaults deltalake tunes for Delta tables.
+        """
+        self._query_builder = PyQueryBuilder(session_config)
 
     def register(self, table_name: str, delta_table: DeltaTable) -> QueryBuilder:
         """Add a table to the query builder instance by name. Table `DeltaTable`

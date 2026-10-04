@@ -17,16 +17,18 @@ use datafusion::logical_expr::{
 };
 use datafusion::prelude::col;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
+use delta_kernel::table_configuration::TableConfiguration;
 use futures::TryStreamExt as _;
 use itertools::Itertools as _;
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
-use super::configs::WriterStatsConfig;
+use super::configs::WriteExecOptions;
 use super::generated_columns::{gc_is_enabled, with_generated_columns};
 use super::metrics::SOURCE_COUNT_ID;
 use super::schema_evolution::try_cast_schema;
 use super::{SchemaMode, WriteError};
+use crate::datafile::writer::ArrowWriterOptions;
 use crate::delta_datafusion::logical::{LogicalPlanBuilderExt as _, MetricObserver};
 use crate::delta_datafusion::{
     DataFusionMixins, Expression, analyze_predicate_for_find_files, scan_files_where_matches,
@@ -35,18 +37,18 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::{merge_arrow_schema, normalize_for_delta};
 use crate::kernel::{
     Action, ActiveAddOptions, Add, AddStatsPolicy, DeletionVectorDescriptor, EagerSnapshot,
-    Metadata, ProtocolExt as _, Remove, Snapshot, StructType, StructTypeExt,
+    Metadata, Protocol, ProtocolExt as _, Remove, Snapshot, StructType, StructTypeExt,
 };
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
-use crate::operations::{get_num_idx_cols_and_stats_columns, get_target_file_size};
+use crate::operations::get_target_file_size;
 use crate::protocol::SaveMode;
 
 /// Schema and protocol actions required before the sink executes the write.
 #[derive(Default)]
 pub(super) struct SchemaDelta {
-    metadata: Option<Action>,
-    protocol: Option<Action>,
+    metadata: Option<Metadata>,
+    protocol: Option<Protocol>,
 }
 
 impl SchemaDelta {
@@ -55,25 +57,33 @@ impl SchemaDelta {
         self.metadata.is_none() && self.protocol.is_none()
     }
 
+    /// `base` with this delta applied: the configuration the sink must write against.
+    pub(super) fn applied_to(&self, base: &TableConfiguration) -> DeltaResult<TableConfiguration> {
+        if self.metadata.is_none() && self.protocol.is_none() {
+            return Ok(base.clone());
+        }
+        Ok(TableConfiguration::try_new(
+            self.metadata
+                .clone()
+                .unwrap_or_else(|| base.metadata().clone()),
+            self.protocol
+                .clone()
+                .unwrap_or_else(|| base.protocol().clone()),
+            base.table_root().clone(),
+            base.version(),
+        )?)
+    }
+
     pub(super) fn into_actions(self) -> Vec<Action> {
         let mut actions = Vec::with_capacity(2);
         if let Some(metadata) = self.metadata {
-            actions.push(metadata);
+            actions.push(metadata.into());
         }
         if let Some(protocol) = self.protocol {
-            actions.push(protocol);
+            actions.push(protocol.into());
         }
         actions
     }
-}
-
-/// Sink specific knobs that must survive planning unchanged.
-pub(super) struct WriteExecOptions {
-    pub(super) partition_columns: Vec<String>,
-    pub(super) target_file_size: Option<NonZeroU64>,
-    pub(super) write_batch_size: Option<usize>,
-    pub(super) writer_properties: Option<WriterProperties>,
-    pub(super) writer_stats_config: WriterStatsConfig,
 }
 
 /// Prepared insert input plus the exact validation the sink must enforce.
@@ -98,6 +108,7 @@ pub(super) struct WritePreparationInput<'a> {
     pub(super) target_file_size: Option<Option<NonZeroU64>>,
     pub(super) write_batch_size: Option<usize>,
     pub(super) writer_properties: Option<WriterProperties>,
+    pub(super) arrow_options: Option<ArrowWriterOptions>,
     pub(super) configuration: &'a HashMap<String, Option<String>>,
 }
 
@@ -276,6 +287,7 @@ pub(super) fn prepare_write(input: WritePreparationInput<'_>) -> DeltaResult<Pre
         target_file_size,
         write_batch_size,
         writer_properties,
+        arrow_options,
         configuration,
     } = input;
 
@@ -409,10 +421,10 @@ pub(super) fn prepare_write(input: WritePreparationInput<'_>) -> DeltaResult<Pre
         exact_validation,
         exec_options: build_exec_options(
             snapshot,
-            partition_columns,
             target_file_size,
             write_batch_size,
             writer_properties,
+            arrow_options,
             configuration,
         ),
     })
@@ -424,7 +436,7 @@ pub(super) async fn plan_overwrite_rewrite(
     session: &dyn Session,
     mode: SaveMode,
     prepared_write: &PreparedWrite,
-    operation_id: Uuid,
+    write_id: Uuid,
 ) -> DeltaResult<MatchedFilesRewritePlan> {
     let Some(eager_snapshot) = snapshot else {
         return Ok(MatchedFilesRewritePlan::passthrough(
@@ -448,7 +460,7 @@ pub(super) async fn plan_overwrite_rewrite(
         Some(predicate) => {
             let analysis = analyze_predicate_for_find_files(
                 predicate.clone(),
-                &prepared_write.exec_options.partition_columns,
+                eager_snapshot.metadata().partition_columns(),
             )?;
             let mut diagnostics = RewriteDiagnostics {
                 matched_file_count: 0,
@@ -494,7 +506,7 @@ pub(super) async fn plan_overwrite_rewrite(
 
             let insert_marker_column = reserve_internal_write_marker_column(
                 &[&prepared_write.insert_plan, files_scan.scan()],
-                operation_id,
+                write_id,
             );
 
             let validated_inserts = mark_insert_rows(
@@ -627,8 +639,8 @@ async fn collect_matched_existing_files(
     Ok(MatchedExistingFiles::new(files))
 }
 
-fn reserve_internal_write_marker_column(plans: &[&LogicalPlan], operation_id: Uuid) -> String {
-    let base = format!("{WRITE_INSERT_MARKER_COLUMN}_{operation_id}");
+fn reserve_internal_write_marker_column(plans: &[&LogicalPlan], write_id: Uuid) -> String {
+    let base = format!("{WRITE_INSERT_MARKER_COLUMN}_{write_id}");
     let mut candidate = base.clone();
     let mut suffix = 0usize;
     while plans.iter().any(|plan| {
@@ -686,27 +698,21 @@ fn align_plan_to_schema(plan: LogicalPlan, target_plan: &LogicalPlan) -> DeltaRe
 
 fn build_exec_options(
     snapshot: Option<&EagerSnapshot>,
-    partition_columns: Vec<String>,
     target_file_size: Option<Option<NonZeroU64>>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
+    arrow_options: Option<ArrowWriterOptions>,
     configuration: &HashMap<String, Option<String>>,
 ) -> WriteExecOptions {
     let config = snapshot.map(|snapshot| snapshot.table_properties());
     let target_file_size =
         target_file_size.unwrap_or_else(|| Some(get_target_file_size(config, configuration)));
-    let (num_indexed_cols, stats_columns) =
-        get_num_idx_cols_and_stats_columns(config, configuration.clone());
 
     WriteExecOptions {
-        partition_columns,
         target_file_size,
         write_batch_size,
         writer_properties,
-        writer_stats_config: WriterStatsConfig {
-            num_indexed_cols,
-            stats_columns,
-        },
+        arrow_options,
     }
 }
 
@@ -816,8 +822,8 @@ fn schema_delta_for_prepared_source(
     )?;
 
     Ok(SchemaDelta {
-        metadata: Some(metadata.into()),
-        protocol: (current_protocol != &new_protocol).then_some(new_protocol.into()),
+        metadata: Some(metadata),
+        protocol: (current_protocol != &new_protocol).then_some(new_protocol),
     })
 }
 
@@ -908,6 +914,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -950,6 +957,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -975,6 +983,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -1011,6 +1020,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -1050,6 +1060,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -1096,6 +1107,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -1152,6 +1164,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -1218,6 +1231,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -1280,6 +1294,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();

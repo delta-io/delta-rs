@@ -55,11 +55,10 @@ use futures::future::BoxFuture;
 use futures::{StreamExt as _, TryStreamExt, stream};
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
-use uuid::Uuid;
 
-use super::Operation;
 use super::cdc::should_write_cdc;
 use crate::DeltaTable;
+use crate::datafile::writer::ArrowWriterOptions;
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::DeltaSessionExt;
 use crate::delta_datafusion::SessionFallbackPolicy;
@@ -79,9 +78,10 @@ use crate::kernel::{
     Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, LogicalFileView, Snapshot,
     resolve_snapshot,
 };
+use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef};
-use crate::operations::CustomExecuteHandler;
 use crate::operations::cdc::CDC_COLUMN_NAME;
+use crate::operations::write::configs::WriteExecOptions;
 use crate::operations::write::execution::write_exec_plan;
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -106,9 +106,10 @@ pub struct DeleteBuilder {
     session_fallback_policy: SessionFallbackPolicy,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
+    /// Options passed to underlying arrow writer for when files are rewritten
+    arrow_options: Option<ArrowWriterOptions>,
     /// Commit properties and configuration
     commit_properties: CommitProperties,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
 impl std::fmt::Debug for DeleteBuilder {
@@ -215,15 +216,6 @@ async fn collect_full_file_deletes(
     })
 }
 
-impl super::Operation for DeleteBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
-}
-
 impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
@@ -235,7 +227,7 @@ impl DeleteBuilder {
             session_fallback_policy: SessionFallbackPolicy::default(),
             commit_properties: CommitProperties::default(),
             writer_properties: None,
-            custom_execute_handler: None,
+            arrow_options: None,
         }
     }
 
@@ -279,9 +271,9 @@ impl DeleteBuilder {
         self
     }
 
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
+    /// Arrow writer options passed to the parquet writer for when files are rewritten
+    pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
+        self.arrow_options = Some(arrow_options);
         self
     }
 }
@@ -291,88 +283,79 @@ impl std::future::IntoFuture for DeleteBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 
-            let operation_id = this.get_operation_id();
-            this.pre_execute(operation_id).await?;
+            let parent = this.log_store.clone();
+            let (state, metrics) = with_operation(&parent, |log_store| async move {
+                let (session, _) = resolve_session_state(
+                    this.session.as_deref(),
+                    this.session_fallback_policy,
+                    || create_session().state(),
+                    SessionResolveContext {
+                        operation: "delete",
+                        table_uri: Some(log_store.root_url()),
+                        cdc: false,
+                    },
+                )?;
+                // Register the parent store: the caller's session outlives this scope, and a
+                // scoped store refuses every call once the scope is closed.
+                update_datafusion_session(&session, &this.log_store)?;
+                session.ensure_log_store_registered(this.log_store.as_ref())?;
 
-            let (session, _) = resolve_session_state(
-                this.session.as_deref(),
-                this.session_fallback_policy,
-                || create_session().state(),
-                SessionResolveContext {
-                    operation: "delete",
-                    table_uri: Some(this.log_store.root_url()),
-                    cdc: false,
-                },
-            )?;
-            update_datafusion_session(&session, &this.log_store, Some(operation_id))?;
-            session.ensure_log_store_registered(this.log_store.as_ref())?;
+                let predicate = this
+                    .predicate
+                    .map(|p| {
+                        let scan_config = DeltaScanConfig::new_from_session(&session);
+                        let predicate_schema = scan_config
+                            .table_schema(snapshot.table_configuration())?
+                            .to_dfschema_ref()?;
+                        p.resolve(&session, predicate_schema)
+                    })
+                    .transpose()?;
 
-            let predicate = this
-                .predicate
-                .map(|p| {
-                    let scan_config = DeltaScanConfig::new_from_session(&session);
-                    let predicate_schema = scan_config
-                        .table_schema(snapshot.table_configuration())?
-                        .to_dfschema_ref()?;
-                    p.resolve(&session, predicate_schema)
-                })
-                .transpose()?;
+                let operation = DeltaOperation::Delete {
+                    predicate: predicate.as_ref().map(fmt_expr_to_sql).transpose()?,
+                };
 
-            let operation = DeltaOperation::Delete {
-                predicate: predicate.as_ref().map(fmt_expr_to_sql).transpose()?,
-            };
-
-            let (actions, metrics) = execute(
-                predicate,
-                this.log_store.clone(),
-                snapshot.clone(),
-                &session,
-                operation_id,
-                this.writer_properties.clone(),
-            )
-            .await?;
-
-            // Do not make a commit when there are zero updates to the state
-            if actions.is_empty() {
-                return Ok((
-                    DeltaTable::new_with_state(this.log_store, DeltaTableState { snapshot }),
-                    metrics,
-                ));
-            }
-
-            let mut props = this.commit_properties;
-            props
-                .app_metadata
-                .insert("readVersion".to_owned(), snapshot.version().into());
-            props.app_metadata.insert(
-                "operationMetrics".to_owned(),
-                serde_json::to_value(&metrics)?,
-            );
-
-            let handle = this.custom_execute_handler.take();
-            let commit = CommitBuilder::from(props)
-                .with_actions(actions)
-                .with_operation_id(operation_id)
-                .with_post_commit_hook_handler(handle.clone())
-                .build(Some(&snapshot), this.log_store.clone(), operation)
+                let (actions, metrics) = execute(
+                    predicate,
+                    log_store.clone(),
+                    snapshot.clone(),
+                    &session,
+                    this.writer_properties.clone(),
+                    this.arrow_options.clone(),
+                )
                 .await?;
 
-            if let Some(handler) = handle {
-                handler.post_execute(&this.log_store, operation_id).await?;
-            }
+                // Do not make a commit when there are zero updates to the state
+                if actions.is_empty() {
+                    return Ok((DeltaTableState { snapshot }, metrics));
+                }
 
-            Ok((
-                DeltaTable::new_with_state(this.log_store, commit.snapshot()),
-                metrics,
-            ))
+                let mut props = this.commit_properties;
+                props
+                    .app_metadata
+                    .insert("readVersion".to_owned(), snapshot.version().into());
+                props.app_metadata.insert(
+                    "operationMetrics".to_owned(),
+                    serde_json::to_value(&metrics)?,
+                );
+
+                let commit = CommitBuilder::from(props)
+                    .with_actions(actions)
+                    .build(Some(&snapshot), log_store, operation)
+                    .await?;
+
+                Ok((commit.snapshot(), metrics))
+            })
+            .await?;
+
+            Ok((DeltaTable::new_with_state(parent, state), metrics))
         })
     }
 }
@@ -428,8 +411,8 @@ async fn execute(
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
     session: &dyn Session,
-    operation_id: Uuid,
     writer_properties: Option<WriterProperties>,
+    arrow_options: Option<ArrowWriterOptions>,
 ) -> DeltaResult<(Vec<Action>, DeleteMetrics)> {
     let eager_snapshot = snapshot;
     let snapshot = eager_snapshot.snapshot();
@@ -621,16 +604,19 @@ async fn execute(
     };
 
     let exec = session.create_physical_plan(&write_plan).await?;
-    let target_file_size = Some(snapshot.table_properties().target_file_size());
+    let exec_options = WriteExecOptions {
+        target_file_size: Some(snapshot.table_properties().target_file_size()),
+        write_batch_size: None,
+        writer_properties,
+        arrow_options,
+    };
     let (mut actions, _) = write_exec_plan(
         session,
         log_store.as_ref(),
         snapshot.table_configuration(),
         exec.clone(),
-        Some(operation_id),
-        target_file_size,
         write_cdc,
-        writer_properties.clone(),
+        exec_options,
     )
     .await?;
 

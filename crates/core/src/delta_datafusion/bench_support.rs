@@ -47,7 +47,7 @@ impl MatchedFilesScan {
 }
 
 fn prepare_session(session: &dyn Session, log_store: &LogStoreRef) -> DeltaResult<()> {
-    super::update_datafusion_session(session, log_store.as_ref(), None)?;
+    super::update_datafusion_session(session, log_store.as_ref())?;
     session.ensure_log_store_registered(log_store.as_ref())?;
     Ok(())
 }

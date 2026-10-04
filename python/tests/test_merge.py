@@ -2075,14 +2075,11 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path, streaming: bool):
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
-    if not streaming:
-        assert (
-            last_action["operationParameters"].get("predicate")
-            == "date = '2022-02-01'::date"
-        )
-    else:
-        # In streaming mode we don't use aggregated stats of the source in the predicate
-        assert last_action["operationParameters"].get("predicate") is None
+    # A streamed source records the predicate that it builds while it is read.
+    assert (
+        last_action["operationParameters"].get("predicate")
+        == "date = '2022-02-01'::date"
+    )
 
 
 @pytest.mark.pyarrow
@@ -2972,37 +2969,6 @@ def _merge_with_type_mismatch_actions(merger, action_style: str):
 
 
 @pytest.mark.pyarrow
-def test_merge_from_without_files_table_preserves_state(tmp_path: pathlib.Path):
-    import pyarrow as pa
-
-    target = pa.table({"id": [1, 2], "value": ["a", "b"]})
-    source = pa.table({"id": [2, 3], "value": ["bb", "c"]})
-    write_deltalake(tmp_path, target)
-
-    dt = DeltaTable(tmp_path, without_files=True)
-    metrics = (
-        dt.merge(
-            source=source,
-            predicate="target.id = source.id",
-            source_alias="source",
-            target_alias="target",
-        )
-        .when_matched_update({"value": "source.value"})
-        .when_not_matched_insert({"id": "source.id", "value": "source.value"})
-        .execute()
-    )
-
-    assert int(metrics["num_target_rows_updated"]) == 1
-    assert int(metrics["num_target_rows_inserted"]) == 1
-
-    result = DeltaTable(tmp_path).to_pyarrow_table().sort_by("id")
-    assert result["value"].to_pylist() == ["a", "bb", "c"]
-
-    with pytest.raises(DeltaError, match="Table is instantiated without files\\."):
-        dt.get_add_actions(flatten=True)
-
-
-@pytest.mark.pyarrow
 @pytest.mark.parametrize("action_style", ("all", "explicit"))
 def test_merge_type_mismatch_default_castable_value_succeeds(
     tmp_path: pathlib.Path, action_style: str
@@ -3398,7 +3364,7 @@ def test_merge_on_decimal_3033(tmp_path):
 
     assert (
         string_predicate
-        == "timestamp = arrow_cast('2024-03-20T12:30:00.000000', 'Timestamp(Microsecond, None)') AND altitude = '1505'::decimal(6, 1)"
+        == "timestamp = arrow_cast('2024-03-20T12:30:00.000000', 'Timestamp(Microsecond, None)') AND altitude = '150.5'::decimal(6, 1)"
     )
 
 
@@ -3711,3 +3677,117 @@ def test_merge_type_mismatch_partition_pruning(tmp_path: pathlib.Path, streaming
         f"got {metrics['num_target_files_skipped_during_scan']}. "
         "This suggests partition pruning is not working effectively with type mismatches."
     )
+
+
+@pytest.mark.pandas
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_file_pruning_regression_3636(tmp_path: pathlib.Path, streaming: bool):
+    """
+    https://github.com/delta-io/delta-rs/issues/3636
+    """
+    import numpy as np
+    import pandas as pd
+    import pyarrow as pa
+
+    from deltalake import DeltaTable
+
+    # create table once
+    dt = DeltaTable.create(
+        tmp_path,
+        pa.schema(
+            [
+                pa.field("ts", pa.timestamp("us"), nullable=False),
+                pa.field("direction", pa.string(), nullable=False),  # S, W, N, E
+                pa.field("distance", pa.float64(), nullable=False),
+                pa.field("updated_on", pa.int64(), nullable=False),  # timestamp in ms
+                pa.field("date", pa.string(), nullable=False),
+            ]
+        ),
+        partition_by=["date"],
+        mode="ignore",
+    )
+
+    def mock_data(size: int):
+        tss = pd.date_range(start="2025-01-01", freq="2s", periods=size // 4)
+
+        init_upd_df = {
+            "ts": [*tss] * 4,
+            "direction": [i for i in ("S", "W", "N", "E") for _ in range(len(tss))],
+            "distance": np.random.randint(0, 10000, size=len(tss) * 4),
+            "updated_on": list(
+                (tss.floor("D") + pd.Timedelta(hours=25)).astype(int) // 1000000
+            )
+            * 4,
+            "date": list(tss.strftime("%Y-%m-%d")) * 4,
+        }
+        return pd.DataFrame(init_upd_df)
+
+    # Let's prefill the table large enough to spread the results across
+    # multiple files
+    init_df = mock_data(500_000)
+
+    dt = DeltaTable(tmp_path)
+
+    dt.merge(
+        init_df,
+        predicate="s.date = t.date and s.ts = t.ts and s.direction = t.direction",
+        source_alias="s",
+        target_alias="t",
+    ).when_not_matched_insert_all().execute()
+
+    second_upd = mock_data(40)
+
+    dt = DeltaTable(tmp_path)
+
+    stats = (
+        dt.merge(
+            second_upd,
+            predicate="s.date = t.date and s.ts = t.ts and s.direction = t.direction",
+            source_alias="s",
+            target_alias="t",
+            streamed_exec=streaming,
+        )
+        .when_not_matched_insert_all()
+        .execute()
+    )
+
+    assert stats["num_target_files_scanned"] == 1
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("cdf", (False, True))
+def test_merge_insert_predicate_skips_rejected_rows_4784(
+    tmp_path: pathlib.Path, cdf: bool
+):
+    # Regression test for https://github.com/delta-io/delta-rs/issues/4784
+    import pyarrow as pa
+
+    write_deltalake(
+        tmp_path,
+        pa.table({"id": pa.array([1], pa.int64()), "v": pa.array([10.0])}),
+        configuration={"delta.enableChangeDataFeed": "true"} if cdf else None,
+    )
+    # id 2 should be inserted; id 99 fails the insert predicate and must be ignored
+    source = pa.table(
+        {
+            "id": pa.array([2, 99], pa.int64()),
+            "v": pa.array([20.0, None]),
+            "op": pa.array(["insert", "skip"]),
+        }
+    )
+    (
+        DeltaTable(tmp_path)
+        .merge(
+            source=source,
+            predicate="t.id = s.id",
+            source_alias="s",
+            target_alias="t",
+        )
+        .when_not_matched_insert(
+            updates={"id": "s.id", "v": "s.v"}, predicate="s.op = 'insert'"
+        )
+        .execute()
+    )
+
+    result = DeltaTable(tmp_path).to_pyarrow_table().sort_by("id").to_pylist()
+    assert result == [{"id": 1, "v": 10.0}, {"id": 2, "v": 20.0}]

@@ -127,6 +127,25 @@ To view the available history, use `DeltaTable.history`:
     let history: Vec<_> = history_iter.collect();
     println!("Table history: {:#?}", history);
     ```
+
+    `history` reads every selected commit file before it returns. If you only need the
+    most recent commits and cannot express that as a `limit`, for example
+    "everything since a given timestamp", use `history_stream` instead. It
+    yields commits newest first and only reads commit files as the stream is
+    polled, so breaking out of the loop skips the rest of the log:
+
+    ```rust
+    use futures::TryStreamExt;
+
+    let cutoff_millis = 1587968600000;
+    let mut history = table.history_stream(None);
+    while let Some(commit) = history.try_next().await? {
+        if commit.timestamp.is_some_and(|ts| ts < cutoff_millis) {
+            break;
+        }
+        println!("{:?}", commit.operation);
+    }
+    ```
 ## Current Add Actions
 
 The active state for a delta table is determined by the Add actions,

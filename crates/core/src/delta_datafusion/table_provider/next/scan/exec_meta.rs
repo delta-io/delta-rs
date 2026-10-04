@@ -261,7 +261,11 @@ impl ExecutionPlan for DeltaScanMetaExec {
         })))
     }
 
-    fn execute(&self, partition: usize, _: Arc<TaskContext>) -> Result<SendableRecordBatchStream> {
+    fn execute(
+        &self,
+        partition: usize,
+        task_ctx: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
         if partition >= self.input.len() {
             return Err(DataFusionError::Plan(format!(
                 "DeltaScanMetaExec: invalid partition {}",
@@ -271,6 +275,8 @@ impl ExecutionPlan for DeltaScanMetaExec {
         Ok(Box::pin(DeltaScanMetaStream {
             scan_plan: Arc::clone(&self.scan_plan),
             input: self.input[partition].clone(),
+            current: None,
+            batch_size: task_ctx.session_config().batch_size(),
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
             dv_short_mask_padded_files_total: MetricBuilder::new(&self.metrics)
                 .counter("dv_short_mask_padded_files_total", partition),
@@ -340,6 +346,28 @@ impl ExecutionPlan for DeltaScanMetaExec {
     }
 }
 
+/// Upper bound on the bytes materialized into a single metadata batch.
+///
+/// Arrow string/binary arrays use 32-bit offsets and panic past ~2GiB, so
+/// keep chunks well clear of that even accounting for downstream cast
+/// overhead.
+const MAX_META_BATCH_BYTES: usize = 512 * 1024 * 1024;
+
+/// Rows per emitted batch: the session `batch_size`, reduced when a single
+/// row's materialized bytes would push a full-width batch past
+/// [`MAX_META_BATCH_BYTES`] (kept 4x clear of Arrow's ~2GiB 32-bit offset
+/// limit). The `.max(1)` guarantees progress even for rows larger than the
+/// whole cap; the inner `.max(1)` guards the division itself.
+fn capped_chunk_rows(batch_size: usize, bytes_per_row: usize) -> usize {
+    batch_size
+        .min(MAX_META_BATCH_BYTES / bytes_per_row.max(1))
+        .max(1)
+}
+
+static EMPTY_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| Arc::new(Schema::new(Fields::empty())));
+static EMPTY_KERNEL_SCHEMA: LazyLock<KernelSchemaRef> =
+    LazyLock::new(|| Arc::new(KernelSchema::try_new(vec![]).unwrap()));
+
 /// Stream that generates RecordBatches from file metadata without reading data files.
 ///
 /// Synthesizes logical table rows by:
@@ -355,6 +383,11 @@ struct DeltaScanMetaStream {
     scan_plan: Arc<KernelScanPlan>,
     /// Input stream yielding raw data read from data files.
     input: VecDeque<(String, usize)>,
+    /// File currently split into bounded chunks: (file id, total rows, rows
+    /// emitted, rows per chunk).
+    current: Option<(String, usize, usize, usize)>,
+    /// Maximum rows per emitted batch, from the session `batch_size`.
+    batch_size: usize,
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
     /// Count of file batches where short deletion-vector masks required padding.
@@ -372,40 +405,11 @@ struct DeltaScanMetaStream {
 }
 
 impl DeltaScanMetaStream {
-    /// Apply the per-file transformation to a RecordBatch.
-    fn batch_project(&mut self, file_id: String, row_count: usize) -> Result<RecordBatch> {
-        static EMPTY_SCHEMA: LazyLock<SchemaRef> =
-            LazyLock::new(|| Arc::new(Schema::new(Fields::empty())));
-        static EMPTY_KERNEL_SCHEMA: LazyLock<KernelSchemaRef> =
-            LazyLock::new(|| Arc::new(KernelSchema::try_new(vec![]).unwrap()));
-
-        let _timer = self.baseline_metrics.elapsed_compute().timer();
-
-        let batch = RecordBatch::try_new_with_options(
-            EMPTY_SCHEMA.clone(),
-            vec![],
-            &RecordBatchOptions::new().with_row_count(Some(row_count)),
-        )?;
-
-        let batch = if let Some(selection) = self.selection_vectors.get(&file_id) {
-            let mask_len = selection.len();
-            let (batch, padded_rows) = apply_selection_vector(batch, selection.value(), &file_id)?;
-            if padded_rows > 0 {
-                self.dv_short_mask_padded_files_total.add(1);
-                debug!(
-                    file_id = file_id.as_str(),
-                    mask_len,
-                    row_count,
-                    padded_rows,
-                    "Padded short deletion-vector keep-mask in metadata scan"
-                );
-            }
-            batch
-        } else {
-            batch
-        };
-
-        let result = if self
+    /// Evaluate the file's partition transform over `batch` without masking
+    /// or finalizing, so callers can size chunks from a probe or project a
+    /// row slice.
+    fn evaluate_transform(&self, file_id: &str, batch: RecordBatch) -> Result<RecordBatch> {
+        if self
             .scan_plan
             .scan
             .logical_schema()
@@ -414,8 +418,8 @@ impl DeltaScanMetaStream {
             .is_none()
         {
             // Empty projection: the kernel transform can't build a zero-field struct, keep as-is.
-            batch
-        } else if let Some(transform) = self.transforms.get(&file_id) {
+            Ok(batch)
+        } else if let Some(transform) = self.transforms.get(file_id) {
             let evaluator = ARROW_HANDLER
                 .new_expression_evaluator(
                     EMPTY_KERNEL_SCHEMA.clone(),
@@ -426,13 +430,77 @@ impl DeltaScanMetaStream {
 
             evaluator
                 .evaluate_arrow(batch)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                .map_err(|e| DataFusionError::External(Box::new(e)))
+        } else {
+            Ok(batch)
+        }
+    }
+
+    /// Rows per emitted batch for one file: the session `batch_size`, reduced
+    /// when a full-width batch of the materialized partition values would
+    /// approach [`MAX_META_BATCH_BYTES`]. The reduction only binds for wide
+    /// values at large configured batch sizes, since the per-row budget
+    /// shrinks as `batch_size` grows. Probing one row measures the per-row
+    /// bytes exactly because partition values repeat per row.
+    fn chunk_rows_for_file(&self, file_id: &str, row_count: usize) -> Result<usize> {
+        if let Some(selection) = self.selection_vectors.get(file_id) {
+            let (_, padded_rows) = effective_row_count(row_count, selection.value(), file_id)?;
+            if padded_rows > 0 {
+                self.dv_short_mask_padded_files_total.add(1);
+                debug!(
+                    file_id = file_id,
+                    mask_len = selection.len(),
+                    row_count,
+                    padded_rows,
+                    "Padded short deletion-vector keep-mask in metadata scan"
+                );
+            }
+        }
+        if row_count == 0 {
+            return Ok(0);
+        }
+        let probe = RecordBatch::try_new_with_options(
+            EMPTY_SCHEMA.clone(),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(1)),
+        )?;
+        let probe = self.evaluate_transform(file_id, probe)?;
+        let bytes_per_row = probe.get_array_memory_size().max(1);
+        Ok(capped_chunk_rows(self.batch_size, bytes_per_row))
+    }
+
+    /// Project the `[offset, offset + len)` row slice of one file, masking,
+    /// transforming, and finalizing exactly like a whole-file batch.
+    fn batch_project_chunk(
+        &mut self,
+        file_id: &str,
+        offset: usize,
+        len: usize,
+    ) -> Result<RecordBatch> {
+        let _timer = self.baseline_metrics.elapsed_compute().timer();
+
+        let batch = RecordBatch::try_new_with_options(
+            EMPTY_SCHEMA.clone(),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(len)),
+        )?;
+
+        let batch = if let Some(selection) = self.selection_vectors.get(file_id) {
+            let selection = selection.value();
+            let start = offset.min(selection.len());
+            let end = (offset + len).min(selection.len());
+            // Mask length was validated for the whole file in
+            // `chunk_rows_for_file`; the slice can only fall short here.
+            let (batch, _) = apply_selection_vector(batch, &selection[start..end], file_id)?;
+            batch
         } else {
             batch
         };
 
+        let result = self.evaluate_transform(file_id, batch)?;
+
         if let Some(file_id_field) = &self.file_id_field {
-            let public_file_id = super::public_file_id(&self.public_file_ids, &file_id)?;
+            let public_file_id = super::public_file_id(&self.public_file_ids, file_id)?;
             let file_id_array =
                 super::file_id_array_for_value(file_id_field, public_file_id, result.num_rows())?;
             super::finalize_transformed_batch(
@@ -493,16 +561,47 @@ impl Stream for DeltaScanMetaStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let poll = if let Some((file, row_count)) = self.input.pop_front() {
-            Poll::Ready(Some(self.batch_project(file, row_count)))
-        } else {
-            Poll::Ready(None)
+        // Single-pass block, not a real loop: every path yields exactly one
+        // poll result, and all exits funnel through `record_poll` below.
+        let poll = 'poll: {
+            if self.current.is_none() {
+                let Some((file_id, row_count)) = self.input.pop_front() else {
+                    break 'poll Poll::Ready(None);
+                };
+                let chunk_rows = match self.chunk_rows_for_file(&file_id, row_count) {
+                    Ok(chunk_rows) => chunk_rows,
+                    Err(err) => break 'poll Poll::Ready(Some(Err(err))),
+                };
+                self.current = Some((file_id, row_count, 0, chunk_rows));
+            }
+            let Some((file_id, total_rows, offset, chunk_rows)) = self.current.clone() else {
+                unreachable!("cursor is set just above");
+            };
+            let len = chunk_rows.min(total_rows.saturating_sub(offset));
+            let batch = match self.batch_project_chunk(&file_id, offset, len) {
+                Ok(batch) => batch,
+                // Drop the file: the error is yielded once and the stream advances.
+                Err(err) => {
+                    self.current = None;
+                    break 'poll Poll::Ready(Some(Err(err)));
+                }
+            };
+            let emitted = offset + len;
+            self.current = if emitted >= total_rows {
+                None
+            } else {
+                Some((file_id, total_rows, emitted, chunk_rows))
+            };
+            Poll::Ready(Some(Ok(batch)))
         };
         self.baseline_metrics.record_poll(poll)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.input.len(), Some(self.input.len()))
+        // Lower bound: queued files plus the in-progress file, each yielding
+        // at least one batch. A file may yield many chunks, so the total is
+        // genuinely unknown upfront.
+        (self.input.len() + usize::from(self.current.is_some()), None)
     }
 }
 
@@ -820,6 +919,188 @@ mod tests {
             err.to_string().contains("Selection vector length"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn test_capped_chunk_rows() {
+        // Narrow rows keep the full session batch size.
+        assert_eq!(capped_chunk_rows(8192, 100), 8192);
+        // Wide rows are capped before Arrow's i32 offsets can overflow:
+        // 2048 * 262_144 == MAX_META_BATCH_BYTES < i32::MAX < 8192 * 262_144.
+        assert_eq!(capped_chunk_rows(8192, 262_144), 2048);
+        assert_eq!(capped_chunk_rows(8192, 300_000), 1789);
+        // A row larger than the whole cap still makes progress one row at a time.
+        assert_eq!(capped_chunk_rows(8192, MAX_META_BATCH_BYTES + 1), 1);
+        assert_eq!(capped_chunk_rows(1, usize::MAX), 1);
+    }
+
+    /// A file with more rows than the session batch size must stream in
+    /// bounded chunks instead of materializing one giant batch (#4727).
+    ///
+    /// NOTE: the partition value is deliberately short so the partition
+    /// directory stays within Windows path limits. A small session batch
+    /// size keeps this test fast: pre-fix code emits a single over-size
+    /// batch and fails the per-batch assertion below. The byte-cap branch
+    /// itself is pinned by `test_capped_chunk_rows`.
+    #[tokio::test]
+    async fn test_meta_scan_chunks_batches_within_session_batch_size() -> TestResult {
+        use arrow::array::AsArray;
+        use arrow_array::DictionaryArray;
+        use arrow_array::types::UInt16Type;
+        use datafusion::prelude::{SessionConfig, SessionContext};
+
+        const VALUE_LEN: usize = 100;
+        const VIRTUAL_ROWS: usize = 10_000;
+        const BATCH_SIZE: usize = 100;
+
+        let value = "x".repeat(VALUE_LEN);
+        let (_dir, mut table) = create_partitioned_repro_table().await?;
+        let batch = RecordBatch::try_new(
+            repro_schema(),
+            vec![
+                Arc::new(Int64Array::from(vec![0, 1, 2])),
+                Arc::new(StringArray::from(vec![value.as_str(); 3])),
+            ],
+        )?;
+        table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let part_idx = provider.schema().index_of("part")?;
+        let scan = provider
+            .scan(&session.state(), Some(&vec![part_idx]), &[], None)
+            .await?;
+        let mut exec = scan
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected metadata-only scan")
+            .clone();
+
+        // Pretend the single file holds far more rows than its stats claim.
+        let mut file_count = 0;
+        for queue in exec.input.iter_mut() {
+            for (_, row_count) in queue.iter_mut() {
+                *row_count = VIRTUAL_ROWS;
+                file_count += 1;
+            }
+        }
+        assert_eq!(file_count, 1, "expected a single file in the repro table");
+
+        // Execute with a small batch size so chunking is exercised without
+        // materializing millions of rows. `batch_size` is read at execute
+        // time from the task context, so the scan above can use the default
+        // session untouched.
+        let exec_session =
+            SessionContext::new_with_config(SessionConfig::new().with_batch_size(BATCH_SIZE));
+        let stream = exec.execute(0, exec_session.task_ctx())?;
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        assert!(
+            !batches.is_empty(),
+            "expected at least one batch for a non-empty file"
+        );
+        assert!(
+            batches.iter().all(|b| b.num_rows() <= BATCH_SIZE),
+            "every batch must fit the session batch size"
+        );
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            VIRTUAL_ROWS
+        );
+        for batch in &batches {
+            let parts = batch.column_by_name("part").expect("part column");
+            // Partition columns are dictionary wrapped; every key must point
+            // at the single repeated value.
+            let dict = parts
+                .as_any()
+                .downcast_ref::<DictionaryArray<UInt16Type>>()
+                .expect("partition dictionaries use UInt16 keys");
+            assert!(dict.keys().iter().flatten().all(|k| k == 0));
+            let values = dict.values();
+            let first = match values.data_type() {
+                DataType::Utf8 => values.as_string::<i32>().value(0).to_owned(),
+                DataType::LargeUtf8 => values.as_string::<i64>().value(0).to_owned(),
+                DataType::Utf8View => values.as_string_view().value(0).to_owned(),
+                other => panic!("unexpected dictionary value type: {other:?}"),
+            };
+            assert_eq!(first, value);
+        }
+
+        Ok(())
+    }
+
+    /// Chunk lengths must account for deletion-vector keep-masks: each
+    /// emitted batch holds exactly the kept rows of its
+    /// `[offset, offset + len)` file slice (short masks pad with kept rows),
+    /// and the batches sum to the file's kept total.
+    ///
+    /// NOTE: the repro partition value is uniform, so this pins lengths and
+    /// totals only; which-rows correctness rests on the
+    /// `test_apply_selection_vector_*` unit tests.
+    #[tokio::test]
+    async fn test_meta_scan_chunk_lengths_with_selection_vectors() -> TestResult {
+        use datafusion::prelude::{SessionConfig, SessionContext};
+
+        const VALUE_LEN: usize = 100;
+        const ROWS: usize = 10;
+        const BATCH_SIZE: usize = 3;
+        // 8-entry mask over 10 rows: 6 kept + 2 implicitly-kept pad rows.
+        const MASK: &[bool] = &[true, true, false, true, true, true, false, true];
+        // Per-chunk kept rows for slices (0,3), (3,3), (6,3), (9,1).
+        const EXPECTED_LENGTHS: &[usize] = &[2, 3, 2, 1];
+
+        let value = "x".repeat(VALUE_LEN);
+        let (_dir, mut table) = create_partitioned_repro_table().await?;
+        let batch = RecordBatch::try_new(
+            repro_schema(),
+            vec![
+                Arc::new(Int64Array::from_iter_values(0..ROWS as i64)),
+                Arc::new(StringArray::from(vec![value.as_str(); ROWS])),
+            ],
+        )?;
+        table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let part_idx = provider.schema().index_of("part")?;
+        let scan = provider
+            .scan(&session.state(), Some(&vec![part_idx]), &[], None)
+            .await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected metadata-only scan")
+            .clone();
+
+        // Mask the single file's real rows with a short keep-mask.
+        assert_eq!(exec.input.len(), 1, "expected a single exec partition");
+        assert_eq!(exec.input[0].len(), 1, "expected a single file");
+        let (file_id, row_count) = exec.input[0][0].clone();
+        assert_eq!(row_count, ROWS, "expected real row count, no override");
+        exec.selection_vectors.insert(file_id, MASK.to_vec());
+
+        let exec_session =
+            SessionContext::new_with_config(SessionConfig::new().with_batch_size(BATCH_SIZE));
+        let stream = exec.execute(0, exec_session.task_ctx())?;
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            EXPECTED_LENGTHS,
+            "each chunk must emit exactly its slice's kept rows"
+        );
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            8,
+            "chunks must sum to the mask's kept total (6 kept + 2 padded)"
+        );
+
+        Ok(())
     }
 
     #[tokio::test]

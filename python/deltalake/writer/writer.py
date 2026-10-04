@@ -36,7 +36,7 @@ def write_deltalake(
     schema_mode: Literal["merge", "overwrite"] | None = ...,
     storage_options: dict[str, str] | None = ...,
     target_file_size: int | None = ...,
-    writer_properties: WriterProperties = ...,
+    writer_properties: WriterProperties | None = ...,
     commit_properties: CommitProperties | None = ...,
     post_commithook_properties: PostCommitHookProperties | None = ...,
 ) -> None: ...
@@ -56,7 +56,7 @@ def write_deltalake(
     storage_options: dict[str, str] | None = ...,
     predicate: str | None = ...,
     target_file_size: int | None = ...,
-    writer_properties: WriterProperties = ...,
+    writer_properties: WriterProperties | None = ...,
     commit_properties: CommitProperties | None = ...,
     post_commithook_properties: PostCommitHookProperties | None = ...,
 ) -> None: ...
@@ -96,7 +96,8 @@ def write_deltalake(
             If 'ignore', will not write anything if table already exists.
         name: User-provided identifier for this table.
         description: User-provided description for this table.
-        configuration: A map containing configuration options for the metadata action.
+        configuration: A map containing table properties for the metadata action.
+            Use [TableProperty][deltalake.TableProperty] for table property keys.
         schema_mode: If set to "overwrite", allows replacing the schema of the table. Set to "merge" to merge with existing schema.
         storage_options: Options passed to the native delta filesystem.
         predicate: When using `Overwrite` mode, replace data that matches a predicate.'
