@@ -58,6 +58,7 @@ use serde::Serialize;
 
 use super::cdc::should_write_cdc;
 use crate::DeltaTable;
+use crate::datafile::writer::ArrowWriterOptions;
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::DeltaSessionExt;
 use crate::delta_datafusion::SessionFallbackPolicy;
@@ -80,6 +81,7 @@ use crate::kernel::{
 use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::cdc::CDC_COLUMN_NAME;
+use crate::operations::write::configs::WriteExecOptions;
 use crate::operations::write::execution::write_exec_plan;
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -104,6 +106,8 @@ pub struct DeleteBuilder {
     session_fallback_policy: SessionFallbackPolicy,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
+    /// Options passed to underlying arrow writer for when files are rewritten
+    arrow_options: Option<ArrowWriterOptions>,
     /// Commit properties and configuration
     commit_properties: CommitProperties,
 }
@@ -223,6 +227,7 @@ impl DeleteBuilder {
             session_fallback_policy: SessionFallbackPolicy::default(),
             commit_properties: CommitProperties::default(),
             writer_properties: None,
+            arrow_options: None,
         }
     }
 
@@ -263,6 +268,12 @@ impl DeleteBuilder {
     /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Arrow writer options passed to the parquet writer for when files are rewritten
+    pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
+        self.arrow_options = Some(arrow_options);
         self
     }
 }
@@ -317,6 +328,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                     snapshot.clone(),
                     &session,
                     this.writer_properties.clone(),
+                    this.arrow_options.clone(),
                 )
                 .await?;
 
@@ -400,6 +412,7 @@ async fn execute(
     snapshot: EagerSnapshot,
     session: &dyn Session,
     writer_properties: Option<WriterProperties>,
+    arrow_options: Option<ArrowWriterOptions>,
 ) -> DeltaResult<(Vec<Action>, DeleteMetrics)> {
     let eager_snapshot = snapshot;
     let snapshot = eager_snapshot.snapshot();
@@ -591,15 +604,19 @@ async fn execute(
     };
 
     let exec = session.create_physical_plan(&write_plan).await?;
-    let target_file_size = Some(snapshot.table_properties().target_file_size());
+    let exec_options = WriteExecOptions {
+        target_file_size: Some(snapshot.table_properties().target_file_size()),
+        write_batch_size: None,
+        writer_properties,
+        arrow_options,
+    };
     let (mut actions, _) = write_exec_plan(
         session,
         log_store.as_ref(),
         snapshot.table_configuration(),
         exec.clone(),
-        target_file_size,
         write_cdc,
-        writer_properties.clone(),
+        exec_options,
     )
     .await?;
 
