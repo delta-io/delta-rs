@@ -51,6 +51,7 @@ use self::execution::write_execution_plan_v2;
 use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use super::CreateBuilder;
 use crate::DeltaTable;
+use crate::datafile::writer::ArrowWriterOptions;
 use crate::delta_datafusion::Expression;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric};
@@ -158,6 +159,8 @@ pub struct WriteBuilder {
     safe_cast: bool,
     /// Parquet writer properties
     writer_properties: Option<WriterProperties>,
+    /// Arrow writer options
+    arrow_options: Option<ArrowWriterOptions>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// Name of the table, only used when table doesn't exist yet
@@ -203,6 +206,7 @@ impl WriteBuilder {
             safe_cast: false,
             schema_mode: None,
             writer_properties: None,
+            arrow_options: None,
             commit_properties: CommitProperties::default(),
             name: None,
             description: None,
@@ -296,6 +300,12 @@ impl WriteBuilder {
     /// Specify the writer properties to use when writing a parquet file
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Specify the arrow writer options to use when writing a parquet file
+    pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
+        self.arrow_options = Some(arrow_options);
         self
     }
 
@@ -520,6 +530,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         target_file_size: this.target_file_size,
                         write_batch_size: this.write_batch_size,
                         writer_properties: this.writer_properties.clone(),
+                        arrow_options: this.arrow_options.clone(),
                         configuration: &this.configuration,
                     })?;
 
