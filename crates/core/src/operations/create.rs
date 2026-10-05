@@ -10,10 +10,9 @@ use futures::future::BoxFuture;
 use serde_json::Value;
 
 use crate::errors::{ColumnMappingOperation, DeltaResult, DeltaTableError};
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use crate::kernel::{Action, DataType, MetadataExt, ProtocolExt as _, StructField, StructType};
 use crate::kernel::{ProtocolInner, new_metadata};
-use crate::kernel::{reader_features_for_version, writer_features_for_version};
 use crate::logstore::LogStoreRef;
 use crate::logstore::with_operation;
 use crate::protocol::{DeltaOperation, SaveMode};
@@ -89,10 +88,6 @@ pub struct CreateBuilder {
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     raise_if_key_not_exists: bool,
-    /// Minimum writer version requirement extracted from configuration
-    min_writer_version: Option<i32>,
-    /// Minimum reader version requirement extracted from configuration
-    min_reader_version: Option<i32>,
 }
 
 impl Default for CreateBuilder {
@@ -117,8 +112,6 @@ impl CreateBuilder {
             configuration: Default::default(),
             commit_properties: CommitProperties::default(),
             raise_if_key_not_exists: true,
-            min_writer_version: None,
-            min_reader_version: None,
         }
     }
 
@@ -437,6 +430,7 @@ impl std::future::IntoFuture for CreateBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kernel::transaction::PROTOCOL;
     use crate::table::config::TableProperty;
     use crate::writer::test_utils::get_delta_schema;
     use delta_kernel::table_features::TableFeature;
