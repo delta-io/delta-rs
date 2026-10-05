@@ -204,8 +204,6 @@ pub(crate) fn contains_variant<'a>(mut fields: impl Iterator<Item = &'a StructFi
 pub(crate) trait ProtocolExt {
     fn reader_features_set(&self) -> Option<HashSet<TableFeature>>;
     fn writer_features_set(&self) -> Option<HashSet<TableFeature>>;
-    fn append_reader_features(self, reader_features: &[TableFeature]) -> Protocol;
-    fn append_writer_features(self, writer_features: &[TableFeature]) -> Protocol;
     fn move_table_properties_into_features(
         self,
         configuration: &HashMap<String, String>,
@@ -227,18 +225,6 @@ impl ProtocolExt for Protocol {
     fn writer_features_set(&self) -> Option<HashSet<TableFeature>> {
         self.writer_features()
             .map(|features| features.iter().cloned().collect())
-    }
-
-    fn append_reader_features(self, reader_features: &[TableFeature]) -> Protocol {
-        let mut inner = ProtocolInner::from_kernel(&self);
-        inner = inner.append_reader_features(reader_features.iter().cloned());
-        inner.as_kernel()
-    }
-
-    fn append_writer_features(self, writer_features: &[TableFeature]) -> Protocol {
-        let mut inner = ProtocolInner::from_kernel(&self);
-        inner = inner.append_writer_features(writer_features.iter().cloned());
-        inner.as_kernel()
     }
 
     fn move_table_properties_into_features(
@@ -544,22 +530,22 @@ impl ProtocolInner {
         }
 
         // Check columnMappingMode and bump protocol or add reader/writerFeatures
-        if let Some(mode) = parsed_properties.get(&TableProperty::ColumnMappingMode) {
-            if mode.as_str() != "none" {
-                if self.min_reader_version >= 3 {
-                    self.reader_features
-                        .get_or_insert_with(HashSet::new)
-                        .insert(TableFeature::ColumnMapping);
-                } else {
-                    self.min_reader_version = self.min_reader_version.max(2);
-                }
-                if self.min_writer_version >= 7 {
-                    self.writer_features
-                        .get_or_insert_with(HashSet::new)
-                        .insert(TableFeature::ColumnMapping);
-                } else {
-                    self.min_writer_version = self.min_writer_version.max(5);
-                }
+        if let Some(mode) = parsed_properties.get(&TableProperty::ColumnMappingMode)
+            && mode.as_str() != "none"
+        {
+            if self.min_reader_version >= 3 {
+                self.reader_features
+                    .get_or_insert_with(HashSet::new)
+                    .insert(TableFeature::ColumnMapping);
+            } else {
+                self.min_reader_version = self.min_reader_version.max(2);
+            }
+            if self.min_writer_version >= 7 {
+                self.writer_features
+                    .get_or_insert_with(HashSet::new)
+                    .insert(TableFeature::ColumnMapping);
+            } else {
+                self.min_writer_version = self.min_writer_version.max(5);
             }
         }
 
@@ -814,65 +800,56 @@ impl fmt::Display for TableFeatures {
     }
 }
 
-impl TryFrom<&TableFeatures> for TableFeature {
-    type Error = std::convert::Infallible;
-
-    fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
-        TableFeature::try_from(value.as_ref())
+impl From<&TableFeatures> for TableFeature {
+    fn from(value: &TableFeatures) -> Self {
+        TableFeature::from(value.as_ref())
     }
 }
 
 impl TableFeatures {
     /// Convert table feature to respective reader or/and write feature
     pub fn to_reader_writer_features(&self) -> (Option<TableFeature>, Option<TableFeature>) {
-        let feature = TableFeature::try_from(self).ok();
+        let feature = TableFeature::from(self);
+        // Classify features based on their type
+        // Writer-only features
         match feature {
-            Some(feature) => {
-                // Classify features based on their type
-                // Writer-only features
-                match feature {
-                    TableFeature::AppendOnly
-                    | TableFeature::Invariants
-                    | TableFeature::CheckConstraints
-                    | TableFeature::ChangeDataFeed
-                    | TableFeature::GeneratedColumns
-                    | TableFeature::IdentityColumns
-                    | TableFeature::InCommitTimestamp
-                    | TableFeature::RowTracking
-                    | TableFeature::DomainMetadata
-                    | TableFeature::IcebergCompatV1
-                    | TableFeature::IcebergCompatV2
-                    | TableFeature::ClusteredTable
-                    | TableFeature::MaterializePartitionColumns => (None, Some(feature)),
+            TableFeature::AppendOnly
+            | TableFeature::Invariants
+            | TableFeature::CheckConstraints
+            | TableFeature::ChangeDataFeed
+            | TableFeature::GeneratedColumns
+            | TableFeature::IdentityColumns
+            | TableFeature::InCommitTimestamp
+            | TableFeature::RowTracking
+            | TableFeature::DomainMetadata
+            | TableFeature::IcebergCompatV1
+            | TableFeature::IcebergCompatV2
+            | TableFeature::ClusteredTable
+            | TableFeature::MaterializePartitionColumns => (None, Some(feature)),
 
-                    // ReaderWriter features
-                    TableFeature::CatalogManaged
-                    | TableFeature::CatalogOwnedPreview
-                    | TableFeature::ColumnMapping
-                    | TableFeature::DeletionVectors
-                    | TableFeature::TimestampWithoutTimezone
-                    | TableFeature::TypeWidening
-                    | TableFeature::TypeWideningPreview
-                    | TableFeature::V2Checkpoint
-                    | TableFeature::VacuumProtocolCheck
-                    | TableFeature::VariantType
-                    | TableFeature::VariantTypePreview
-                    | TableFeature::VariantShreddingPreview => {
-                        (Some(feature.clone()), Some(feature))
-                    }
+            // ReaderWriter features
+            TableFeature::CatalogManaged
+            | TableFeature::CatalogOwnedPreview
+            | TableFeature::ColumnMapping
+            | TableFeature::DeletionVectors
+            | TableFeature::TimestampWithoutTimezone
+            | TableFeature::TypeWidening
+            | TableFeature::TypeWideningPreview
+            | TableFeature::V2Checkpoint
+            | TableFeature::VacuumProtocolCheck
+            | TableFeature::VariantType
+            | TableFeature::VariantTypePreview
+            | TableFeature::VariantShreddingPreview => (Some(feature.clone()), Some(feature)),
 
-                    // Optional ReaderWriter features
-                    #[cfg(feature = "nanosecond-timestamps")]
-                    TableFeature::TimestampNanos => (Some(feature.clone()), Some(feature)),
+            // Optional ReaderWriter features
+            #[cfg(feature = "nanosecond-timestamps")]
+            TableFeature::TimestampNanos => (Some(feature.clone()), Some(feature)),
 
-                    // Unknown features
-                    TableFeature::Unknown(_) => (None, None),
-                    others => {
-                        panic!("This table has unsupported table features: {others:?}");
-                    }
-                }
+            // Unknown features
+            TableFeature::Unknown(_) => (None, None),
+            others => {
+                panic!("This table has unsupported table features: {others:?}");
             }
-            None => (None, None),
         }
     }
 }
