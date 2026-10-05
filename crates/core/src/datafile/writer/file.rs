@@ -146,7 +146,13 @@ pub(super) enum FileArrowWriter {
 impl FileArrowWriter {
     fn try_new(writer: ParquetObjectWriter, config: &PartitionWriterConfig) -> ParquetResult<Self> {
         let options = &config.arrow_options;
-        if options.enable_parallel_encoding() {
+        // arrow-rs applies content-defined chunking only inside its own writer, so the
+        // parallel column encoder would silently write fixed-size pages instead.
+        let cdc_enabled = config
+            .writer_properties
+            .content_defined_chunking()
+            .is_some();
+        if options.enable_parallel_encoding() && !cdc_enabled {
             ParallelArrowWriter::try_new(
                 writer,
                 config.file_schema.clone(),

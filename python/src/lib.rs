@@ -149,6 +149,7 @@ struct RawDeltaTableMetaData {
     partition_columns: Vec<String>,
     created_time: Option<i64>,
     configuration: HashMap<String, String>,
+    format_options: HashMap<String, String>,
 }
 
 type StringVec = Vec<String>;
@@ -466,6 +467,7 @@ impl RawDeltaTable {
             partition_columns: metadata.partition_columns().to_vec(),
             created_time: metadata.created_time(),
             configuration: metadata.configuration().clone(),
+            format_options: metadata.format_options().clone(),
         })
     }
 
@@ -2020,6 +2022,7 @@ impl RawDeltaTable {
         name=None,
         description=None,
         configuration=None,
+        format_options=None,
         writer_properties=None,
         commit_properties=None,
         post_commithook_properties=None
@@ -2037,6 +2040,7 @@ impl RawDeltaTable {
         name: Option<String>,
         description: Option<String>,
         configuration: Option<HashMap<String, Option<String>>>,
+        format_options: Option<HashMap<String, String>>,
         writer_properties: Option<PyWriterProperties>,
         commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
@@ -2099,6 +2103,10 @@ impl RawDeltaTable {
 
             if let Some(config) = configuration {
                 builder = builder.with_configuration(config);
+            };
+
+            if let Some(format_options) = format_options {
+                builder = builder.with_format_options(format_options);
             };
 
             if let Some(commit_properties) =
@@ -2939,6 +2947,7 @@ impl<'a, 'py> FromPyObject<'a, 'py> for PyCommitProperties {
     name=None,
     description=None,
     configuration=None,
+    format_options=None,
     storage_options=None,
     writer_properties=None,
     commit_properties=None,
@@ -2957,6 +2966,7 @@ fn write_to_deltalake(
     name: Option<String>,
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
+    format_options: Option<HashMap<String, String>>,
     storage_options: Option<HashMap<String, String>>,
     writer_properties: Option<PyWriterProperties>,
     commit_properties: Option<PyCommitProperties>,
@@ -2992,6 +3002,7 @@ fn write_to_deltalake(
         name,
         description,
         configuration,
+        format_options,
         writer_properties,
         commit_properties,
         post_commithook_properties,
@@ -3009,6 +3020,7 @@ fn write_to_deltalake(
     name=None,
     description=None,
     configuration=None,
+    format_options=None,
     storage_options=None,
     commit_properties=None,
     post_commithook_properties=None,
@@ -3023,6 +3035,7 @@ fn create_deltalake(
     name: Option<String>,
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
+    format_options: Option<HashMap<String, String>>,
     storage_options: Option<HashMap<String, String>>,
     commit_properties: Option<PyCommitProperties>,
     post_commithook_properties: Option<PyPostCommitHookProperties>,
@@ -3056,6 +3069,10 @@ fn create_deltalake(
 
         if let Some(config) = configuration {
             builder = builder.with_configuration(config);
+        };
+
+        if let Some(format_options) = format_options {
+            builder = builder.with_format_options(format_options);
         };
 
         if let Some(commit_properties) =
