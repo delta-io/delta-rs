@@ -44,9 +44,10 @@ def test_local_convert_to_delta(
     assert dt.metadata().name == name
     assert dt.metadata().description == description
     assert dt.metadata().configuration == {"delta.appendOnly": "true"}
-    assert dt.history()[0]["userName"] == "John Doe"
-    assert dt.history()[0]["operation"] == "CONVERT"
-    assert dt.history()[0]["operationParameters"]["collectStats"] == "true"
+    commit = next(dt.history())
+    assert commit["userName"] == "John Doe"
+    assert commit["operation"] == "CONVERT"
+    assert commit["operationParameters"]["collectStats"] == "true"
 
 
 @pytest.mark.pyarrow
@@ -65,7 +66,7 @@ def test_convert_without_stats(tmp_path: pathlib.Path, sample_data_pyarrow: "pa.
 
     dt = DeltaTable(tmp_path)
 
-    assert dt.history()[0]["operationParameters"]["collectStats"] == "false"
+    assert next(dt.history())["operationParameters"]["collectStats"] == "false"
     num_records = dt.get_add_actions().column("num_records").to_pylist()
     assert num_records == [None] * len(num_records)
 
