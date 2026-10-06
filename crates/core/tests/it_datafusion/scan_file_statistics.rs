@@ -6,15 +6,15 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, Int32Array, RecordBatch};
 use arrow_schema::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
+use datafusion::datasource::TableProvider;
 use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::datasource::source::DataSourceExec;
-use datafusion::datasource::TableProvider;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::{col, lit, SessionContext};
+use datafusion::prelude::{SessionContext, col, lit};
+use deltalake_core::DeltaTable;
 use deltalake_core::delta_datafusion::{DeltaScanConfig, DeltaScanNext};
 use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::protocol::SaveMode;
-use deltalake_core::DeltaTable;
 use deltalake_test::TestResult;
 
 const NUM_COLUMNS: usize = 20;
