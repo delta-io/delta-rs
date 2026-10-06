@@ -17,6 +17,7 @@ use datafusion::physical_plan::{
 use delta_kernel::table_configuration::TableConfiguration;
 use futures::StreamExt as _;
 use object_store::prefix::PrefixStore;
+use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -31,6 +32,7 @@ use crate::kernel::{Action, Add, AddCDCFile};
 use crate::logstore::{LogStore, ObjectStoreRef};
 use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::configs::{WriteExecOptions, WriterStatsConfig};
+use crate::parquet_utils::{apply_format_options, default_writer_properties};
 
 /// Error message used when a worker's `send` fails because the writer task has
 /// already closed the channel (e.g. the writer errored). It is recognised by
@@ -414,7 +416,12 @@ pub(crate) async fn write_execution_plan_v2(
         object_store,
         target_file_size: exec_options.target_file_size,
         write_batch_size: exec_options.write_batch_size,
-        writer_properties: exec_options.writer_properties,
+        writer_properties: Some(apply_format_options(
+            exec_options
+                .writer_properties
+                .unwrap_or_else(|| default_writer_properties(Compression::SNAPPY)),
+            table_config.metadata().format_options(),
+        )?),
         writer_stats_config: WriterStatsConfig::from_config(table_config),
         column_mapping: ColumnMappingState::from_table_config(table_config),
         arrow_options: exec_options.arrow_options,
@@ -467,6 +474,8 @@ pub(crate) async fn write_exec_plan(
             .into_writer_properties_builder()?
             .build(),
     };
+    let writer_properties =
+        apply_format_options(writer_properties, table_config.metadata().format_options())?;
     let stats_config = WriterStatsConfig::from_config(table_config);
     let object_store = log_store.object_store();
     let sink_config = WriteSinkConfig {

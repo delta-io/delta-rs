@@ -345,6 +345,7 @@ class DeltaTable:
         configuration: Mapping[str, str | None] | None = None,
         storage_options: dict[str, str] | None = None,
         *args: Any,
+        format_options: Mapping[str, str] | None = None,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
         raise_if_key_not_exists: bool = cast(bool, _DEFAULT_TRUE),
@@ -363,6 +364,8 @@ class DeltaTable:
             description: User-provided description for this table.
             configuration:  A map containing configuration options for the metadata action.
             storage_options: Options passed to the object store crate.
+            format_options: A map of Parquet format options stored on the metadata action,
+                e.g. `contentDefinedChunking.enabled` to write data files with content-defined chunking.
             commit_properties: properties of the transaction commit. If None, default values are used.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
             raise_if_key_not_exists: Whether to raise an error if the configuration uses keys that are not Delta keys
@@ -440,6 +443,7 @@ class DeltaTable:
             storage_options,
             commit_properties,
             post_commithook_properties,
+            format_options,
         )
 
         return cls(table_uri=table_uri, storage_options=storage_options)

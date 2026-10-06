@@ -15,6 +15,7 @@ use crate::kernel::{Action, DataType, MetadataExt, ProtocolExt as _, StructField
 use crate::kernel::{ProtocolInner, new_metadata};
 use crate::logstore::LogStoreRef;
 use crate::logstore::with_operation;
+use crate::parquet_utils::validate_format_options;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
@@ -356,14 +357,13 @@ impl CreateBuilder {
             schema
         };
 
+        validate_format_options(&self.format_options)?;
         let mut metadata = new_metadata(
             &schema,
             self.partition_columns.unwrap_or_default(),
             configuration,
-        )?;
-        if !self.format_options.is_empty() {
-            metadata = metadata.with_format_options(self.format_options.clone())?;
-        }
+        )?
+        .with_format_options(self.format_options)?;
         if let Some(name) = self.name {
             metadata = metadata.with_name(name)?;
         }
@@ -837,6 +837,27 @@ mod tests {
                 .unwrap()
                 .clone();
             assert_eq!(String::from("value"), value);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_rejects_invalid_content_defined_chunking_options() {
+        let invalid = [
+            ("contentDefinedChunking.enabled", "yes"),
+            ("contentDefinedChunking.minChunkSize", "64KiB"),
+            ("contentDefinedChunking.minChunkSize", "0"),
+            // above the default maximum chunk size of 1 MiB
+            ("contentDefinedChunking.minChunkSize", "2097152"),
+            ("contentDefinedChunking.normLevel", "high"),
+            ("contentDefinedChunking.minChunksize", "65536"),
+        ];
+        for (key, value) in invalid {
+            let result = CreateBuilder::new()
+                .with_location("memory:///")
+                .with_columns(get_delta_schema().fields().cloned())
+                .with_format_options([("contentDefinedChunking.enabled", "true"), (key, value)])
+                .await;
+            assert!(result.is_err(), "expected {key}={value} to be rejected");
         }
     }
 }
