@@ -47,7 +47,7 @@ parking_lot = "0.12"
 
 # runtime
 futures = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 
 deltalake-mount = { path = "../crates/mount" }
 
