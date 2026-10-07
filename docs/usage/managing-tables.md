@@ -14,6 +14,30 @@ to.
 
 Use `DeltaTable.vacuum` to perform the vacuum operation. Note that to prevent accidental deletion, the function performs a dry-run by default: it will only list the files to be deleted. Pass `dry_run=False` to actually delete files.
 
+The retention window is controlled by the `delta.deletedFileRetentionDuration` table property and defaults to one week. Set it when creating the table:
+
+=== "Python"
+    ``` python
+    from deltalake import write_deltalake, TableProperty
+
+    write_deltalake(
+        "../data/my_table",
+        df,
+        configuration={TableProperty.DELETED_FILE_RETENTION_DURATION: "interval 30 days"},
+    )
+    ```
+
+or change it on an existing table:
+
+=== "Python"
+    ``` python
+    dt.alter.set_table_properties(
+        {TableProperty.DELETED_FILE_RETENTION_DURATION: "interval 30 days"}
+    )
+    ```
+
+The value is an interval string such as `"interval 30 days"`. A longer retention keeps more history available for time travel but uses more storage. A retention shorter than 7 days is not recommended: concurrent readers or writers may still reference files that vacuum would then delete.
+
 === "Python"
     ``` python
     >>> dt = DeltaTable("../rust/tests/data/simple_table")

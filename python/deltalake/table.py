@@ -819,7 +819,11 @@ class DeltaTable:
         plus any files not mentioned in the logs (unless they start with underscore).
 
         Args:
-            retention_hours: the retention threshold in hours, if none then the value from `delta.deletedFileRetentionDuration` is used or default of 1 week otherwise.
+            retention_hours: the retention threshold in hours. If None, the value of the
+                `delta.deletedFileRetentionDuration` table property is used (default: 1 week).
+                Set the property when creating the table via the `configuration` argument of
+                `write_deltalake`, or on an existing table with
+                `dt.alter.set_table_properties({TableProperty.DELETED_FILE_RETENTION_DURATION: "interval 30 days"})`.
             dry_run: when activated, list only the files, delete otherwise
             enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `delta.deletedFileRetentionDuration`.
             commit_properties: properties of the transaction commit. If None, default values are used.
