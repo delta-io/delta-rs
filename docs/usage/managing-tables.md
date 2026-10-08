@@ -36,7 +36,7 @@ or change it on an existing table:
     )
     ```
 
-The value is an interval string such as `"interval 30 days"`. A longer retention keeps more history available for time travel but uses more storage. A retention shorter than 7 days is not recommended: concurrent readers or writers may still reference files that vacuum would then delete.
+The value is an interval string such as `"interval 30 days"`. A longer retention keeps more history available for time travel but uses more storage. Choose a window that is longer than the longest-running job or streaming query against the table: if you run VACUUM while concurrent readers or writers are accessing the table, they may still reference files that VACUUM would then delete, and a streaming query should not stop for longer than this interval.
 
 === "Python"
     ``` python
