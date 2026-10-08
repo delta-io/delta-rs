@@ -358,7 +358,12 @@ fn merge_arrow_vec_fields(
                             .metadata()
                             .contains_key(ColumnMetadataKey::GenerationExpression.as_ref())
                         {
-                            fields.push(field.as_ref().clone());
+                            // A column that is new to the table has no values in
+                            // existing rows, so it must be nullable even when the
+                            // incoming batch declares it non-nullable. This mirrors
+                            // Delta Spark, which calls `schema.asNullable` before
+                            // merging schemas on write.
+                            fields.push(field.as_ref().clone().with_nullable(true));
                         } else {
                             errors.push("Schema evolved fields cannot have generated expressions. Recreate the table to achieve this.".to_string());
                             return Err(ArrowError::SchemaError(errors.join("\n")));
@@ -531,5 +536,71 @@ mod tests {
             false,
         );
         assert_eq!(merge_result, expected);
+    }
+
+    #[test]
+    fn merge_arrow_schema_new_top_level_field_is_nullable() {
+        use super::merge_arrow_schema;
+        use arrow_schema::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+
+        let table_schema: ArrowSchemaRef = Arc::new(ArrowSchema::new(vec![ArrowField::new(
+            "id",
+            DataType::Int64,
+            false,
+        )]));
+        // The incoming batch declares the new column non-nullable, but existing
+        // rows have no values for it, so the merged schema must mark it nullable.
+        let batch_schema: ArrowSchemaRef = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("id", DataType::Int64, false),
+            ArrowField::new("country_code", DataType::Utf8, false),
+        ]));
+
+        let merged = merge_arrow_schema(table_schema, batch_schema, true).unwrap();
+        assert!(
+            merged
+                .field_with_name("country_code")
+                .unwrap()
+                .is_nullable(),
+            "newly merged columns must be nullable"
+        );
+        // Pre-existing columns keep their own nullability.
+        assert!(!merged.field_with_name("id").unwrap().is_nullable());
+    }
+
+    #[test]
+    fn merge_arrow_schema_new_nested_field_is_nullable() {
+        use super::merge_arrow_schema;
+        use arrow_schema::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+
+        let table_schema: ArrowSchemaRef = Arc::new(ArrowSchema::new(vec![ArrowField::new(
+            "s",
+            DataType::Struct(vec![ArrowField::new("a", DataType::Int64, false)].into()),
+            true,
+        )]));
+        let batch_schema: ArrowSchemaRef = Arc::new(ArrowSchema::new(vec![ArrowField::new(
+            "s",
+            DataType::Struct(
+                vec![
+                    ArrowField::new("a", DataType::Int64, false),
+                    ArrowField::new("b", DataType::Utf8, false),
+                ]
+                .into(),
+            ),
+            true,
+        )]));
+
+        let merged = merge_arrow_schema(table_schema, batch_schema, true).unwrap();
+        let merged_struct = merged.field_with_name("s").unwrap();
+        let DataType::Struct(children) = merged_struct.data_type() else {
+            panic!("expected struct field");
+        };
+        let new_child = children
+            .iter()
+            .find(|f| f.name() == "b")
+            .expect("merged struct should contain new field b");
+        assert!(
+            new_child.is_nullable(),
+            "newly merged nested columns must be nullable"
+        );
     }
 }
