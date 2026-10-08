@@ -44,14 +44,14 @@ def test_create_roundtrip_metadata(
         "delta.appendOnly": "true",
         "delta.logRetentionDuration": "interval 2 days",
     }
-    assert dt.history()[0]["userName"] == "John Doe"
+    assert next(dt.history())["userName"] == "John Doe"
 
     assert {*dt.protocol().writer_features} == {"appendOnly", "timestampNtz"}  # type: ignore
 
 
 def test_create_modes(tmp_path: pathlib.Path):
     dt = DeltaTable.create(tmp_path, schema, mode="error")
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     with pytest.raises(DeltaError):
         dt = DeltaTable.create(tmp_path, schema, mode="error")
@@ -66,7 +66,7 @@ def test_create_modes(tmp_path: pathlib.Path):
     dt = DeltaTable.create(tmp_path, schema, mode="overwrite")
     assert dt.version() == 1
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "CREATE OR REPLACE TABLE"
 
@@ -124,7 +124,7 @@ def test_create_with_deletion_vectors_enabled(tmp_path: pathlib.Path):
     assert protocol.min_writer_version == 7
     assert "deletionVectors" in protocol.writer_features
     assert "deletionVectors" in protocol.reader_features
-    assert dt.history()[0]["userName"] == "John Doe"
+    assert next(dt.history())["userName"] == "John Doe"
 
 
 def test_create_higher_protocol_versions(tmp_path: pathlib.Path):
@@ -160,7 +160,7 @@ def test_create_higher_protocol_versions(tmp_path: pathlib.Path):
     }
     assert protocol.min_reader_version == 1
     assert protocol.min_writer_version == 5
-    assert dt.history()[0]["userName"] == "John Doe"
+    assert next(dt.history())["userName"] == "John Doe"
 
 
 def test_create_or_replace_existing_table(tmp_path: pathlib.Path, sample_table: Table):

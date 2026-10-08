@@ -1,6 +1,5 @@
 use deltalake_core::logstore::object_store::{GetResult, Result as ObjectStoreResult};
 use deltalake_core::{DeltaResult, DeltaTableBuilder, DeltaTableError};
-use futures::TryStreamExt;
 use object_store::path::Path as StorePath;
 use object_store::{
     CopyOptions, GetOptions, MultipartUpload, ObjectStore, PutMultipartOptions, PutOptions,
@@ -182,8 +181,6 @@ async fn test_log_buffering() {
     }
 
     let max_iter = 10;
-    let buf_size = 10;
-
     let location = Url::from_directory_path(path).unwrap();
 
     // use storage that sleeps 10ms on every `get`
@@ -238,7 +235,7 @@ async fn test_log_buffering_success_explicit_version() {
         fs_common::commit_add(&mut table, &a).await;
     }
     let buf_sizes = [1, 2, 10, 50];
-    for buf_size in buf_sizes {
+    for _buf_size in buf_sizes {
         let table_uri = Url::from_directory_path(std::fs::canonicalize(&path).unwrap()).unwrap();
         let mut table = DeltaTableBuilder::from_url(table_uri)
             .unwrap()

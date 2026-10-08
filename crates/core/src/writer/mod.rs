@@ -51,6 +51,7 @@ pub(crate) fn ensure_legacy_writer_supports_table(
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum DeltaWriterError {
     /// Partition column is missing in a record written to delta.
+    #[cfg(test)]
     #[error("Missing partition column: {0}")]
     MissingPartitionColumn(String),
 

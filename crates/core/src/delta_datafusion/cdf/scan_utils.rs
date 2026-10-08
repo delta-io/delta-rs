@@ -104,6 +104,7 @@ pub fn create_spec_partition_values<F: FileAction>(
     spec_partition_values
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn extend_groups_with_pairs(
     schema: SchemaRef,
     pairs: Vec<ResolvedPair>,
@@ -135,7 +136,7 @@ pub async fn extend_groups_with_pairs(
             &pair,
             &table_partition_values,
             Arc::clone(&cache),
-            &metrics,
+            metrics,
         )
         .await?;
         push_pair_selection(
@@ -145,7 +146,7 @@ pub async fn extend_groups_with_pairs(
             &pair,
             &table_partition_values,
             Arc::clone(&cache),
-            &metrics,
+            metrics,
         )
         .await?;
     }
@@ -339,7 +340,7 @@ impl TryInto<DeletionVectorDescriptor> for crate::kernel::DeletionVectorDescript
 /// 1. Marking the rows up until the index as kept or omitted depending on the action
 /// 2. Marking the row itself for the opposite
 /// 3. Marking the tail end rows up until the row group end as kept or omitted depending on the action
-/// This then builds the final access plan for the individual row group.
+///    This then builds the final access plan for the individual row group.
 fn row_group_access(
     marked: &roaring::RoaringTreemap,
     rg_start: u64,
