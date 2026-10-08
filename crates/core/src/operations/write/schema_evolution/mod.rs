@@ -143,6 +143,14 @@ mod tests {
     }
 
     #[test]
+    fn test_try_cast_schema_allows_float_narrowing() {
+        // Float narrowing is allowed, out-of-range values will saturate to +/- inf
+        let from = make_fields(&[("x", DataType::Float64)]);
+        let to = make_fields(&[("x", DataType::Float32)]);
+        try_cast_schema(&from, &to).expect("float64 -> float32 should be allowed");
+    }
+
+    #[test]
     fn test_try_cast_schema_allows_signed_to_unsigned() {
         let from = make_fields(&[("x", DataType::Int32)]);
         let to = make_fields(&[("x", DataType::UInt32)]);
