@@ -9,6 +9,7 @@ use arrow_schema::{
 };
 use delta_kernel::schema::ColumnMetadataKey;
 
+use crate::kernel::schema::cast::can_cast_safely;
 use crate::kernel::{ArrayType, DataType as DeltaDataType, MapType, StructField, StructType};
 
 fn try_merge_metadata<T: std::cmp::PartialEq + Clone>(
@@ -274,7 +275,19 @@ pub(crate) fn merge_arrow_field(
                             new_field.data_type()
                         )));
                     };
-                    // If it's not Decimal datatype, the new_field remains the left table field.
+                    // If the incoming batch type cannot be safely cast into the table type,
+                    // keeping the table type would silently truncate data (e.g. Float64 -> Int64).
+                    // Reject such merges.
+                    if !can_cast_safely(right.data_type(), new_field.data_type()) {
+                        return Err(ArrowError::SchemaError(format!(
+                            "Cannot merge field {} from {} to {}",
+                            right.name(),
+                            right.data_type(),
+                            new_field.data_type()
+                        )));
+                    }
+                    // If it's not Decimal datatype and the cast is safe, the new_field remains
+                    // the left table field.
                 }
             };
             Ok(new_field)
