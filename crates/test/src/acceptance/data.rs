@@ -6,9 +6,10 @@ use arrow_ord::sort::{lexsort_to_indices, SortColumn};
 use arrow_schema::{DataType, Schema};
 use arrow_select::{concat::concat_batches, take::take};
 use delta_kernel::DeltaResult;
+use deltalake_core::logstore::parquet_reader::ParquetObjectReader;
 use futures::{stream::TryStreamExt, StreamExt};
 use object_store::{local::LocalFileSystem, ObjectStore};
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
+use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 use pretty_assertions::assert_eq;
 
 use super::TestCaseInfo;

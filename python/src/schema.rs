@@ -184,7 +184,7 @@ pub struct ArrayType {
     inner_type: DeltaArrayType,
 }
 
-#[pyclass(module = "deltalake._internal")]
+#[pyclass(module = "deltalake._internal", from_py_object)]
 #[derive(Clone)]
 pub struct VariantType;
 
@@ -848,14 +848,14 @@ pub struct PySchema;
 impl PySchema {
     #[new]
     #[pyo3(signature = (fields))]
-    fn new(fields: Vec<PyRef<Field>>) -> PyResult<(Self, StructType)> {
+    fn new(fields: Vec<PyRef<Field>>) -> PyResult<PyClassInitializer<Self>> {
         let fields: Vec<StructField> = fields
             .into_iter()
             .map(|field| field.inner.clone())
             .collect();
         let inner_type = DeltaStructType::try_new(fields)
             .map_err(|e| SchemaMismatchError::new_err(e.to_string()))?;
-        Ok((Self {}, StructType { inner_type }))
+        Ok(PyClassInitializer::from(StructType { inner_type }).add_subclass(Self))
     }
 
     fn __repr__(self_: PyRef<'_, Self>, py: Python) -> PyResult<String> {

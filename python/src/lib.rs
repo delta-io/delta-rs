@@ -76,7 +76,6 @@ use schema::PySchema;
 use serde_json::{Map, Value};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
-use std::ffi::CString;
 use std::future::IntoFuture;
 use std::num::NonZeroU64;
 use std::str::FromStr;
@@ -140,6 +139,62 @@ struct RawDeltaTable {
     _table: Arc<Mutex<deltalake::DeltaTable>>,
     // storing the config additionally on the table helps us make pickling work.
     _config: FsConfig,
+}
+
+type CommitInfo = deltalake::kernel::models::CommitInfo;
+
+/// Iterator over a table's commit infos, newest first, yielded as JSON strings.
+///
+/// A background task owns a clone of the table and pushes commit infos through a
+/// bounded channel, so commit files are only read as Python consumes the iterator.
+#[pyclass(module = "deltalake._internal", name = "CommitInfoIterator", frozen)]
+struct CommitInfoIterator {
+    latest_version: Version,
+    state: Mutex<CommitInfoIteratorState>,
+}
+
+struct CommitInfoIteratorState {
+    first: Option<CommitInfo>,
+    rx: Option<tokio::sync::mpsc::Receiver<DeltaResult<CommitInfo>>>,
+}
+
+#[pymethods]
+impl CommitInfoIterator {
+    /// Version of the newest commit yielded by this iterator.
+    #[getter]
+    fn latest_version(&self) -> Version {
+        self.latest_version
+    }
+
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        let commit = py.detach(|| -> PyResult<Option<CommitInfo>> {
+            let mut state = self.state.lock().map_err(to_rt_err)?;
+            if let Some(commit) = state.first.take() {
+                return Ok(Some(commit));
+            }
+            let Some(rx) = state.rx.as_mut() else {
+                return Ok(None);
+            };
+            match rt().block_on(rx.recv()) {
+                Some(Ok(commit)) => Ok(Some(commit)),
+                Some(Err(err)) => {
+                    state.rx = None;
+                    Err(PythonError::from(err).into())
+                }
+                None => {
+                    state.rx = None;
+                    Ok(None)
+                }
+            }
+        })?;
+        commit
+            .map(|commit| serde_json::to_string(&commit).map_err(to_rt_err))
+            .transpose()
+    }
 }
 
 #[pyclass(frozen, get_all)]
@@ -1345,38 +1400,43 @@ impl RawDeltaTable {
     /// Run the History command on the Delta Table: Returns provenance information,
     /// including the operation, user, and so on, for each write to a table.
     ///
-    /// Returns `(latest_version, commits)` where `latest_version` is the version of
-    /// the most recent commit in `commits`, captured atomically with the history
-    /// fetch so concurrent writes cannot shift the version numbering on the Python
+    /// Returns a lazy [CommitInfoIterator] whose `latest_version` is the version of
+    /// the most recent commit it yields, captured under the same lock as the table
+    /// snapshot so concurrent writes cannot shift the version numbering on the Python
     /// side. See https://github.com/delta-io/delta-rs/issues/4488.
     #[pyo3(signature = (limit=None))]
-    pub fn history(&self, limit: Option<usize>) -> PyResult<(Version, Vec<String>)> {
-        #[allow(clippy::await_holding_lock)]
-        rt().block_on(async {
-            match self._table.lock() {
-                Ok(table) => {
-                    let history: Vec<deltalake::kernel::models::CommitInfo> = table
-                        .history(limit)
-                        .try_collect()
-                        .await
-                        .map_err(PythonError::from)
-                        .map_err(PyErr::from)?;
-                    // history() iterates the loaded snapshot, so version() is Some
-                    // here. Capturing it under the same lock guarantees it matches
-                    // the commits we just returned.
-                    let version = table.version().ok_or_else(|| {
-                        PyRuntimeError::new_err(
-                            "table snapshot is not loaded; cannot determine history version",
-                        )
-                    })?;
-                    let commits = history
-                        .into_iter()
-                        .map(|c| serde_json::to_string(&c).unwrap())
-                        .collect();
-                    Ok((version, commits))
+    pub fn history(&self, py: Python<'_>, limit: Option<usize>) -> PyResult<CommitInfoIterator> {
+        let (table, latest_version) = {
+            let table = self._table.lock().map_err(to_rt_err)?;
+            let version = table.version().ok_or_else(|| {
+                PyRuntimeError::new_err(
+                    "table snapshot is not loaded; cannot determine history version",
+                )
+            })?;
+            (table.clone(), version)
+        };
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        rt().spawn(async move {
+            let mut commits = table.history(limit);
+            while let Some(commit) = commits.try_next().await.transpose() {
+                let failed = commit.is_err();
+                if tx.send(commit).await.is_err() || failed {
+                    break;
                 }
-                Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
             }
+        });
+
+        // The log listing includes commits newer than the snapshot, so it must finish
+        // before returning; otherwise a later write would shift the version numbering.
+        let (first, rx) = match py.detach(|| rt().block_on(rx.recv())) {
+            Some(Ok(commit)) => (Some(commit), Some(rx)),
+            Some(Err(err)) => return Err(PythonError::from(err).into()),
+            None => (None, None),
+        };
+        Ok(CommitInfoIterator {
+            latest_version,
+            state: Mutex::new(CommitInfoIteratorState { first, rx }),
         })
     }
 
@@ -2142,7 +2202,6 @@ Install datafusion=={required}.* (matching major) to use DataFusion SessionConte
         }
 
         let handle = rt().handle();
-        let name = CString::new("datafusion_table_provider").unwrap();
         let table = self.with_table(|t| Ok(t.clone()))?;
 
         let log_store = table.log_store();
@@ -2170,7 +2229,7 @@ Install datafusion=={required}.* (matching major) to use DataFusion SessionConte
             None,
         );
 
-        PyCapsule::new(py, provider, Some(name.clone()))
+        PyCapsule::new_with_value(py, provider, c"datafusion_table_provider")
     }
 }
 
@@ -2247,7 +2306,7 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
                 properties = properties.set_bloom_filter_fpp(bloom_filter_fpp);
             }
             if let Some(bloom_filter_ndv) = bloom_filter_properties.ndv {
-                properties = properties.set_bloom_filter_ndv(bloom_filter_ndv);
+                properties = properties.set_bloom_filter_max_ndv(bloom_filter_ndv);
             }
         }
     }
@@ -2295,7 +2354,7 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
                     }
                     if let Some(bloom_filter_ndv) = bloom_filter_properties.ndv {
                         properties = properties
-                            .set_column_bloom_filter_ndv(column_name.into(), bloom_filter_ndv);
+                            .set_column_bloom_filter_max_ndv(column_name.into(), bloom_filter_ndv);
                     }
                 }
             }
@@ -3258,6 +3317,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(convert_to_deltalake, m)?)?;
     m.add_class::<RawDeltaTable>()?;
+    m.add_class::<CommitInfoIterator>()?;
     m.add_class::<PyMergeBuilder>()?;
     m.add_class::<PyQueryBuilder>()?;
     m.add_class::<RawDeltaTableMetaData>()?;

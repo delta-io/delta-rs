@@ -109,7 +109,7 @@ To view the available history, use `DeltaTable.history`:
     from deltalake import DeltaTable
 
     dt = DeltaTable("../rust/tests/data/simple_table")
-    dt.history()
+    list(dt.history())
     ```
 
     ```
@@ -119,26 +119,39 @@ To view the available history, use `DeltaTable.history`:
     {'timestamp': 1587968596254, 'operation': 'MERGE', 'operationParameters': {'predicate': '(oldData.`id` = newData.`id`)'}, 'readVersion': 0, 'isBlindAppend': False},
     {'timestamp': 1587968586154, 'operation': 'WRITE', 'operationParameters': {'mode': 'ErrorIfExists', 'partitionBy': '[]'}, 'isBlindAppend': True}]
     ```
+
+    `history` returns an iterator that yields commits newest first and only
+    reads commit files as it is consumed. If you only need the most recent
+    commits and cannot express that as a `limit`, for example "everything since
+    a given timestamp", break out of the loop to skip the rest of the log:
+
+    ``` python
+    cutoff_millis = 1587968600000
+    for commit in dt.history():
+        if commit["timestamp"] < cutoff_millis:
+            break
+        print(commit["operation"])
+    ```
 === "Rust"
     ```rust
+    use futures::TryStreamExt;
+
     let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
     let table = open_table(delta_path).await?;
-    let history_iter = table.history(None).await?;
-    let history: Vec<_> = history_iter.collect();
+    let history: Vec<_> = table.history(None).try_collect().await?;
     println!("Table history: {:#?}", history);
     ```
 
-    `history` reads every selected commit file before it returns. If you only need the
-    most recent commits and cannot express that as a `limit`, for example
-    "everything since a given timestamp", use `history_stream` instead. It
-    yields commits newest first and only reads commit files as the stream is
-    polled, so breaking out of the loop skips the rest of the log:
+    `history` returns a stream that yields commits newest first and only reads
+    commit files as it is polled. If you only need the most recent commits and
+    cannot express that as a `limit`, for example "everything since a given
+    timestamp", break out of the loop to skip the rest of the log:
 
     ```rust
     use futures::TryStreamExt;
 
     let cutoff_millis = 1587968600000;
-    let mut history = table.history_stream(None);
+    let mut history = table.history(None);
     while let Some(commit) = history.try_next().await? {
         if commit.timestamp.is_some_and(|ts| ts < cutoff_millis) {
             break;
