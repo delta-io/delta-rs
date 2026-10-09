@@ -5,7 +5,7 @@ use arrow_array::{
     Array, ArrayRef, FixedSizeListArray, GenericListArray, MapArray, OffsetSizeTrait, RecordBatch,
     RecordBatchOptions, StructArray, new_null_array,
 };
-use arrow_cast::{CastOptions, cast_with_options};
+use arrow_cast::{CastOptions, can_cast_types, cast_with_options};
 use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, Fields, Schema, SchemaRef as ArrowSchemaRef, TimeUnit,
 };
@@ -205,6 +205,34 @@ fn is_cast_required(a: &DataType, b: &DataType) -> bool {
             !a.equals_datatype(b) || a_item.name() != b_item.name()
         }
         (_, _) => !a.equals_datatype(b),
+    }
+}
+
+/// Check whether a type can be cast to another type without data loss.
+///
+/// This is stricter than Arrow's `can_cast_types`: it rejects lossy casts such
+/// as floating-point to integer, which would silently truncate fractional
+/// values.
+pub(crate) fn can_cast_safely(from: &DataType, to: &DataType) -> bool {
+    if !can_cast_types(from, to) {
+        return false;
+    }
+
+    match (from, to) {
+        // Float -> Integer is always lossy for fractional values.
+        (
+            DataType::Float16 | DataType::Float32 | DataType::Float64,
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64,
+        ) => false,
+        // Everything else that Arrow says is castable is allowed.
+        _ => true,
     }
 }
 

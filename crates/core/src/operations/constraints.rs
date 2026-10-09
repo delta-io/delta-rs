@@ -247,7 +247,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::{Array, Int32Array, RecordBatch, StringArray};
+    use arrow_array::{Array, Decimal128Array, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
     use datafusion::logical_expr::{col, lit};
     use std::collections::HashMap;
@@ -534,6 +534,45 @@ mod tests {
         let err = table.write(vec![batch]).await;
 
         assert!(err.is_ok());
+        Ok(())
+    }
+
+    fn decimal_batch(ids: Vec<i32>, prices_cents: Vec<i128>) -> DeltaResult<RecordBatch> {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Int32, false),
+            Field::new("price", ArrowDataType::Decimal128(10, 2), true),
+        ]));
+        let prices = Decimal128Array::from(prices_cents).with_precision_and_scale(10, 2)?;
+        Ok(RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(ids)), Arc::new(prices)],
+        )?)
+    }
+
+    #[tokio::test]
+    async fn test_add_constraint_on_decimal_column_keeps_literal_scale() -> DeltaResult<()> {
+        // 19.99 and 45.00 both satisfy `price > 10.5`
+        let table = DeltaTable::new_in_memory()
+            .write(vec![decimal_batch(vec![1, 2], vec![1999, 4500])?])
+            .await?;
+
+        let table = table
+            .add_constraint()
+            .with_constraint("price_floor", "price > 10.5")
+            .await?;
+
+        // The literal is coerced to decimal(10, 2); the stored SQL must keep its scale.
+        assert_eq!(
+            get_constraint(&table, "delta.constraints.price_floor"),
+            "price > '10.50'::decimal(10, 2)"
+        );
+
+        // 20.00 passes the constraint, 5.00 does not.
+        let table = table
+            .write(vec![decimal_batch(vec![3], vec![2000])?])
+            .await?;
+        let err = table.write(vec![decimal_batch(vec![4], vec![500])?]).await;
+        assert!(err.is_err());
         Ok(())
     }
 }

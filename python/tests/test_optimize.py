@@ -140,7 +140,7 @@ def test_optimize_run_table(
         .execute("select * from tbl order by id")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "OPTIMIZE"
     assert last_action["userName"] == "John Doe"
     assert dt.version() == old_version + 1
@@ -172,7 +172,7 @@ def test_z_order_optimize(
 
     commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     dt.optimize.z_order(["sold", "price"], commit_properties=commit_properties)
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "OPTIMIZE"
     assert last_action["userName"] == "John Doe"
     assert dt.version() == old_version + 1
@@ -192,7 +192,7 @@ def test_optimize_min_commit_interval(
 
     dt.optimize.z_order(["sold", "price"], min_commit_interval=timedelta(0))
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "OPTIMIZE"
     # The table has 5 distinct partitions, each of which are Z-ordered
     # independently. So with min_commit_interval=0, each will get its
@@ -367,7 +367,7 @@ def test_optimize_schema_evolved_table(
 
     dt.optimize.compact()
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "OPTIMIZE"
     assert dt.version() == old_version + 1
 
@@ -495,7 +495,7 @@ def test_optimize_schema_evolved_3185(tmp_path):
     dt.optimize.z_order(columns=["name"])
 
     assert dt.version() == 2
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "OPTIMIZE"
 
 
@@ -549,7 +549,7 @@ def test_optimize_nested_field_named_like_partition_column(tmp_path: pathlib.Pat
     assert metrics["numFilesRemoved"] == 2
 
     assert dt.version() == 2
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "OPTIMIZE"
 
     # The nested field keeps its type and its values through the rewrite.
@@ -576,7 +576,7 @@ def test_compact_with_spill_parameters(
         max_temp_directory_size=500 * 1024 * 1024 * 1024,  # 500 GB
     )
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "OPTIMIZE"
     assert dt.version() == old_version + 1
     assert len(dt.file_uris()) <= old_num_files
@@ -599,7 +599,7 @@ def test_z_order_with_spill_parameters(
         max_temp_directory_size=500 * 1024 * 1024 * 1024,  # 500 GB
     )
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "OPTIMIZE"
     assert dt.version() == old_version + 1
     assert len(dt.file_uris()) == 1

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import warnings
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
@@ -750,26 +750,34 @@ class DeltaTable:
         """
         return self._table.generate()
 
-    def history(self, limit: int | None = None) -> list[dict[str, Any]]:
+    def history(self, limit: int | None = None) -> Iterator[dict[str, Any]]:
         """
         Run the history command on the DeltaTable.
         The operations are returned in reverse chronological order.
+
+        The commit infos are read lazily as the iterator is consumed, so stopping
+        early avoids reading the rest of the transaction log. The history is pinned
+        to the table state at the time of the call. Wrap the result in ``list(...)``
+        to materialize it.
 
         Args:
             limit: the commit info limit to return
 
         Returns:
-            list of the commit infos registered in the transaction log
+            iterator over the commit infos registered in the transaction log
         """
-        latest_version, commits = self._table.history(limit)
-        history = []
-        version = latest_version
-        for commit_info_raw in commits:
-            commit = json.loads(commit_info_raw)
-            commit["version"] = version
-            history.append(commit)
-            version -= 1
-        return history
+        commits = self._table.history(limit)
+        latest_version = commits.latest_version
+
+        def _iter() -> Iterator[dict[str, Any]]:
+            version = latest_version
+            for commit_info_raw in commits:
+                commit = json.loads(commit_info_raw)
+                commit["version"] = version
+                yield commit
+                version -= 1
+
+        return _iter()
 
     def count(self) -> int:
         """
@@ -811,7 +819,11 @@ class DeltaTable:
         plus any files not mentioned in the logs (unless they start with underscore).
 
         Args:
-            retention_hours: the retention threshold in hours, if none then the value from `delta.deletedFileRetentionDuration` is used or default of 1 week otherwise.
+            retention_hours: the retention threshold in hours. If None, the value of the
+                `delta.deletedFileRetentionDuration` table property is used (default: 1 week).
+                Set the property when creating the table via the `configuration` argument of
+                `write_deltalake`, or on an existing table with
+                `dt.alter.set_table_properties({TableProperty.DELETED_FILE_RETENTION_DURATION: "interval 30 days"})`.
             dry_run: when activated, list only the files, delete otherwise
             enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `delta.deletedFileRetentionDuration`.
             commit_properties: properties of the transaction commit. If None, default values are used.

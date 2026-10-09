@@ -239,6 +239,233 @@ async fn test_v2_checkpoint_json() -> DeltaResult<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Regression test for <https://github.com/delta-io/delta-rs/issues/4462>
+///
+/// `checkpointProtection` is a writer-only table feature (see the protocol RFC
+/// <https://github.com/delta-io/delta/blob/master/protocol_rfcs/checkpoint-protection.md>)
+/// which constrains checkpoint creation and log cleanup around `DROP FEATURE` boundaries.
+/// Plain reads and appends are unaffected by the feature, but tables with it enabled used to
+/// fail writes with `Unsupported table features required: [Unknown("checkpointProtection")]`.
+///
+/// The `spark-checkpoint-protection` fixture was generated with PySpark 4.0.1 / delta-spark
+/// 4.0.1 by writing a small table and then running:
+/// `ALTER TABLE delta.`<path>` SET TBLPROPERTIES ('delta.feature.checkpointProtection' = 'supported')`
+/// which produced a protocol of minReaderVersion=1 / minWriterVersion=7 with
+/// `checkpointProtection` in `writerFeatures`.
+async fn test_checkpoint_protection_read_write() -> TestResult {
+    use std::sync::Arc;
+
+    use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray};
+    use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
+    use deltalake_core::operations::collect_sendable_stream;
+    use deltalake_core::protocol::SaveMode;
+
+    let temp_table = clone_table("spark-checkpoint-protection");
+    let table_path = temp_table.path().to_str().unwrap();
+    let table_url = ensure_table_uri(table_path).unwrap();
+
+    let table = deltalake_core::open_table(table_url.clone()).await?;
+    assert_eq!(table.version(), Some(2));
+    let protocol = table.snapshot()?.protocol();
+    assert_eq!(protocol.min_reader_version(), 1);
+    assert_eq!(protocol.min_writer_version(), 7);
+    // The kernel does not have a named variant for this feature yet, so it is
+    // surfaced as `TableFeature::Unknown("checkpointProtection")`. `as_ref()` on
+    // such a variant returns the variant name, not the payload, so compare via Debug.
+    assert!(
+        protocol.writer_features().is_some_and(|features| features
+            .iter()
+            .any(|f| format!("{:?}", f) == "Unknown(\"checkpointProtection\")")),
+        "fixture should carry checkpointProtection in its writer features: {:?}",
+        protocol.writer_features()
+    );
+
+    // Reading the PySpark-generated table must work: the feature is writer-only
+    // and readers do not need to understand it
+    let (_table, stream) = table.scan_table().await?;
+    let batches = collect_sendable_stream(stream).await?;
+    let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(row_count, 11);
+
+    // Appending to the table must work as well; the feature only constrains
+    // checkpoint creation and metadata cleanup
+    let schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("id", ArrowDataType::Int64, true),
+        Field::new("name", ArrowDataType::Utf8, true),
+        Field::new("flag", ArrowDataType::Boolean, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int64Array::from(vec![100])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["delta_rs"])) as ArrayRef,
+            Arc::new(BooleanArray::from(vec![true])) as ArrayRef,
+        ],
+    )?;
+
+    let table = table
+        .write(vec![batch])
+        .with_save_mode(SaveMode::Append)
+        .await?;
+    assert_eq!(table.version(), Some(3));
+
+    // The appended data is readable and the feature remains in the protocol
+    let table = deltalake_core::open_table(table_url).await?;
+    let protocol = table.snapshot()?.protocol();
+    assert!(
+        protocol.writer_features().is_some_and(|features| features
+            .iter()
+            .any(|f| format!("{:?}", f) == "Unknown(\"checkpointProtection\")")),
+        "checkpointProtection should still be in the writer features after appending: {:?}",
+        protocol.writer_features()
+    );
+    let (_table, stream) = table.scan_table().await?;
+    let batches = collect_sendable_stream(stream).await?;
+    let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(row_count, 12);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Regression test for the safety concern raised in
+/// <https://github.com/delta-io/delta-rs/pull/4817#issuecomment-5927159262>.
+///
+/// Ion observed that `open_table_with_version(old_version) + create_checkpoint()` might
+/// bypass the `checkpointProtection` constraint because the old snapshot does not carry
+/// the feature.  This test proves the invariant holds:
+///
+/// 1. Loading at a version *before* `checkpointProtection` was added yields a protocol
+///    that has no writer features — so the constraint simply does not apply at that
+///    historical protocol level.
+///
+/// 2. `create_checkpoint` on that old-version handle writes a checkpoint file that is
+///    explicitly anchored to the old version (version 0 in the fixture), not the latest.
+///    The delta-kernel snapshot built inside `create_checkpoint_for` is constructed
+///    `at_version(0)`, so it reads the v0 protocol only.
+///
+/// 3. The latest table version (v2) — which *does* carry `checkpointProtection` — remains
+///    fully readable and its protocol is unchanged after the old-version checkpoint lands.
+///
+/// 4. A normal `create_checkpoint` against the current (v2) handle also succeeds, proving
+///    that claiming support for `checkpointProtection` (as the PR adds) does not introduce
+///    any regression in the common, non-time-travel checkpoint path.
+///
+/// The `spark-checkpoint-protection` fixture has:
+///   v0 — initial write, 10 rows, minReader=1/minWriter=2 (no writerFeatures)
+///   v1 — SET TBLPROPERTIES adds checkpointProtection, bumps to minWriter=7
+///   v2 — one-row append (checkpointProtection still present in protocol)
+async fn test_checkpoint_protection_old_version_does_not_bypass_constraint() -> DeltaResult<()> {
+    let temp_table = clone_table("spark-checkpoint-protection");
+    let table_path = temp_table.path().to_str().unwrap();
+    let table_url = ensure_table_uri(table_path).unwrap();
+
+    // ── Step 1: open at version 0 (pre-checkpointProtection) ──────────────────────────
+    let table_v0 = deltalake_core::open_table_with_version(table_url.clone(), 0).await?;
+    assert_eq!(
+        table_v0.version(),
+        Some(0),
+        "should be at version 0 after time-travel open"
+    );
+
+    // At version 0 the protocol is minReader=1/minWriter=2 with *no* writerFeatures.
+    // checkpointProtection must not appear — it was only introduced in v1.
+    let proto_v0 = table_v0.snapshot()?.protocol();
+    assert_eq!(proto_v0.min_reader_version(), 1);
+    assert_eq!(proto_v0.min_writer_version(), 2);
+    assert!(
+        proto_v0
+            .writer_features()
+            .map(|f| f.is_empty())
+            .unwrap_or(true),
+        "v0 protocol must carry no writer features; got: {:?}",
+        proto_v0.writer_features()
+    );
+
+    // ── Step 2: create_checkpoint via the old-version handle ──────────────────────────
+    // This is the exact API path Ion flagged.  create_checkpoint reads the version from
+    // `table.snapshot()?.version()` — which is 0 here — and calls
+    // `create_checkpoint_for(0, ...)`.  The kernel Snapshot is built at_version(0), so it
+    // sees only the v0 protocol and has no checkpointProtection restriction to satisfy.
+    create_checkpoint(&table_v0).await?;
+
+    // The checkpoint file must be written at version 0, *not* at the latest version.
+    let v0_ckpt_exists = table_v0
+        .log_store()
+        .object_store()
+        .head(&Path::from(
+            "_delta_log/00000000000000000000.checkpoint.parquet",
+        ))
+        .await
+        .is_ok();
+    assert!(
+        v0_ckpt_exists,
+        "checkpoint.parquet for version 0 must exist after create_checkpoint on the v0 handle"
+    );
+
+    // A checkpoint for v2 must NOT have been created by the v0 handle.
+    let v2_ckpt_absent = table_v0
+        .log_store()
+        .object_store()
+        .head(&Path::from(
+            "_delta_log/00000000000000000002.checkpoint.parquet",
+        ))
+        .await
+        .is_err();
+    assert!(
+        v2_ckpt_absent,
+        "create_checkpoint on the v0 handle must not create a checkpoint at version 2"
+    );
+
+    // ── Step 3: latest table state must be undisturbed ────────────────────────────────
+    let table_latest = deltalake_core::open_table(table_url.clone()).await?;
+    assert_eq!(
+        table_latest.version(),
+        Some(2),
+        "latest version must still be 2 after old-version checkpoint was created"
+    );
+    let proto_latest = table_latest.snapshot()?.protocol();
+    assert!(
+        proto_latest
+            .writer_features()
+            .is_some_and(|features| features
+                .iter()
+                .any(|f| format!("{:?}", f) == "Unknown(\"checkpointProtection\")")),
+        "checkpointProtection must still be in the latest-version writer features: {:?}",
+        proto_latest.writer_features()
+    );
+
+    // All 11 rows (10 from v0 + 1 appended in v2) must be readable.
+    use deltalake_core::operations::collect_sendable_stream;
+    let (_tbl, stream) = table_latest.scan_table().await?;
+    let batches = collect_sendable_stream(stream).await?;
+    let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        row_count, 11,
+        "all 11 rows must be readable from the latest version"
+    );
+
+    // ── Step 4: current-version checkpoint path must also work ────────────────────────
+    // Proves the PR's `checkpointProtection` registration does not block normal
+    // (non-time-travel) checkpoint creation.
+    create_checkpoint(&table_latest).await?;
+    let v2_ckpt_exists = table_latest
+        .log_store()
+        .object_store()
+        .head(&Path::from(
+            "_delta_log/00000000000000000002.checkpoint.parquet",
+        ))
+        .await
+        .is_ok();
+    assert!(
+        v2_ckpt_exists,
+        "checkpoint.parquet for version 2 must exist after create_checkpoint on the latest handle"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 /// This test that we can read a table with domain metadata. Since we cannot
 /// write domain metadata atm, we can at least test, that accessing restricted

@@ -75,7 +75,7 @@ def test_update_with_predicate(tmp_path: pathlib.Path, sample_table: Table):
     )
 
     result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "UPDATE"
     assert last_action["userName"] == "John Doe"
@@ -115,7 +115,7 @@ def test_update_wo_predicate(tmp_path: pathlib.Path, sample_table: Table):
     dt.update(updates={"deleted": "True"})
 
     result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "UPDATE"
     assert result == expected
@@ -171,7 +171,7 @@ def test_update_wo_predicate_multiple_updates(
     )
 
     result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "UPDATE"
     assert result == expected
@@ -221,7 +221,7 @@ def test_update_with_predicate_and_new_values(
     )
 
     result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "UPDATE"
     assert result == expected

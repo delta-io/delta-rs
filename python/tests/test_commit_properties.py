@@ -98,7 +98,7 @@ def test_custom_metadata_json_values_round_trip(tmp_path: pathlib.Path) -> None:
         commit_properties=CommitProperties(custom_metadata=custom_metadata),
     )
 
-    history = DeltaTable(tmp_path).history(1)[0]
+    history = next(DeltaTable(tmp_path).history(1))
     assert history["intValue"] == 7
     assert history["nested"] == {"flag": True, "items": [1, None, {"name": "value"}]}
     assert history["boolValue"] is False
@@ -121,7 +121,7 @@ def test_create_write_transaction_accepts_json_custom_metadata(
         ),
     )
 
-    history = DeltaTable(tmp_path).history(1)[0]
+    history = next(DeltaTable(tmp_path).history(1))
     assert history["attempt"] == 1
     assert history["details"] == {"manual": True}
 
@@ -147,7 +147,7 @@ def test_operation_parameters_merge_without_duplicate_json_keys(
         ),
     )
 
-    history = DeltaTable(tmp_path).history(1)[0]
+    history = next(DeltaTable(tmp_path).history(1))
     assert history["operationParameters"]["mode"] == "Overwrite"
     assert history["operationParameters"]["partitionBy"] == '["id"]'
     assert history["operationParameters"]["customParameter"] == '{"from":"metadata"}'
@@ -220,7 +220,7 @@ def test_valid_reserved_user_fields_are_visible_in_history(
         ),
     )
 
-    history = DeltaTable(tmp_path).history(1)[0]
+    history = next(DeltaTable(tmp_path).history(1))
     assert history["userName"] == "Jane Doe"
     assert history["userId"] == "jane"
 
@@ -238,7 +238,7 @@ def test_reserved_read_version_is_visible_in_history(
         commit_properties=CommitProperties(custom_metadata={"readVersion": 15}),
     )
 
-    history = DeltaTable(tmp_path).history(1)[0]
+    history = next(DeltaTable(tmp_path).history(1))
     assert history["readVersion"] == 15
 
     raw_commit_info = _commit_info_from_log(tmp_path)
@@ -254,7 +254,7 @@ def test_custom_client_version_is_preserved(tmp_path: pathlib.Path) -> None:
         ),
     )
 
-    history = DeltaTable(tmp_path).history(1)[0]
+    history = next(DeltaTable(tmp_path).history(1))
     assert history["clientVersion"] == "test-client.1.2.3"
 
     raw_commit_info = _commit_info_from_log(tmp_path)

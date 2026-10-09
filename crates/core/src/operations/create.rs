@@ -88,10 +88,6 @@ pub struct CreateBuilder {
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     raise_if_key_not_exists: bool,
-    /// Minimum writer version requirement extracted from configuration
-    min_writer_version: Option<i32>,
-    /// Minimum reader version requirement extracted from configuration
-    min_reader_version: Option<i32>,
 }
 
 impl Default for CreateBuilder {
@@ -116,8 +112,6 @@ impl CreateBuilder {
             configuration: Default::default(),
             commit_properties: CommitProperties::default(),
             raise_if_key_not_exists: true,
-            min_writer_version: None,
-            min_reader_version: None,
         }
     }
 
