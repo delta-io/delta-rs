@@ -122,8 +122,20 @@ jobs:
           tar -xf hadoop-3.4.0.tar.gz -C $GITHUB_WORKSPACE
           echo "$GITHUB_WORKSPACE/hadoop-3.4.0/bin" >> $GITHUB_PATH
 
+      # MiniDfs is started via mvn, and the HDFS tests started hanging when runner
+      # images moved to Maven 3.10.0, so pin to the last known good version.
+      - name: Install Maven
+        run: |
+          MAVEN_VERSION=3.9.16
+          MAVEN_SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6
+          wget -q https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz
+          echo "${MAVEN_SHA512}  apache-maven-${MAVEN_VERSION}-bin.tar.gz" | sha512sum -c -
+          tar -xf apache-maven-${MAVEN_VERSION}-bin.tar.gz -C $GITHUB_WORKSPACE
+          echo "$GITHUB_WORKSPACE/apache-maven-${MAVEN_VERSION}/bin" >> $GITHUB_PATH
+
       - name: Run tests with rustls (default)
         run: |
+          mvn --version
           gmake setup-dat
           cargo llvm-cov nextest --cargo-profile=ci \
             $INTEGRATION_TEST_BUILD_ARGS \
