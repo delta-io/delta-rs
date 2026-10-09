@@ -44,7 +44,7 @@ use deltalake_core::logstore::{
     ObjectStoreFactory, ObjectStoreRef, config::str_is_truthy, object_store_factories,
 };
 use unity_catalog_delta_client_api::{Operation, StorageCredential};
-use unity_catalog_delta_rest_client::{ClientConfig, Error, UCClient};
+use unity_catalog_delta_rest_client::{ClientConfig, Error, UCDeltaTableClient};
 
 pub mod catalog_managed;
 pub mod client;
@@ -673,14 +673,9 @@ impl UnityCatalogBuilder {
 
         let cc_client = if let CredentialProvider::BearerToken(ref token) = credential {
             let config = ClientConfig::build(workspace_url.clone(), token)
-                .with_additional_user_agent([
-                    (env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
-                    ("Delta", "3.2.0"),
-                    ("Spark", "3.5.0"),
-                ])
                 .build()
                 .map_err(UnityCatalogError::from)?;
-            UCClient::new(config).ok()
+            UCDeltaTableClient::new(config).ok()
         } else {
             None
         };
@@ -699,7 +694,7 @@ impl UnityCatalogBuilder {
 
 pub struct UnityCatalog {
     client: reqwest_middleware::ClientWithMiddleware,
-    cc_client: Option<UCClient>,
+    cc_client: Option<UCDeltaTableClient>,
     credential: CredentialProvider,
     workspace_url: String,
     table_cache: DashMap<String, GetTableResponse>,
@@ -898,7 +893,7 @@ impl UnityCatalog {
         Ok(table)
     }
 
-    pub fn delta_rest_client(&self) -> Result<UCClient, UnityCatalogError> {
+    pub fn delta_rest_client(&self) -> Result<UCDeltaTableClient, UnityCatalogError> {
         if let Some(cc_client) = self.cc_client.as_ref() {
             return Ok(cc_client.clone());
         }
