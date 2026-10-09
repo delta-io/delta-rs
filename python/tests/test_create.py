@@ -49,6 +49,17 @@ def test_create_roundtrip_metadata(
     assert {*dt.protocol().writer_features} == {"appendOnly", "timestampNtz"}  # type: ignore
 
 
+def test_create_with_format_options(tmp_path: pathlib.Path):
+    dt = DeltaTable.create(
+        tmp_path,
+        schema,
+        storage_options={"allow_unsafe_rename": "true"},
+        format_options={"contentDefinedChunking.enabled": "true"},
+    )
+
+    assert dt.metadata().format_options == {"contentDefinedChunking.enabled": "true"}
+
+
 def test_create_modes(tmp_path: pathlib.Path):
     dt = DeltaTable.create(tmp_path, schema, mode="error")
     last_action = next(dt.history(1))

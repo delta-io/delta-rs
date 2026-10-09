@@ -13,6 +13,7 @@ use datafusion::{
 use datafusion_datasource::sink::DataSink;
 use futures::{StreamExt as _, TryStreamExt as _};
 use itertools::Itertools as _;
+use parquet::basic::Compression;
 
 use crate::{
     cast_record_batch,
@@ -21,6 +22,7 @@ use crate::{
     kernel::{Action, EagerSnapshot, transaction::CommitBuilder},
     logstore::{LogStoreRef, with_operation},
     operations::write::{WriterStatsConfig, execution::write_streams},
+    parquet_utils::{apply_format_options, default_writer_properties},
     protocol::{DeltaOperation, SaveMode},
     table::config::TablePropertiesExt as _,
 };
@@ -173,10 +175,14 @@ impl DeltaDataSink {
                     )
                 }
             };
+        let writer_properties = apply_format_options(
+            default_writer_properties(Compression::SNAPPY),
+            self.snapshot.metadata().format_options(),
+        )?;
         let config = WriterConfig::new(
             table_schema,
             physical_partition_columns,
-            None,
+            Some(writer_properties),
             None,
             Some(table_props.target_file_size()),
             None,

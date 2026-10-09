@@ -33,6 +33,7 @@ def write_deltalake(
     name: str | None = ...,
     description: str | None = ...,
     configuration: Mapping[str, str | None] | None = ...,
+    format_options: Mapping[str, str] | None = ...,
     schema_mode: Literal["merge", "overwrite"] | None = ...,
     storage_options: dict[str, str] | None = ...,
     target_file_size: int | None = ...,
@@ -52,6 +53,7 @@ def write_deltalake(
     name: str | None = ...,
     description: str | None = ...,
     configuration: Mapping[str, str | None] | None = ...,
+    format_options: Mapping[str, str] | None = ...,
     schema_mode: Literal["merge", "overwrite"] | None = ...,
     storage_options: dict[str, str] | None = ...,
     predicate: str | None = ...,
@@ -71,6 +73,7 @@ def write_deltalake(
     name: str | None = None,
     description: str | None = None,
     configuration: Mapping[str, str | None] | None = None,
+    format_options: Mapping[str, str] | None = None,
     schema_mode: Literal["merge", "overwrite"] | None = None,
     storage_options: dict[str, str] | None = None,
     predicate: str | None = None,
@@ -98,6 +101,9 @@ def write_deltalake(
         description: User-provided description for this table.
         configuration: A map containing table properties for the metadata action.
             Use [TableProperty][deltalake.TableProperty] for table property keys.
+        format_options: A map of Parquet format options stored on the metadata action, only used
+            when the table is created, e.g. `contentDefinedChunking.enabled` to write data files
+            with content-defined chunking.
         schema_mode: If set to "overwrite", allows replacing the schema of the table. Set to "merge" to merge with existing schema.
         storage_options: Options passed to the native delta filesystem.
         predicate: When using `Overwrite` mode, replace data that matches a predicate.'
@@ -142,6 +148,7 @@ def write_deltalake(
             name=name,
             description=description,
             configuration=configuration,
+            format_options=format_options,
             writer_properties=writer_properties,
             commit_properties=commit_properties,
             post_commithook_properties=post_commithook_properties,
@@ -159,6 +166,7 @@ def write_deltalake(
             name=name,
             description=description,
             configuration=configuration,
+            format_options=format_options,
             storage_options=storage_options,
             writer_properties=writer_properties,
             commit_properties=commit_properties,
