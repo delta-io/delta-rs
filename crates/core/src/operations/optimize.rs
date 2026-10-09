@@ -32,7 +32,6 @@ use datafusion::catalog::Session;
 use datafusion::execution::context::{SessionContext, SessionState};
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_features::ColumnMappingMode;
-use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{Future, StreamExt, TryStreamExt};
@@ -45,6 +44,7 @@ use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use tracing::*;
 
+use crate::datafile::DeltaWriterProperties;
 use crate::datafile::writer::{
     ArrowWriterOptions, PartitionWriter, PartitionWriterConfig, UploadBudget,
 };
@@ -286,10 +286,8 @@ pub struct OptimizeBuilder<'a> {
     filters: &'a [FilterLiteral<'a>],
     /// Desired file size after bin-packing files
     target_size: Option<NonZeroU64>,
-    /// Properties passed to underlying parquet writer
-    writer_properties: Option<WriterProperties>,
-    /// Options passed to underlying arrow writer
-    arrow_options: Option<ArrowWriterOptions>,
+    /// How the rewritten data files are encoded
+    writer_properties: DeltaWriterProperties,
     /// Commit properties and configuration
     commit_properties: CommitProperties,
     /// Maximum number of concurrent tasks (default is number of cpus)
@@ -310,8 +308,7 @@ impl<'a> OptimizeBuilder<'a> {
             log_store,
             filters: &[],
             target_size: None,
-            writer_properties: None,
-            arrow_options: None,
+            writer_properties: DeltaWriterProperties::default(),
             commit_properties: CommitProperties::default(),
             max_concurrent_tasks: std::thread::available_parallelism()
                 .map(|n| n.get())
@@ -344,13 +341,26 @@ impl<'a> OptimizeBuilder<'a> {
 
     /// Writer properties passed to parquet writer
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
+        self.writer_properties = self
+            .writer_properties
+            .with_parquet_properties(writer_properties);
         self
     }
 
     /// Arrow writer options passed to parquet writer
     pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
-        self.arrow_options = Some(arrow_options);
+        self.writer_properties = self.writer_properties.with_arrow_options(arrow_options);
+        self
+    }
+
+    /// How the rewritten data files are encoded, replacing any parquet writer
+    /// properties and arrow writer options set so far. An unset target file size
+    /// or stats config falls back to the table's.
+    pub fn with_delta_writer_properties(
+        mut self,
+        writer_properties: DeltaWriterProperties,
+    ) -> Self {
+        self.writer_properties = writer_properties;
         self
     }
 
@@ -421,9 +431,12 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             }
             PROTOCOL.can_write_to(&snapshot)?;
 
-            let writer_properties = this.writer_properties.unwrap_or_else(|| {
-                default_writer_properties(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))
-            });
+            let mut writer_properties = this.writer_properties;
+            if writer_properties.parquet_properties().is_none() {
+                writer_properties = writer_properties.with_parquet_properties(
+                    default_writer_properties(Compression::ZSTD(ZstdLevel::try_new(4).unwrap())),
+                );
+            }
             let (session, _) = resolve_session_state(
                 this.session.as_deref(),
                 this.session_fallback_policy,
@@ -444,7 +457,6 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 this.filters,
                 this.target_size.to_owned(),
                 writer_properties,
-                this.arrow_options.unwrap_or_default(),
                 session,
             )
             .await?;
@@ -599,16 +611,10 @@ impl PlannerStats {
 pub struct MergeTaskParameters {
     /// Schema of written files
     file_schema: SchemaRef,
-    /// Properties passed to parquet writer
-    writer_properties: WriterProperties,
-    /// Options passed to arrow writer
-    arrow_options: ArrowWriterOptions,
+    /// How the written files are encoded; the target file size is set per task
+    writer_properties: DeltaWriterProperties,
     /// Input parameters for the optimize operation
     input_parameters: OptimizeInput,
-    /// Num index cols to collect stats for
-    num_indexed_cols: DataSkippingNumIndexedCols,
-    /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
-    stats_columns: Option<Vec<String>>,
     /// Budget for rolled files awaiting upload, shared by every task of this optimize run.
     upload_budget: UploadBudget,
 }
@@ -681,28 +687,24 @@ impl MergePlan {
         };
 
         // Next, initialize the writer
+        // Since we know the total size of the bin, we can set the target file size to None.
+        let target_file_size = if ignore_target_size {
+            None
+        } else {
+            Some(task_parameters.input_parameters.target_size)
+        };
         let writer_config = PartitionWriterConfig::try_new(
             task_parameters.file_schema.clone(),
             partition_values.clone(),
-            Some(task_parameters.writer_properties.clone()),
-            Some(task_parameters.arrow_options.clone()),
-            // Since we know the total size of the bin, we can set the target file size to None.
-            if ignore_target_size {
-                None
-            } else {
-                Some(task_parameters.input_parameters.target_size)
-            },
-            None,
+            task_parameters
+                .writer_properties
+                .clone()
+                .with_target_file_size(target_file_size),
             None,
             None,
         )?
         .with_upload_budget(task_parameters.upload_budget.clone());
-        let mut writer = PartitionWriter::try_with_config(
-            object_store,
-            writer_config,
-            task_parameters.num_indexed_cols,
-            task_parameters.stats_columns.clone(),
-        )?;
+        let mut writer = PartitionWriter::try_with_config(object_store, writer_config)?;
 
         let mut read_stream = read_stream.await?;
 
@@ -994,7 +996,6 @@ impl MergePlan {
 }
 
 /// Build a Plan on which files to merge together. See [OptimizeBuilder]
-#[allow(clippy::too_many_arguments)]
 #[instrument(skip_all, fields(operation = "create_merge_plan", version = snapshot.version()))]
 pub async fn create_merge_plan(
     log_store: &dyn LogStore,
@@ -1002,11 +1003,12 @@ pub async fn create_merge_plan(
     snapshot: &EagerSnapshot,
     filters: &[FilterLiteral<'_>],
     target_size: Option<NonZeroU64>,
-    writer_properties: WriterProperties,
-    arrow_options: ArrowWriterOptions,
+    writer_properties: DeltaWriterProperties,
     session: SessionState,
 ) -> Result<MergePlan, DeltaTableError> {
-    let target_size = target_size.unwrap_or_else(|| snapshot.table_properties().target_file_size());
+    let target_size = target_size
+        .or(writer_properties.target_file_size())
+        .unwrap_or_else(|| snapshot.table_properties().target_file_size());
     let _ = optimize_target_size_to_i64(target_size)?;
     let partitions_keys = snapshot.metadata().partition_columns();
 
@@ -1055,15 +1057,8 @@ pub async fn create_merge_plan(
         planner_stats,
         task_parameters: Arc::new(MergeTaskParameters {
             file_schema,
-            writer_properties,
-            arrow_options,
+            writer_properties: writer_properties.with_table_stats(snapshot.table_configuration()),
             input_parameters,
-            num_indexed_cols: snapshot.table_properties().num_indexed_cols(),
-            stats_columns: snapshot
-                .table_properties()
-                .data_skipping_stats_columns
-                .as_ref()
-                .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
             upload_budget,
         }),
         read_table_version: snapshot.version(),

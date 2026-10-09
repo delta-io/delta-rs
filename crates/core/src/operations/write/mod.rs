@@ -46,11 +46,12 @@ use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use url::Url;
 
-pub use self::configs::WriterStatsConfig;
 use self::execution::write_execution_plan_v2;
 use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use super::CreateBuilder;
 use crate::DeltaTable;
+use crate::datafile::DeltaWriterProperties;
+pub use crate::datafile::WriterStatsConfig;
 use crate::datafile::writer::ArrowWriterOptions;
 use crate::delta_datafusion::Expression;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
@@ -68,8 +69,6 @@ use crate::logstore::with_operation;
 use crate::protocol::{DeltaOperation, SaveMode};
 use uuid::Uuid;
 
-/// Configuration types controlling how data and statistics are written.
-pub mod configs;
 pub(crate) mod execution;
 pub(crate) mod generated_columns;
 pub(crate) mod metrics;
@@ -79,6 +78,12 @@ pub(crate) mod schema_evolution;
 /// Back-compat re-export: the writer types moved to [`crate::datafile::writer`].
 #[deprecated(note = "moved to deltalake_core::datafile::writer")]
 pub use crate::datafile::writer;
+
+/// Back-compat re-export: [`WriterStatsConfig`] moved to [`crate::datafile`].
+#[deprecated(note = "moved to deltalake_core::datafile::WriterStatsConfig")]
+pub mod configs {
+    pub use crate::datafile::WriterStatsConfig;
+}
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum WriteError {
@@ -151,16 +156,12 @@ pub struct WriteBuilder {
     /// Size above which we will write a buffered parquet file to disk.
     /// If None, the writer will not create a new file until the writer is closed.
     target_file_size: Option<Option<NonZeroU64>>,
-    /// Number of records to be written in single batch to underlying writer
-    write_batch_size: Option<usize>,
     /// whether to overwrite the schema or to merge it. None means to fail on schmema drift
     schema_mode: Option<SchemaMode>,
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
     safe_cast: bool,
-    /// Parquet writer properties
-    writer_properties: Option<WriterProperties>,
-    /// Arrow writer options
-    arrow_options: Option<ArrowWriterOptions>,
+    /// How the data files are encoded
+    writer_properties: DeltaWriterProperties,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// Name of the table, only used when table doesn't exist yet
@@ -202,11 +203,9 @@ impl WriteBuilder {
             partition_columns: None,
             predicate: None,
             target_file_size: None,
-            write_batch_size: None,
             safe_cast: false,
             schema_mode: None,
-            writer_properties: None,
-            arrow_options: None,
+            writer_properties: DeltaWriterProperties::default(),
             commit_properties: CommitProperties::default(),
             name: None,
             description: None,
@@ -286,7 +285,9 @@ impl WriteBuilder {
 
     /// Specify the target batch size for row groups written to parquet files.
     pub fn with_write_batch_size(mut self, write_batch_size: usize) -> Self {
-        self.write_batch_size = Some(write_batch_size);
+        self.writer_properties = self
+            .writer_properties
+            .with_write_batch_size(write_batch_size);
         self
     }
 
@@ -299,13 +300,29 @@ impl WriteBuilder {
 
     /// Specify the writer properties to use when writing a parquet file
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
+        self.writer_properties = self
+            .writer_properties
+            .with_parquet_properties(writer_properties);
         self
     }
 
     /// Specify the arrow writer options to use when writing a parquet file
     pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
-        self.arrow_options = Some(arrow_options);
+        self.writer_properties = self.writer_properties.with_arrow_options(arrow_options);
+        self
+    }
+
+    /// How the data files are encoded, replacing any parquet writer properties,
+    /// arrow writer options and write batch size set so far. Its target file size
+    /// applies unless [`with_target_file_size`] was called; unset, the table's does,
+    /// as does an unset stats config. Only [`with_target_file_size`] disables rolling.
+    ///
+    /// [`with_target_file_size`]: Self::with_target_file_size
+    pub fn with_delta_writer_properties(
+        mut self,
+        writer_properties: DeltaWriterProperties,
+    ) -> Self {
+        self.writer_properties = writer_properties;
         self
     }
 
@@ -528,9 +545,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         partition_columns: partition_columns.clone(),
                         predicate: this.predicate,
                         target_file_size: this.target_file_size,
-                        write_batch_size: this.write_batch_size,
                         writer_properties: this.writer_properties.clone(),
-                        arrow_options: this.arrow_options.clone(),
                         configuration: &this.configuration,
                     })?;
 
@@ -559,7 +574,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     let plan::PreparedWrite {
                         schema_delta,
                         exact_validation,
-                        exec_options,
+                        writer_properties,
                         ..
                     } = prepared_write;
 
@@ -580,7 +595,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         &session,
                         source_plan.clone(),
                         log_store.object_store(),
-                        exec_options,
+                        writer_properties,
                         exact_validation,
                         contains_cdc,
                         insert_marker_column,
