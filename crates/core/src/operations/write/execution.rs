@@ -1,4 +1,3 @@
-use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
 
@@ -16,21 +15,18 @@ use datafusion::physical_plan::{
 };
 use delta_kernel::table_configuration::TableConfiguration;
 use futures::StreamExt as _;
-use object_store::prefix::PrefixStore;
-use parquet::file::properties::WriterProperties;
+use object_store::path::Path;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
 use crate::DeltaTableError;
-use crate::datafile::writer::{
-    ArrowWriterOptions, DeltaWriter, UploadBudget, WriterConfig, write_batches_timed,
-};
+use crate::datafile::DeltaWriterProperties;
+use crate::datafile::writer::{DeltaWriter, UploadBudget, WriterConfig, write_batches_timed};
 use crate::delta_datafusion::{ColumnMappingState, DataValidationExec, validation_predicates};
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile};
 use crate::logstore::{LogStore, ObjectStoreRef};
 use crate::operations::cdc::CDC_COLUMN_NAME;
-use crate::operations::write::configs::{WriteExecOptions, WriterStatsConfig};
 
 /// Error message used when a worker's `send` fails because the writer task has
 /// already closed the channel (e.g. the writer errored). It is recognised by
@@ -54,10 +50,11 @@ mod tests {
     use datafusion::common::Result as DataFusionResult;
     use datafusion::error::DataFusionError;
     use datafusion::physical_plan::{RecordBatchStream, stream::RecordBatchStreamAdapter};
-    use delta_kernel::table_properties::DataSkippingNumIndexedCols;
     use futures::{Stream, stream};
     use object_store::memory::InMemory;
     use rstest::rstest;
+
+    use crate::datafile::writer::test_utils::test_props;
 
     use super::{
         ObjectStoreRef, SendableRecordBatchStream, WriterConfig, parse_positive_usize,
@@ -90,12 +87,7 @@ mod tests {
         WriterConfig::new(
             schema,
             vec![],
-            None,
-            None,
-            Some(NonZeroU64::new(1024).unwrap()),
-            Some(1024),
-            DataSkippingNumIndexedCols::NumColumns(32),
-            None,
+            test_props(None, None, Some(NonZeroU64::new(1024).unwrap()), Some(1024)),
         )
     }
 
@@ -280,15 +272,80 @@ pub(crate) struct WriteExecutionPlanMetrics {
     pub write_time_ms: u64,
 }
 
+/// Directory under the table root for change data files.
+const CHANGE_DATA_DIR: &str = "_change_data";
+
 struct WriteSinkConfig {
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<NonZeroU64>,
-    write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
-    writer_stats_config: WriterStatsConfig,
+    /// How the files are encoded, with the table's stats config filled in.
+    props: DeltaWriterProperties,
     column_mapping: Option<ColumnMappingState>,
-    arrow_options: Option<ArrowWriterOptions>,
+    /// Directory under the table root the data files go below.
+    path_prefix: Option<Path>,
+}
+
+impl WriteSinkConfig {
+    fn new(
+        table_config: &TableConfiguration,
+        object_store: ObjectStoreRef,
+        props: DeltaWriterProperties,
+    ) -> Self {
+        Self {
+            partition_columns: table_config.metadata().partition_columns().to_vec(),
+            object_store,
+            props: props.with_table_stats(table_config),
+            column_mapping: ColumnMappingState::from_table_config(table_config),
+            path_prefix: None,
+        }
+    }
+
+    fn with_path_prefix(mut self, prefix: &str) -> Self {
+        self.path_prefix = Some(Path::from(prefix));
+        self
+    }
+}
+
+/// `plan` under the table's constraint and invariant checks plus the rewrite
+/// `predicate`, with the internal insert-marker column dropped.
+fn validated_plan(
+    table_config: &TableConfiguration,
+    session: &dyn Session,
+    plan: Arc<dyn ExecutionPlan>,
+    predicate: Option<Expr>,
+    contains_cdc: bool,
+    insert_marker_column: Option<&str>,
+) -> DeltaResult<Arc<dyn ExecutionPlan>> {
+    let mut validations =
+        validation_predicates(session, &plan.schema().to_dfschema()?, table_config)?;
+
+    if let Some(mut pred) = predicate {
+        // DataRescue uses an internal insert-marker column; CDC-only plans rely on `_change_type`.
+        // A rewrite plan never needs both paths at once.
+        if let Some(insert_marker_column) = insert_marker_column {
+            pred = when(col(insert_marker_column).eq(lit(true)), pred).otherwise(lit(true))?;
+        } else if contains_cdc {
+            pred = when(col(CDC_COLUMN_NAME).eq(lit("insert")), pred).otherwise(lit(true))?;
+        }
+        validations.push(pred);
+    }
+
+    let plan = DataValidationExec::try_new_with_predicates(session, plan, validations)?;
+    match insert_marker_column {
+        Some(insert_marker_column) => drop_internal_column(plan, insert_marker_column),
+        None => Ok(plan),
+    }
+}
+
+/// The change data action for `add`, whose path is already table-relative.
+fn add_cdc_file(add: Add) -> Action {
+    Action::Cdc(AddCDCFile {
+        path: add.path,
+        size: add.size,
+        partition_values: add.partition_values,
+        data_change: false,
+        tags: add.tags,
+    })
 }
 
 /// A plan with its (physical) partition columns and optional random-prefix length.
@@ -329,33 +386,19 @@ pub(crate) async fn write_execution_plan_cdc(
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     object_store: ObjectStoreRef,
-    exec_options: WriteExecOptions,
+    props: DeltaWriterProperties,
 ) -> DeltaResult<Vec<Action>> {
-    let cdc_store = Arc::new(PrefixStore::new(object_store, "_change_data"));
-
-    Ok(
-        write_execution_plan(table_config, session, plan, cdc_store, exec_options)
-            .await?
-            .into_iter()
-            .map(|add| {
-                // Modify add actions into CDC actions
-                match add {
-                    Action::Add(add) => {
-                        Action::Cdc(AddCDCFile {
-                            // This is a gnarly hack, but the action needs the nested path, not the
-                            // path inside the prefixed store
-                            path: format!("_change_data/{}", add.path),
-                            size: add.size,
-                            partition_values: add.partition_values,
-                            data_change: false,
-                            tags: add.tags,
-                        })
-                    }
-                    _ => panic!("Expected Add action"),
-                }
-            })
-            .collect::<Vec<_>>(),
-    )
+    let plan = validated_plan(table_config, session, plan, None, false, None)?;
+    let sink_config =
+        WriteSinkConfig::new(table_config, object_store, props).with_path_prefix(CHANGE_DATA_DIR);
+    let (actions, _) = write_data_plan(session, plan, sink_config).await?;
+    Ok(actions
+        .into_iter()
+        .map(|action| match action {
+            Action::Add(add) => add_cdc_file(add),
+            _ => panic!("Expected Add action"),
+        })
+        .collect())
 }
 
 pub(crate) async fn write_execution_plan(
@@ -363,14 +406,14 @@ pub(crate) async fn write_execution_plan(
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     object_store: ObjectStoreRef,
-    exec_options: WriteExecOptions,
+    props: DeltaWriterProperties,
 ) -> DeltaResult<Vec<Action>> {
     let (actions, _) = write_execution_plan_v2(
         table_config,
         session,
         plan,
         object_store,
-        exec_options,
+        props,
         None,
         false,
         None,
@@ -385,40 +428,20 @@ pub(crate) async fn write_execution_plan_v2(
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     object_store: ObjectStoreRef,
-    exec_options: WriteExecOptions,
+    props: DeltaWriterProperties,
     predicate: Option<Expr>,
     contains_cdc: bool,
     insert_marker_column: Option<String>,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
-    let mut validations =
-        validation_predicates(session, &plan.schema().to_dfschema()?, table_config)?;
-
-    if let Some(mut pred) = predicate {
-        // DataRescue uses an internal insert-marker column; CDC-only plans rely on `_change_type`.
-        // A rewrite plan never needs both paths at once.
-        if let Some(insert_marker_column) = insert_marker_column.as_ref() {
-            pred = when(col(insert_marker_column).eq(lit(true)), pred).otherwise(lit(true))?;
-        } else if contains_cdc {
-            pred = when(col(CDC_COLUMN_NAME).eq(lit("insert")), pred).otherwise(lit(true))?;
-        }
-        validations.push(pred);
-    }
-
-    let mut plan = DataValidationExec::try_new_with_predicates(session, plan, validations)?;
-    if let Some(insert_marker_column) = insert_marker_column.as_ref() {
-        plan = drop_internal_column(plan, insert_marker_column)?;
-    }
-
-    let sink_config = WriteSinkConfig {
-        partition_columns: table_config.metadata().partition_columns().to_vec(),
-        object_store,
-        target_file_size: exec_options.target_file_size,
-        write_batch_size: exec_options.write_batch_size,
-        writer_properties: exec_options.writer_properties,
-        writer_stats_config: WriterStatsConfig::from_config(table_config),
-        column_mapping: ColumnMappingState::from_table_config(table_config),
-        arrow_options: exec_options.arrow_options,
-    };
+    let plan = validated_plan(
+        table_config,
+        session,
+        plan,
+        predicate,
+        contains_cdc,
+        insert_marker_column.as_deref(),
+    )?;
+    let sink_config = WriteSinkConfig::new(table_config, object_store, props);
 
     if !contains_cdc {
         write_data_plan(session, plan, sink_config).await
@@ -456,29 +479,19 @@ pub(crate) async fn write_exec_plan(
     table_config: &TableConfiguration,
     exec: Arc<dyn ExecutionPlan>,
     write_as_cdc: bool,
-    exec_options: WriteExecOptions,
+    mut props: DeltaWriterProperties,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
-    let writer_properties = match exec_options.writer_properties {
-        Some(props) => props,
-        None => session
-            .config_options()
-            .execution
-            .parquet
-            .into_writer_properties_builder()?
-            .build(),
-    };
-    let stats_config = WriterStatsConfig::from_config(table_config);
-    let object_store = log_store.object_store();
-    let sink_config = WriteSinkConfig {
-        partition_columns: table_config.metadata().partition_columns().to_vec(),
-        object_store,
-        target_file_size: exec_options.target_file_size,
-        write_batch_size: None,
-        writer_properties: Some(writer_properties),
-        writer_stats_config: stats_config,
-        column_mapping: ColumnMappingState::from_table_config(table_config),
-        arrow_options: exec_options.arrow_options,
-    };
+    if props.parquet_properties().is_none() {
+        props = props.with_parquet_properties(
+            session
+                .config_options()
+                .execution
+                .parquet
+                .into_writer_properties_builder()?
+                .build(),
+        );
+    }
+    let sink_config = WriteSinkConfig::new(table_config, log_store.object_store(), props);
 
     if write_as_cdc {
         write_cdc_plan(session, exec, sink_config).await
@@ -748,26 +761,15 @@ async fn write_data_plan(
     let WriteSinkConfig {
         partition_columns,
         object_store,
-        target_file_size,
-        write_batch_size,
-        writer_properties,
-        writer_stats_config,
+        props,
         column_mapping,
-        arrow_options,
+        path_prefix,
     } = sink_config;
     let (plan, partition_columns, random_prefix_length) =
         apply_column_mapping_to_plan(plan, partition_columns, &column_mapping)?;
-    let config = WriterConfig::new(
-        plan.schema().clone(),
-        partition_columns.clone(),
-        writer_properties.clone(),
-        arrow_options,
-        target_file_size,
-        write_batch_size,
-        writer_stats_config.num_indexed_cols,
-        writer_stats_config.stats_columns.clone(),
-    )
-    .with_random_prefix_length(random_prefix_length);
+    let config = WriterConfig::new(plan.schema().clone(), partition_columns.clone(), props)
+        .with_random_prefix_length(random_prefix_length)
+        .with_path_prefix(path_prefix);
 
     // For unpartitioned writes, centralize writer behavior through write_streams.
     if partition_columns.is_empty() {
@@ -914,16 +916,14 @@ async fn write_cdc_plan(
     let WriteSinkConfig {
         partition_columns,
         object_store,
-        target_file_size,
-        write_batch_size,
-        writer_properties,
-        writer_stats_config,
+        props,
         column_mapping,
-        arrow_options,
+        path_prefix: _,
     } = sink_config;
     let (plan, partition_columns, random_prefix_length) =
         apply_column_mapping_to_plan(plan, partition_columns, &column_mapping)?;
-    let cdf_store = Arc::new(PrefixStore::new(object_store.clone(), "_change_data"));
+    // Change data goes below `_change_data` in the same store, so paths come back table-relative.
+    let cdf_store = object_store.clone();
 
     let write_schema = Arc::new(Schema::new(
         plan.schema()
@@ -942,32 +942,19 @@ async fn write_cdc_plan(
     let cdf_schema = plan.schema().clone();
 
     // One budget for both destinations of a change-data write.
-    let upload_budget = UploadBudget::for_write(target_file_size);
+    let upload_budget = UploadBudget::for_write(props.target_file_size());
     let normal_config = WriterConfig::new(
         write_schema.clone(),
         partition_columns.clone(),
-        writer_properties.clone(),
-        arrow_options.clone(),
-        target_file_size,
-        write_batch_size,
-        writer_stats_config.num_indexed_cols,
-        writer_stats_config.stats_columns.clone(),
+        props.clone(),
     )
     .with_random_prefix_length(random_prefix_length)
     .with_upload_budget(upload_budget.clone());
 
-    let cdf_config = WriterConfig::new(
-        cdf_schema.clone(),
-        partition_columns.clone(),
-        writer_properties.clone(),
-        arrow_options,
-        target_file_size,
-        write_batch_size,
-        writer_stats_config.num_indexed_cols,
-        writer_stats_config.stats_columns.clone(),
-    )
-    .with_random_prefix_length(random_prefix_length)
-    .with_upload_budget(upload_budget);
+    let cdf_config = WriterConfig::new(cdf_schema.clone(), partition_columns.clone(), props)
+        .with_random_prefix_length(random_prefix_length)
+        .with_path_prefix(Some(Path::from(CHANGE_DATA_DIR)))
+        .with_upload_budget(upload_budget);
 
     // Keep the previous single-writer fan-in path for unpartitioned tables.
     if partition_columns.is_empty() {
@@ -1067,18 +1054,7 @@ async fn write_cdc_plan(
         }
 
         let mut actions = normal_adds.into_iter().map(Action::Add).collect::<Vec<_>>();
-        let mut cdf_actions = cdf_adds
-            .into_iter()
-            .map(|add| {
-                Action::Cdc(AddCDCFile {
-                    path: format!("_change_data/{}", add.path),
-                    size: add.size,
-                    partition_values: add.partition_values,
-                    data_change: false,
-                    tags: add.tags,
-                })
-            })
-            .collect::<Vec<_>>();
+        let mut cdf_actions = cdf_adds.into_iter().map(add_cdc_file).collect::<Vec<_>>();
         actions.append(&mut cdf_actions);
 
         let write_time_ms = normal_write_ms + cdf_write_ms;
@@ -1134,15 +1110,7 @@ async fn write_cdc_plan(
         match result {
             Ok((normal_adds, cdf_adds, write_ms)) => {
                 all_actions.extend(normal_adds.into_iter().map(Action::Add));
-                all_actions.extend(cdf_adds.into_iter().map(|add| {
-                    Action::Cdc(AddCDCFile {
-                        path: format!("_change_data/{}", add.path),
-                        size: add.size,
-                        partition_values: add.partition_values,
-                        data_change: false,
-                        tags: add.tags,
-                    })
-                }));
+                all_actions.extend(cdf_adds.into_iter().map(add_cdc_file));
                 max_write_ms = max_write_ms.max(write_ms);
             }
             Err(e) => {

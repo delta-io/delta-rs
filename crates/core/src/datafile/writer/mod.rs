@@ -130,15 +130,40 @@ impl From<WriteError> for DeltaTableError {
 }
 
 #[cfg(test)]
-mod test_utils {
+pub(crate) mod test_utils {
+    use std::num::NonZeroU64;
+
+    use parquet::basic::Compression;
     use parquet::file::properties::WriterProperties;
 
+    use super::ArrowWriterOptions;
     use crate::crate_version;
+    use crate::datafile::DeltaWriterProperties;
+    use crate::parquet_utils::default_writer_properties;
 
-    pub(super) fn assert_default_created_by(writer_properties: &WriterProperties) {
+    pub(crate) fn assert_default_created_by(writer_properties: &WriterProperties) {
         assert_eq!(
             writer_properties.created_by(),
             format!("delta-rs version {}", crate_version())
         );
+    }
+
+    /// Properties from the knobs tests vary; `None` keeps the default.
+    pub(crate) fn test_props(
+        writer_properties: Option<WriterProperties>,
+        arrow_options: Option<ArrowWriterOptions>,
+        target_file_size: Option<NonZeroU64>,
+        write_batch_size: Option<usize>,
+    ) -> DeltaWriterProperties {
+        let props = DeltaWriterProperties::default()
+            .with_parquet_properties(
+                writer_properties.unwrap_or_else(|| default_writer_properties(Compression::SNAPPY)),
+            )
+            .with_arrow_options(arrow_options.unwrap_or_default())
+            .with_target_file_size(target_file_size);
+        match write_batch_size {
+            Some(rows) => props.with_write_batch_size(rows),
+            None => props,
+        }
     }
 }

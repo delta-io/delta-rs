@@ -1,35 +1,27 @@
 //! File tier: [`PartitionWriter`] writes the data files of one partition. It starts a new
 //! file when the current one reaches the target file size.
 
-use std::num::NonZeroU64;
 use std::sync::OnceLock;
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use delta_kernel::expressions::Scalar;
-use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use object_store::path::Path;
-use parquet::basic::Compression;
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::WriterProperties;
 use tokio::task::JoinSet;
 use tracing::*;
 
-use crate::datafile::DataFileWriter;
 use crate::datafile::writer::WriteError;
 use crate::datafile::writer::file::LazyArrowWriter;
-use crate::datafile::writer::parallel::ArrowWriterOptions;
-
 use crate::datafile::writer::upload_budget::UploadBudget;
+use crate::datafile::{DEFAULT_WRITE_BATCH_SIZE, DataFileWriter, DeltaWriterProperties};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
-use crate::parquet_utils::default_writer_properties;
 use crate::writer::stats::create_add;
 use crate::writer::utils::next_data_path;
 
-pub(super) const DEFAULT_WRITE_BATCH_SIZE: usize = 8192;
 const DEFAULT_MAX_CONCURRENCY_TASKS: usize = 10;
 
 fn get_max_concurrency_tasks() -> usize {
@@ -64,13 +56,8 @@ pub struct PartitionWriterConfig {
     prefix: Path,
     /// Values for all partition columns
     partition_values: IndexMap<String, Scalar>,
-    /// Properties passed to underlying parquet writer
-    pub(super) writer_properties: WriterProperties,
-    /// Options passed to the underlying arrow writer
-    pub(super) arrow_options: ArrowWriterOptions,
-    /// Size above which we will write a buffered parquet file to disk.
-    /// If None, the writer will not create a new file until the writer is closed.
-    target_file_size: Option<NonZeroU64>,
+    /// How the files are encoded
+    pub(super) props: DeltaWriterProperties,
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
@@ -87,14 +74,10 @@ pub struct PartitionWriterConfig {
 
 impl PartitionWriterConfig {
     /// Create a new instance of [PartitionWriterConfig]
-    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         file_schema: ArrowSchemaRef,
         partition_values: IndexMap<String, Scalar>,
-        writer_properties: Option<WriterProperties>,
-        arrow_options: Option<ArrowWriterOptions>,
-        target_file_size: Option<NonZeroU64>,
-        write_batch_size: Option<usize>,
+        props: DeltaWriterProperties,
         max_concurrency_tasks: Option<usize>,
         prefix_override: Option<Path>,
     ) -> DeltaResult<Self> {
@@ -102,26 +85,22 @@ impl PartitionWriterConfig {
             Some(prefix) => prefix,
             None => Path::parse(partition_values.hive_partition_path())?,
         };
-        let writer_properties =
-            writer_properties.unwrap_or_else(|| default_writer_properties(Compression::SNAPPY));
-        if write_batch_size == Some(0) {
+        if props.write_batch_size() == Some(0) {
             return Err(DeltaTableError::generic(
                 "write_batch_size must be greater than 0",
             ));
         }
-        let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
+        let write_batch_size = props.write_batch_size().unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
 
         Ok(Self {
             file_schema,
             prefix,
             partition_values,
-            writer_properties,
-            arrow_options: arrow_options.unwrap_or_default(),
-            target_file_size,
             write_batch_size,
             max_concurrency_tasks: max_concurrency_tasks.unwrap_or_else(get_max_concurrency_tasks),
             roll_on_row_group_boundary: roll_on_row_group_boundary_default(),
-            upload_budget: UploadBudget::for_write(target_file_size),
+            upload_budget: UploadBudget::for_write(props.target_file_size()),
+            props,
         })
     }
 
@@ -162,10 +141,6 @@ pub struct PartitionWriter {
     pub(super) config: PartitionWriterConfig,
     writer: LazyArrowWriter,
     part_counter: usize,
-    /// Num index cols to collect stats for
-    num_indexed_cols: DataSkippingNumIndexedCols,
-    /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
-    stats_columns: Option<Vec<String>>,
     in_flight_writers: JoinSet<DeltaResult<(Path, usize, ParquetMetaData)>>,
     /// Approximate encoded size of files already rolled to background upload;
     /// keeps `buffered_size` monotonic across rolls.
@@ -177,11 +152,14 @@ impl PartitionWriter {
     pub fn try_with_config(
         object_store: ObjectStoreRef,
         config: PartitionWriterConfig,
-        num_indexed_cols: DataSkippingNumIndexedCols,
-        stats_columns: Option<Vec<String>>,
     ) -> DeltaResult<Self> {
         let writer_id = uuid::Uuid::new_v4();
-        let first_path = next_data_path(&config.prefix, 0, &writer_id, &config.writer_properties);
+        let first_path = next_data_path(
+            &config.prefix,
+            0,
+            &writer_id,
+            config.props.parquet_properties_or_default(),
+        );
         let writer = Self::create_writer(object_store.clone(), first_path.clone(), &config);
 
         Ok(Self {
@@ -190,8 +168,6 @@ impl PartitionWriter {
             config,
             writer,
             part_counter: 0,
-            num_indexed_cols,
-            stats_columns,
             in_flight_writers: JoinSet::new(),
             rolled_bytes: 0,
         })
@@ -219,7 +195,7 @@ impl PartitionWriter {
             &self.config.prefix,
             self.part_counter,
             &self.writer_id,
-            &self.config.writer_properties,
+            self.config.props.parquet_properties_or_default(),
         )
     }
 
@@ -259,15 +235,11 @@ impl PartitionWriter {
         if !self.config.roll_on_row_group_boundary {
             return None;
         }
-        if self
-            .config
-            .writer_properties
-            .max_row_group_bytes()
-            .is_some()
-        {
+        let writer_properties = self.config.props.parquet_properties_or_default();
+        if writer_properties.max_row_group_bytes().is_some() {
             return None;
         }
-        let max_rows = self.config.writer_properties.max_row_group_row_count()?;
+        let max_rows = writer_properties.max_row_group_row_count()?;
         Some(max_rows - (self.writer.in_progress_rows() % max_rows))
     }
 
@@ -291,14 +263,15 @@ impl PartitionWriter {
             return Ok(());
         }
 
-        let Some(target_file_size) = self.config.target_file_size else {
+        let Some(target_file_size) = self.config.props.target_file_size() else {
             // No size target means no file rolling, but still slice at row-group
             // boundaries: the async writer only uploads as row groups complete
             // within a `write_batch` call, so one huge call would buffer every
             // row group in memory first.
             let step = self
                 .config
-                .writer_properties
+                .props
+                .parquet_properties_or_default()
                 .max_row_group_row_count()
                 .unwrap_or(self.config.write_batch_size)
                 .max(1);
@@ -388,8 +361,8 @@ impl PartitionWriter {
                     path.to_string(),
                     file_size as i64,
                     &metadata,
-                    self.num_indexed_cols,
-                    &self.stats_columns,
+                    self.config.props.stats().num_indexed_cols,
+                    &self.config.props.stats().stats_columns,
                 )
                 .map_err(|err| WriteError::CreateAdd {
                     source: Box::new(err),
@@ -433,16 +406,20 @@ impl DataFileWriter for PartitionWriter {
 mod tests {
     use super::*;
     use crate::DeltaTableBuilder;
-    use crate::datafile::writer::test_utils::assert_default_created_by;
+    use crate::datafile::writer::test_utils::{assert_default_created_by, test_props};
     use crate::logstore::tests::flatten_list_stream as list;
-    use crate::table::config::DEFAULT_NUM_INDEX_COLS;
     use crate::writer::test_utils::get_record_batch;
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use object_store::ObjectStoreExt as _;
+    use parquet::basic::Compression;
+    use parquet::file::properties::WriterProperties;
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use parquet::schema::types::ColumnPath;
+    use std::num::NonZeroU64;
     use std::sync::Arc;
+
+    use crate::datafile::writer::ArrowWriterOptions;
 
     fn get_partition_writer(
         object_store: ObjectStoreRef,
@@ -476,10 +453,7 @@ mod tests {
         let mut config = PartitionWriterConfig::try_new(
             batch.schema(),
             IndexMap::new(),
-            writer_properties,
-            None,
-            target_file_size,
-            write_batch_size,
+            test_props(writer_properties, None, target_file_size, write_batch_size),
             None,
             prefix,
         )
@@ -487,13 +461,7 @@ mod tests {
         if let Some(budget) = budget {
             config = config.with_upload_budget(budget.clone());
         }
-        PartitionWriter::try_with_config(
-            object_store,
-            config,
-            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
-            None,
-        )
-        .unwrap()
+        PartitionWriter::try_with_config(object_store, config).unwrap()
     }
 
     #[tokio::test]
@@ -527,21 +495,12 @@ mod tests {
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
             IndexMap::new(),
-            Some(props),
-            None,
-            None,
-            None,
+            test_props(Some(props), None, None, None),
             None,
             None,
         )
         .unwrap();
-        let mut writer = PartitionWriter::try_with_config(
-            store,
-            config,
-            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
-            None,
-        )
-        .unwrap();
+        let mut writer = PartitionWriter::try_with_config(store, config).unwrap();
 
         let result = writer.write(&batch).await;
         assert!(result.is_err(), "injected multipart failure must surface");
@@ -560,20 +519,16 @@ mod tests {
         let config = PartitionWriterConfig::try_new(
             schema,
             IndexMap::new(),
-            None,
-            None,
-            None,
-            None,
+            DeltaWriterProperties::default(),
             None,
             None,
         )
         .unwrap();
 
-        assert_default_created_by(&config.writer_properties);
+        let writer_properties = config.props.parquet_properties_or_default();
+        assert_default_created_by(writer_properties);
         assert_eq!(
-            config
-                .writer_properties
-                .compression(&ColumnPath::from("id")),
+            writer_properties.compression(&ColumnPath::from("id")),
             Compression::SNAPPY
         );
     }
@@ -622,21 +577,17 @@ mod tests {
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
             IndexMap::new(),
-            Some(properties),
-            Some(ArrowWriterOptions::new().with_enable_parallel_encoding(parallel)),
+            test_props(
+                Some(properties),
+                Some(ArrowWriterOptions::new().with_enable_parallel_encoding(parallel)),
+                None,
+                Some(2),
+            ),
             None,
-            Some(2),
-            None,
-            None,
-        )
-        .unwrap();
-        let mut writer = PartitionWriter::try_with_config(
-            object_store.clone(),
-            config,
-            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
             None,
         )
         .unwrap();
+        let mut writer = PartitionWriter::try_with_config(object_store.clone(), config).unwrap();
         writer.write(&batch).await.unwrap();
         let adds = writer.close().await.unwrap();
         assert_eq!(adds.len(), 1);
@@ -690,21 +641,17 @@ mod tests {
         let config = PartitionWriterConfig::try_new(
             schema,
             IndexMap::new(),
-            Some(properties),
-            Some(ArrowWriterOptions::new().with_enable_parallel_encoding(parallel)),
-            target_file_size.and_then(NonZeroU64::new),
-            Some(8),
+            test_props(
+                Some(properties),
+                Some(ArrowWriterOptions::new().with_enable_parallel_encoding(parallel)),
+                target_file_size.and_then(NonZeroU64::new),
+                Some(8),
+            ),
             None,
             None,
         )
         .unwrap();
-        let mut writer = PartitionWriter::try_with_config(
-            object_store.clone(),
-            config,
-            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
-            None,
-        )
-        .unwrap();
+        let mut writer = PartitionWriter::try_with_config(object_store.clone(), config).unwrap();
         writer.write(&batch).await.unwrap();
         writer.write(&batch).await.unwrap();
         let adds = writer.close().await.unwrap();
@@ -788,22 +735,18 @@ mod tests {
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
             IndexMap::new(),
-            Some(properties),
-            None,
-            Some(NonZeroU64::new(10_000).unwrap()),
-            Some(700),
+            test_props(
+                Some(properties),
+                None,
+                Some(NonZeroU64::new(10_000).unwrap()),
+                Some(700),
+            ),
             None,
             None,
         )
         .unwrap()
         .with_roll_on_row_group_boundary(roll_on_row_group_boundary);
-        let mut writer = PartitionWriter::try_with_config(
-            object_store.clone(),
-            config,
-            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
-            None,
-        )
-        .unwrap();
+        let mut writer = PartitionWriter::try_with_config(object_store.clone(), config).unwrap();
         writer.write(&batch).await.unwrap();
         let adds = writer.close().await.unwrap();
         // the byte target still splits the write into multiple files
@@ -853,10 +796,7 @@ mod tests {
         let result = PartitionWriterConfig::try_new(
             schema,
             IndexMap::new(),
-            None,
-            None,
-            None,
-            Some(0),
+            test_props(None, None, None, Some(0)),
             None,
             None,
         );

@@ -1,27 +1,22 @@
 //! Dataset tier: [`DeltaWriter`] sends each batch to the [`PartitionWriter`] of its partition.
 
 use std::collections::HashMap;
-use std::num::NonZeroU64;
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use delta_kernel::expressions::Scalar;
-use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use futures::{Stream, StreamExt};
 use indexmap::IndexMap;
 use object_store::path::Path;
-use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use tracing::*;
 
-use super::partition::DEFAULT_WRITE_BATCH_SIZE;
 use super::{PartitionWriter, PartitionWriterConfig, UploadBudget, WriteError};
 use crate::datafile::writer::parallel::ArrowWriterOptions;
-use crate::datafile::{BatchStream, DeltaDataWriter};
+use crate::datafile::{BatchStream, DeltaDataWriter, DeltaWriterProperties};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
-use crate::parquet_utils::default_writer_properties;
 use crate::writer::partition_split::{PartitionResult, divide_by_partition_values};
 use crate::writer::utils::{arrow_schema_without_partitions, record_batch_without_partitions};
 
@@ -32,23 +27,14 @@ pub struct WriterConfig {
     table_schema: ArrowSchemaRef,
     /// Column names for columns the table is partitioned by
     partition_columns: Vec<String>,
-    /// Properties passed to underlying parquet writer
-    writer_properties: WriterProperties,
-    /// Options passed to the underlying arrow writer
-    arrow_options: ArrowWriterOptions,
-    /// Size above which we will write a buffered parquet file to disk.
-    /// If None, the writer will not create a new file until the writer is closed.
-    target_file_size: Option<NonZeroU64>,
-    /// Row chunks passed to parquet writer. This and the internal parquet writer settings
-    /// determine how fine granular we can track / control the size of resulting files.
-    write_batch_size: usize,
-    /// Num index cols to collect stats for
-    num_indexed_cols: DataSkippingNumIndexedCols,
-    /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
-    stats_columns: Option<Vec<String>>,
+    /// How the data files are encoded
+    props: DeltaWriterProperties,
     /// When set, write data files under a random prefix directory of this length instead of
     /// Hive-style partition dirs — keeps physical (UUID) column names out of paths under CM.
     random_prefix_length: Option<usize>,
+    /// Directory under the table root the data files go below (`_change_data`);
+    /// `None` is the root.
+    path_prefix: Option<Path>,
     /// [`UploadBudget`] for closed files still uploading. Every writer built from this
     /// config, or from a clone of it, shares it.
     upload_budget: UploadBudget,
@@ -56,33 +42,26 @@ pub struct WriterConfig {
 
 impl WriterConfig {
     /// Create a new instance of [WriterConfig].
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         table_schema: ArrowSchemaRef,
         partition_columns: Vec<String>,
-        writer_properties: Option<WriterProperties>,
-        arrow_options: Option<ArrowWriterOptions>,
-        target_file_size: Option<NonZeroU64>,
-        write_batch_size: Option<usize>,
-        num_indexed_cols: DataSkippingNumIndexedCols,
-        stats_columns: Option<Vec<String>>,
+        props: DeltaWriterProperties,
     ) -> Self {
-        let writer_properties =
-            writer_properties.unwrap_or_else(|| default_writer_properties(Compression::SNAPPY));
-        let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
-
         Self {
             table_schema,
             partition_columns,
-            writer_properties,
-            arrow_options: arrow_options.unwrap_or_default(),
-            target_file_size,
-            write_batch_size,
-            num_indexed_cols,
-            stats_columns,
             random_prefix_length: None,
-            upload_budget: UploadBudget::for_write(target_file_size),
+            path_prefix: None,
+            upload_budget: UploadBudget::for_write(props.target_file_size()),
+            props,
         }
+    }
+
+    /// Write every data file below `prefix` under the table root, so the returned
+    /// [`Add`] paths stay table-relative.
+    pub fn with_path_prefix(mut self, prefix: Option<Path>) -> Self {
+        self.path_prefix = prefix;
+        self
     }
 
     /// Draw on `budget` instead of the fresh one [`WriterConfig::new`] makes, so configs
@@ -135,13 +114,13 @@ impl DeltaWriter {
 
     /// Apply custom writer_properties to the underlying parquet writer
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.config.writer_properties = writer_properties;
+        self.config.props.parquet = Some(writer_properties);
         self
     }
 
     /// Apply custom arrow_options to the underlying arrow writer
     pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
-        self.config.arrow_options = arrow_options;
+        self.config.props.arrow = arrow_options;
         self
     }
 
@@ -162,27 +141,26 @@ impl DeltaWriter {
         &self,
         partition_values: IndexMap<String, Scalar>,
     ) -> DeltaResult<PartitionWriter> {
-        let prefix_override = match self.config.random_prefix_length {
-            Some(length) => Some(Path::parse(random_prefix(length))?),
-            None => None,
+        let partition_prefix = match self.config.random_prefix_length {
+            Some(length) => Path::parse(random_prefix(length))?,
+            None => Path::parse(partition_values.hive_partition_path())?,
+        };
+        let prefix = match &self.config.path_prefix {
+            Some(path_prefix) => path_prefix
+                .parts()
+                .chain(partition_prefix.parts())
+                .collect(),
+            None => partition_prefix,
         };
         let config = PartitionWriterConfig::try_new(
             self.file_schema.clone(),
             partition_values,
-            Some(self.config.writer_properties.clone()),
-            Some(self.config.arrow_options.clone()),
-            self.config.target_file_size,
-            Some(self.config.write_batch_size),
+            self.config.props.clone(),
             None,
-            prefix_override,
+            Some(prefix),
         )?
         .with_upload_budget(self.config.upload_budget.clone());
-        PartitionWriter::try_with_config(
-            self.object_store.clone(),
-            config,
-            self.config.num_indexed_cols,
-            self.config.stats_columns.clone(),
-        )
+        PartitionWriter::try_with_config(self.object_store.clone(), config)
     }
 
     /// Find-or-create the partition writer for `key` and stream `batch` into it.
@@ -396,13 +374,14 @@ fn random_prefix(length: usize) -> String {
 mod tests {
     use super::*;
     use crate::DeltaTableBuilder;
-    use crate::datafile::writer::test_utils::assert_default_created_by;
+    use crate::datafile::writer::test_utils::{assert_default_created_by, test_props};
     use crate::logstore::tests::flatten_list_stream as list;
-    use crate::table::config::DEFAULT_NUM_INDEX_COLS;
     use crate::writer::test_utils::get_record_batch;
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+    use parquet::basic::Compression;
     use parquet::schema::types::ColumnPath;
+    use std::num::NonZeroU64;
     use std::sync::Arc;
 
     fn get_delta_writer(
@@ -415,12 +394,7 @@ mod tests {
         let config = WriterConfig::new(
             batch.schema(),
             vec![],
-            writer_properties,
-            None,
-            target_file_size,
-            write_batch_size,
-            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
-            None,
+            test_props(writer_properties, None, target_file_size, write_batch_size),
         );
         DeltaWriter::new(object_store, config)
     }
@@ -432,22 +406,12 @@ mod tests {
             DataType::Int32,
             true,
         )]));
-        let config = WriterConfig::new(
-            schema,
-            vec![],
-            None,
-            None,
-            None,
-            None,
-            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
-            None,
-        );
+        let config = WriterConfig::new(schema, vec![], DeltaWriterProperties::default());
 
-        assert_default_created_by(&config.writer_properties);
+        let writer_properties = config.props.parquet_properties_or_default();
+        assert_default_created_by(writer_properties);
         assert_eq!(
-            config
-                .writer_properties
-                .compression(&ColumnPath::from("id")),
+            writer_properties.compression(&ColumnPath::from("id")),
             Compression::SNAPPY
         );
     }
@@ -502,6 +466,29 @@ mod tests {
         };
     }
 
+    #[tokio::test]
+    async fn path_prefix_puts_files_below_it() {
+        let object_store: ObjectStoreRef = Arc::new(object_store::memory::InMemory::new());
+        let batch = get_record_batch(None, false);
+        let config = WriterConfig::new(
+            batch.schema(),
+            vec!["modified".to_string()],
+            DeltaWriterProperties::default(),
+        )
+        .with_path_prefix(Some(Path::from("_change_data")));
+        let mut writer = DeltaWriter::new(object_store, config);
+        writer.write(&batch).await.unwrap();
+        let adds = writer.close().await.unwrap();
+        assert!(!adds.is_empty());
+        for add in adds {
+            assert!(
+                add.path.starts_with("_change_data/modified="),
+                "{}",
+                add.path
+            );
+        }
+    }
+
     #[test]
     fn test_writer_config_clones_share_one_upload_budget() {
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
@@ -509,16 +496,7 @@ mod tests {
             DataType::Int32,
             true,
         )]));
-        let config = WriterConfig::new(
-            schema.clone(),
-            vec![],
-            None,
-            None,
-            None,
-            None,
-            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
-            None,
-        );
+        let config = WriterConfig::new(schema.clone(), vec![], DeltaWriterProperties::default());
         let clone = config.clone();
         // Every writer of one write is built from clones of one config, so the
         // partitioned path shares a single bound.
@@ -526,16 +504,7 @@ mod tests {
             &config.upload_budget.semaphore,
             &clone.upload_budget.semaphore
         ));
-        let other = WriterConfig::new(
-            schema,
-            vec![],
-            None,
-            None,
-            None,
-            None,
-            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
-            None,
-        );
+        let other = WriterConfig::new(schema, vec![], DeltaWriterProperties::default());
         // A separate write gets its own budget.
         assert!(!Arc::ptr_eq(
             &config.upload_budget.semaphore,

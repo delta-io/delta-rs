@@ -21,11 +21,11 @@ use std::sync::Arc;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use delta_kernel::expressions::Scalar;
-use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use object_store::ObjectStore;
 use parquet::file::properties::WriterProperties;
 
+use crate::datafile::DeltaWriterProperties;
 use crate::datafile::writer::{ArrowWriterOptions, DeltaWriter as DatasetSink, WriterConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::Add;
@@ -36,26 +36,13 @@ use crate::kernel::Add;
 pub(crate) struct SinkFactory {
     pub(crate) storage: Arc<dyn ObjectStore>,
     pub(crate) partition_columns: Vec<String>,
-    pub(crate) writer_properties: WriterProperties,
-    pub(crate) arrow_options: ArrowWriterOptions,
-    pub(crate) target_file_size: Option<NonZeroU64>,
-    pub(crate) num_indexed_cols: DataSkippingNumIndexedCols,
-    pub(crate) stats_columns: Option<Vec<String>>,
+    pub(crate) props: DeltaWriterProperties,
 }
 
 impl SinkFactory {
     /// Open a fresh streaming sink encoding under `schema`.
     fn build(&self, schema: ArrowSchemaRef) -> DatasetSink {
-        let config = WriterConfig::new(
-            schema,
-            self.partition_columns.clone(),
-            Some(self.writer_properties.clone()),
-            Some(self.arrow_options.clone()),
-            self.target_file_size,
-            None,
-            self.num_indexed_cols,
-            self.stats_columns.clone(),
-        );
+        let config = WriterConfig::new(schema, self.partition_columns.clone(), self.props.clone());
         DatasetSink::new(self.storage.clone(), config)
     }
 }
@@ -122,22 +109,22 @@ impl WriteWindow {
     /// on the default `created_by` metadata).
     #[cfg(test)]
     pub(crate) fn writer_properties(&self) -> &WriterProperties {
-        &self.factory.writer_properties
+        self.factory.props.parquet_properties_or_default()
     }
 
     /// Set the target file size used for sinks opened from now on.
     pub(crate) fn set_target_file_size(&mut self, target_file_size: Option<NonZeroU64>) {
-        self.factory.target_file_size = target_file_size;
+        self.factory.props.target_file_size = target_file_size;
     }
 
     /// Set the writer properties used for sinks opened from now on.
     pub(crate) fn set_writer_properties(&mut self, writer_properties: WriterProperties) {
-        self.factory.writer_properties = writer_properties;
+        self.factory.props.parquet = Some(writer_properties);
     }
 
     /// Set the arrow writer options used for sinks opened from now on.
     pub(crate) fn set_arrow_options(&mut self, arrow_options: ArrowWriterOptions) {
-        self.factory.arrow_options = arrow_options;
+        self.factory.props.arrow = arrow_options;
     }
 
     /// Schema widening rotates the whole window's sink, which only makes sense when
@@ -323,7 +310,10 @@ mod tests {
 
     use arrow_array::{Int32Array, StringArray};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use delta_kernel::table_properties::DataSkippingNumIndexedCols;
     use object_store::memory::InMemory;
+
+    use crate::datafile::WriterStatsConfig;
 
     fn schema_one() -> ArrowSchemaRef {
         Arc::new(ArrowSchema::new(vec![Field::new(
@@ -359,11 +349,12 @@ mod tests {
         let factory = SinkFactory {
             storage: Arc::new(InMemory::new()),
             partition_columns: vec![],
-            writer_properties: WriterProperties::builder().build(),
-            arrow_options: ArrowWriterOptions::default(),
-            target_file_size: None,
-            num_indexed_cols: DataSkippingNumIndexedCols::AllColumns,
-            stats_columns: None,
+            props: DeltaWriterProperties::default()
+                .with_parquet_properties(WriterProperties::builder().build())
+                .with_stats_config(WriterStatsConfig::new(
+                    DataSkippingNumIndexedCols::AllColumns,
+                    None,
+                )),
         };
         WriteWindow::new(factory, schema)
     }
@@ -464,13 +455,16 @@ mod tests {
         let factory = SinkFactory {
             storage: store,
             partition_columns: vec![],
-            writer_properties: WriterProperties::builder()
-                .set_dictionary_enabled(false)
-                .build(),
-            arrow_options: ArrowWriterOptions::default(),
-            target_file_size: None,
-            num_indexed_cols: DataSkippingNumIndexedCols::AllColumns,
-            stats_columns: None,
+            props: DeltaWriterProperties::default()
+                .with_parquet_properties(
+                    WriterProperties::builder()
+                        .set_dictionary_enabled(false)
+                        .build(),
+                )
+                .with_stats_config(WriterStatsConfig::new(
+                    DataSkippingNumIndexedCols::AllColumns,
+                    None,
+                )),
         };
         let mut w = WriteWindow::new(factory, schema_one());
 
