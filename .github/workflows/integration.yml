@@ -122,8 +122,8 @@ jobs:
           tar -xf hadoop-3.4.0.tar.gz -C $GITHUB_WORKSPACE
           echo "$GITHUB_WORKSPACE/hadoop-3.4.0/bin" >> $GITHUB_PATH
 
-      # MiniDfs is started via mvn, and the HDFS tests started hanging when runner
-      # images moved to Maven 3.10.0, so pin to the last known good version.
+      # Temporarily pin to a known good version of Maven. Runner images use Maven 3.10.0 which broke running minidfs in hdfs-native.
+      # This should be reverted once we've picked up the fix in https://github.com/Kimahriman/hdfs-native/pull/335.
       - name: Install Maven
         run: |
           MAVEN_VERSION=3.9.16
