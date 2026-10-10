@@ -115,7 +115,6 @@ pyspark = [
     "pyspark==4.0.1",
     "delta-spark",
     "pandas<3",
-    "numpy==1.26.4", # pyspark is not compatible with latest numpy
 ]
 other = [
     "azure-storage-blob==12.20.0",
