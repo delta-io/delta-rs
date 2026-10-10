@@ -632,6 +632,46 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
+async fn test_optimize_preserves_int96_timestamps_outside_nanosecond_range()
+-> Result<(), Box<dyn Error>> {
+    let tmp_dir = tempfile::tempdir()?;
+    fs_extra::dir::copy(
+        "../test/tests/data/table_with_edge_timestamps",
+        tmp_dir.path(),
+        &Default::default(),
+    )?;
+    let table_dir = tmp_dir.path().join("table_with_edge_timestamps");
+    let table_url = url::Url::from_directory_path(table_dir.canonicalize()?).unwrap();
+    let table = open_table(table_url).await?;
+
+    let (table, metrics) = table.optimize().await?;
+    assert_eq!(metrics.num_files_added, 1);
+
+    let ctx: SessionContext = DeltaSessionContext::default().into();
+    table.update_datafusion_session(&ctx.state())?;
+    ctx.register_table("demo", table.table_provider().await?)?;
+    let batches = ctx
+        .sql("SELECT \"BIG_DATE\", \"SOME_VALUE\" FROM demo")
+        .await?
+        .collect()
+        .await?;
+
+    datafusion::assert_batches_sorted_eq!(
+        [
+            "+----------------------+------------+",
+            "| BIG_DATE             | SOME_VALUE |",
+            "+----------------------+------------+",
+            "| 9999-12-30T00:00:00Z | 2          |",
+            "| 9999-12-31T00:00:00Z | 1          |",
+            "+----------------------+------------+",
+        ],
+        &batches
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_write_default_writer_properties_include_delta_rs_created_by()
 -> Result<(), Box<dyn Error>> {
     let context = setup_test(false).await?;
