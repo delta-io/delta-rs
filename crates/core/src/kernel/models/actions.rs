@@ -935,6 +935,30 @@ pub struct DeletionVectorDescriptor {
     pub cardinality: i64,
 }
 
+impl TryFrom<DeletionVectorDescriptor>
+    for delta_kernel::actions::deletion_vector::DeletionVectorDescriptor
+{
+    type Error = delta_kernel::Error;
+
+    fn try_from(dv: DeletionVectorDescriptor) -> Result<Self, Self::Error> {
+        use delta_kernel::actions::deletion_vector::DeletionVectorStorageType;
+
+        let storage_type = match dv.storage_type {
+            StorageType::UuidRelativePath => DeletionVectorStorageType::PersistedRelative,
+            StorageType::Inline => DeletionVectorStorageType::Inline,
+            StorageType::AbsolutePath => DeletionVectorStorageType::PersistedAbsolute,
+        };
+
+        Self::try_new(
+            storage_type,
+            dv.path_or_inline_dv,
+            dv.offset,
+            dv.size_in_bytes,
+            dv.cardinality,
+        )
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 /// Defines an add action

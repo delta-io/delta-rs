@@ -27,19 +27,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use chrono::{Duration, Utc};
+use delta_kernel::actions::deletion_vector::DeletionVectorDescriptor as KernelDeletionVectorDescriptor;
 use futures::channel::mpsc;
 use futures::future::{BoxFuture, ready};
 use futures::{SinkExt, Stream, StreamExt, TryStreamExt, stream};
 use object_store::{Error, ObjectStore, path::Path};
 use serde::Serialize;
 use tracing::*;
+use url::Url;
 
 use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
-    ActiveAddOptions, AddStatsPolicy, EagerSnapshot, Snapshot, TombstoneView, Version,
-    resolve_snapshot,
+    ActiveAddOptions, AddStatsPolicy, EagerSnapshot, LogicalFileView, Snapshot, TombstoneView,
+    Version, resolve_snapshot,
 };
 use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef};
@@ -73,6 +75,7 @@ async fn collect_active_paths(
     snapshot: &Snapshot,
     log_store: &dyn LogStore,
 ) -> DeltaResult<HashSet<Path>> {
+    let table_root = snapshot.table_configuration().table_root();
     snapshot
         .active_adds(
             log_store,
@@ -81,9 +84,28 @@ async fn collect_active_paths(
                 stats: AddStatsPolicy::None,
             },
         )
-        .map_ok(|file| file.object_store_path())
-        .try_collect()
+        .try_fold(HashSet::new(), |mut paths, file| {
+            ready(deletion_vector_path(&file, table_root).map(|dv_path| {
+                paths.insert(file.object_store_path());
+                paths.extend(dv_path);
+                paths
+            }))
+        })
         .await
+}
+
+fn deletion_vector_path(file: &LogicalFileView, table_root: &Url) -> DeltaResult<Option<Path>> {
+    let Some(dv) = file.deletion_vector_descriptor() else {
+        return Ok(None);
+    };
+    let dv = KernelDeletionVectorDescriptor::try_from(dv)?;
+    let Some(dv_url) = dv.absolute_path(table_root)? else {
+        return Ok(None);
+    };
+    match table_root.make_relative(&dv_url) {
+        Some(relative) if !relative.starts_with("../") => Ok(Some(Path::from_url_path(relative)?)),
+        _ => Ok(None),
+    }
 }
 
 fn tombstone_object_store_path(tombstone: &TombstoneView) -> Path {
@@ -1436,6 +1458,28 @@ mod tests {
                 "part-00001-185eca06-e017-4dea-ae49-fc48b973e37e-c000.snappy.parquet",
                 "part-00001-4327c977-2734-4477-9507-7ccf67924649-c000.snappy.parquet",
             ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_vacuum_full_keeps_active_deletion_vectors() -> DeltaResult<()> {
+        let table_path = Path::new("../test/tests/data/table-with-dv-small");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = open_table(table_uri).await?;
+
+        let (_table, result) =
+            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                .with_retention_period(Duration::hours(0))
+                .with_dry_run(true)
+                .with_mode(VacuumMode::Full)
+                .with_enforce_retention_duration(false)
+                .await?;
+        assert!(
+            result.files_deleted.is_empty(),
+            "full vacuum would delete files referenced by the table: {:?}",
+            result.files_deleted
         );
         Ok(())
     }
