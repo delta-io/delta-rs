@@ -1102,6 +1102,79 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
+/// Validate that optimize of one partition succeeds when files in another partition are removed
+async fn test_no_conflict_for_remove_actions_in_other_partition() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(1, 2), (1, 3), (1, 4)], "2022-05-22")?,
+    )
+    .await?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(2, 2), (2, 3), (2, 4)], "2022-05-22")?,
+    )
+    .await?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(3, 2), (3, 3), (3, 4)], "2022-05-23")?,
+    )
+    .await?;
+
+    let version = dt.version().unwrap();
+
+    let df_context: SessionContext = DeltaSessionContext::default().into();
+
+    let filter = vec![("date", FilterOp::Eq, FilterValue::Scalar("2022-05-22"))];
+    let plan = create_merge_plan(
+        &dt.log_store(),
+        OptimizeType::Compact,
+        dt.snapshot()?.snapshot(),
+        &filter,
+        None,
+        WriterProperties::builder().build(),
+        ArrowWriterOptions::default(),
+        df_context.state(),
+    )
+    .await?;
+
+    let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
+    let table_url = ensure_table_uri(uri).unwrap();
+    let other_dt = deltalake_core::open_table(table_url).await?;
+    other_dt
+        .delete()
+        .with_predicate("date = '2022-05-23'")
+        .await?;
+
+    let metrics = plan
+        .execute(
+            dt.log_store(),
+            dt.snapshot()?.snapshot(),
+            1,
+            None,
+            CommitProperties::default(),
+        )
+        .await?;
+
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 2);
+
+    // the delete and the optimize both committed
+    dt.update_state().await.unwrap();
+    assert_eq!(dt.version().unwrap(), version + 2);
+
+    Ok(())
+}
+
+#[tokio::test]
 /// Validate that optimize creates multiple commits when min_commin_interval is set
 async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
     let context = setup_test(true).await?;
