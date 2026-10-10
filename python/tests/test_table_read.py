@@ -69,6 +69,18 @@ def test_table_count():
     assert dt.count() == 1111930
 
 
+@pytest.mark.parametrize(
+    "table_name",
+    ["table-with-dv-small", "table_with_deletion_logs", "table-without-dv-small"],
+)
+def test_table_count_matches_rows_read(table_name: str):
+    dt = DeltaTable(f"../crates/test/tests/data/{table_name}")
+    rows_read = (
+        QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
+    )
+    assert dt.count() == rows_read.num_rows
+
+
 class _SerializableException(BaseException):
     pass
 
