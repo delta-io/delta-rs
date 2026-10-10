@@ -41,7 +41,7 @@ arrow-schema = { workspace = true, features = ["serde"] }
 arrow-select = { workspace = true }
 parquet = { workspace = true, features = ["async", "object_store"] }
 object_store = { workspace = true }
-roaring = "0.11.4"
+roaring = "0.11.5"
 
 # datafusion
 datafusion = { workspace = true, optional = true }
@@ -86,11 +86,11 @@ tempfile = { workspace = true, optional = true }
 # other deps (these should be organized and pulled into workspace.dependencies as necessary)
 cfg-if = "1"
 dashmap = "6"
-dirs = "6.0"
+dirs = "7.0"
 either = "1.8"
 foldhash = "0.2"
 indexmap = "2.2.1"
-itertools = "0.14"
+itertools = "0.15"
 parking_lot = "0.12"
 percent-encoding = "2"
 pin-project-lite = "^0.2.7"
@@ -98,20 +98,20 @@ tracing = { workspace = true }
 rand = "0.10"
 sqlparser = "0.62"
 humantime = { version = "2.1.0", optional = true }
-validator = { version = "0.19", features = ["derive"] }
+validator = { version = "0.21", features = ["derive"] }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["prettyprint"]}
 criterion = "0.5"
-ctor = "0"
+ctor = "1"
 deltalake-test = { path = "../test" }
 dotenvy = "0"
 fs_extra = "1.2.0"
 parquet = { workspace = true, features = ["variant_experimental"] }
 pretty_assertions = "1.2.1"
 pretty_env_logger = "0.5.0"
-rstest = { version = "0.26.1" }
-serial_test = "3"
+rstest = { version = "0.27" }
+serial_test = "4"
 tempfile = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.5"
