@@ -1,6 +1,7 @@
 import json
 import multiprocessing
 import os
+import shutil
 import time
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import date, datetime, timezone
@@ -53,6 +54,42 @@ def test_read_table_with_edge_timestamps():
         9999, 12, 31, 0, 0, 0, tzinfo=timezone.utc
     )
     assert len(list(dataset.get_fragments(predicate))) == 1
+
+
+def _query_edge_timestamps(dt: DeltaTable) -> dict[str, list[Any]]:
+    result = (
+        QueryBuilder()
+        .register("t", dt)
+        .execute('select "BIG_DATE", "SOME_VALUE" from t order by "SOME_VALUE"')
+        .read_all()
+    )
+    return {
+        "BIG_DATE": result["BIG_DATE"].to_pylist(),
+        "SOME_VALUE": result["SOME_VALUE"].to_pylist(),
+    }
+
+
+EDGE_TIMESTAMPS = {
+    "BIG_DATE": [
+        datetime(9999, 12, 31, tzinfo=timezone.utc),
+        datetime(9999, 12, 30, tzinfo=timezone.utc),
+    ],
+    "SOME_VALUE": [1, 2],
+}
+
+
+def test_query_builder_reads_int96_timestamps_outside_nanosecond_range():
+    dt = DeltaTable("../crates/test/tests/data/table_with_edge_timestamps")
+    assert _query_edge_timestamps(dt) == EDGE_TIMESTAMPS
+
+
+def test_compact_preserves_int96_timestamps_outside_nanosecond_range(tmp_path: Path):
+    table_path = tmp_path / "table_with_edge_timestamps"
+    shutil.copytree("../crates/test/tests/data/table_with_edge_timestamps", table_path)
+    dt = DeltaTable(table_path)
+
+    assert dt.optimize.compact()["numFilesAdded"] == 1
+    assert _query_edge_timestamps(dt) == EDGE_TIMESTAMPS
 
 
 def test_read_simple_table_to_dict():
