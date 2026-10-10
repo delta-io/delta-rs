@@ -20,15 +20,13 @@ use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::table_configuration::TableConfiguration;
 use futures::TryStreamExt as _;
 use itertools::Itertools as _;
-use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
-use super::configs::WriteExecOptions;
 use super::generated_columns::{gc_is_enabled, with_generated_columns};
 use super::metrics::SOURCE_COUNT_ID;
 use super::schema_evolution::try_cast_schema;
 use super::{SchemaMode, WriteError};
-use crate::datafile::writer::ArrowWriterOptions;
+use crate::datafile::DeltaWriterProperties;
 use crate::delta_datafusion::logical::{LogicalPlanBuilderExt as _, MetricObserver};
 use crate::delta_datafusion::{
     DataFusionMixins, Expression, analyze_predicate_for_find_files, scan_files_where_matches,
@@ -92,7 +90,7 @@ pub(super) struct PreparedWrite {
     mode: SaveMode,
     pub(super) schema_delta: SchemaDelta,
     pub(super) exact_validation: Option<Expr>,
-    pub(super) exec_options: WriteExecOptions,
+    pub(super) writer_properties: DeltaWriterProperties,
 }
 
 /// Inputs required to normalize source rows into table shaped insert data.
@@ -106,9 +104,7 @@ pub(super) struct WritePreparationInput<'a> {
     pub(super) partition_columns: Vec<String>,
     pub(super) predicate: Option<Expression>,
     pub(super) target_file_size: Option<Option<NonZeroU64>>,
-    pub(super) write_batch_size: Option<usize>,
-    pub(super) writer_properties: Option<WriterProperties>,
-    pub(super) arrow_options: Option<ArrowWriterOptions>,
+    pub(super) writer_properties: DeltaWriterProperties,
     pub(super) configuration: &'a HashMap<String, Option<String>>,
 }
 
@@ -285,9 +281,7 @@ pub(super) fn prepare_write(input: WritePreparationInput<'_>) -> DeltaResult<Pre
         partition_columns,
         predicate,
         target_file_size,
-        write_batch_size,
         writer_properties,
-        arrow_options,
         configuration,
     } = input;
 
@@ -419,12 +413,10 @@ pub(super) fn prepare_write(input: WritePreparationInput<'_>) -> DeltaResult<Pre
         mode,
         schema_delta,
         exact_validation,
-        exec_options: build_exec_options(
+        writer_properties: resolve_target_file_size(
             snapshot,
             target_file_size,
-            write_batch_size,
             writer_properties,
-            arrow_options,
             configuration,
         ),
     })
@@ -696,24 +688,19 @@ fn align_plan_to_schema(plan: LogicalPlan, target_plan: &LogicalPlan) -> DeltaRe
     Ok(LogicalPlanBuilder::new(plan).project(projection)?.build()?)
 }
 
-fn build_exec_options(
+/// The builder's target file size wins (explicit `None` never rolls), then the
+/// writer properties', then the table's.
+fn resolve_target_file_size(
     snapshot: Option<&EagerSnapshot>,
     target_file_size: Option<Option<NonZeroU64>>,
-    write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
-    arrow_options: Option<ArrowWriterOptions>,
+    writer_properties: DeltaWriterProperties,
     configuration: &HashMap<String, Option<String>>,
-) -> WriteExecOptions {
+) -> DeltaWriterProperties {
     let config = snapshot.map(|snapshot| snapshot.table_properties());
-    let target_file_size =
-        target_file_size.unwrap_or_else(|| Some(get_target_file_size(config, configuration)));
-
-    WriteExecOptions {
-        target_file_size,
-        write_batch_size,
-        writer_properties,
-        arrow_options,
-    }
+    let target_file_size = target_file_size
+        .or_else(|| writer_properties.target_file_size().map(Some))
+        .unwrap_or_else(|| Some(get_target_file_size(config, configuration)));
+    writer_properties.with_target_file_size(target_file_size)
 }
 
 fn resolve_exact_validation(
@@ -912,9 +899,7 @@ mod tests {
             partition_columns: vec![],
             predicate: None,
             target_file_size: None,
-            write_batch_size: None,
-            writer_properties: None,
-            arrow_options: None,
+            writer_properties: DeltaWriterProperties::default(),
             configuration: &configuration,
         })
         .unwrap();
@@ -955,9 +940,7 @@ mod tests {
             partition_columns: vec![],
             predicate: None,
             target_file_size: None,
-            write_batch_size: None,
-            writer_properties: None,
-            arrow_options: None,
+            writer_properties: DeltaWriterProperties::default(),
             configuration: &configuration,
         })
         .unwrap();
@@ -981,9 +964,7 @@ mod tests {
             partition_columns: vec![],
             predicate: Some(col("id").eq(lit("A")).into()),
             target_file_size: None,
-            write_batch_size: None,
-            writer_properties: None,
-            arrow_options: None,
+            writer_properties: DeltaWriterProperties::default(),
             configuration: &configuration,
         })
         .unwrap();
@@ -1018,9 +999,7 @@ mod tests {
             partition_columns: vec![],
             predicate: Some(col("id").eq(lit("A")).into()),
             target_file_size: None,
-            write_batch_size: None,
-            writer_properties: None,
-            arrow_options: None,
+            writer_properties: DeltaWriterProperties::default(),
             configuration: &configuration,
         })
         .unwrap();
@@ -1058,9 +1037,7 @@ mod tests {
             partition_columns: vec![],
             predicate: None,
             target_file_size: None,
-            write_batch_size: None,
-            writer_properties: None,
-            arrow_options: None,
+            writer_properties: DeltaWriterProperties::default(),
             configuration: &configuration,
         })
         .unwrap();
@@ -1105,9 +1082,7 @@ mod tests {
             partition_columns: vec![],
             predicate: Some(col("id").eq(lit("missing")).into()),
             target_file_size: None,
-            write_batch_size: None,
-            writer_properties: None,
-            arrow_options: None,
+            writer_properties: DeltaWriterProperties::default(),
             configuration: &configuration,
         })
         .unwrap();
@@ -1162,9 +1137,7 @@ mod tests {
             partition_columns: vec!["id".to_string()],
             predicate: Some(col("id").eq(lit("A")).into()),
             target_file_size: None,
-            write_batch_size: None,
-            writer_properties: None,
-            arrow_options: None,
+            writer_properties: DeltaWriterProperties::default(),
             configuration: &configuration,
         })
         .unwrap();
@@ -1229,9 +1202,7 @@ mod tests {
             partition_columns: vec![],
             predicate: None,
             target_file_size: None,
-            write_batch_size: None,
-            writer_properties: None,
-            arrow_options: None,
+            writer_properties: DeltaWriterProperties::default(),
             configuration: &configuration,
         })
         .unwrap();
@@ -1292,9 +1263,7 @@ mod tests {
             partition_columns: vec![],
             predicate: Some(col("value").eq(lit(3)).into()),
             target_file_size: None,
-            write_batch_size: None,
-            writer_properties: None,
-            arrow_options: None,
+            writer_properties: DeltaWriterProperties::default(),
             configuration: &configuration,
         })
         .unwrap();
