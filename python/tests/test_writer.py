@@ -2601,6 +2601,42 @@ def test_write_timestamp(tmp_path: pathlib.Path):
     assert protocol.min_writer_version == 2
 
 
+@pytest.mark.pyarrow
+def test_write_naive_timestamp_into_utc_timestamp_column(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    utc = pa.timestamp("us", tz="UTC")
+    first = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    write_deltalake(tmp_path, pa.table({"t": pa.array([first], utc)}))
+    dt = DeltaTable(tmp_path)
+    protocol_before = dt.protocol()
+    schema_before = dt.schema()
+    naive = pa.table({"t": pa.array([datetime(2024, 1, 2)], pa.timestamp("us"))})
+
+    for mode in ("append", "overwrite"):
+        with pytest.raises(SchemaMismatchError) as exc_info:
+            write_deltalake(tmp_path, naive, mode=mode)
+        message = str(exc_info.value)
+        assert "column `t`" in message
+        assert "timestamp_ntz" in message
+        assert "`timestamp` (UTC)" in message
+        assert 'schema_mode="merge"' in message
+
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 0
+    assert dt.protocol() == protocol_before
+    assert dt.schema() == schema_before
+
+    write_deltalake(tmp_path, naive, mode="append", schema_mode="merge")
+
+    dt = DeltaTable(tmp_path)
+    assert dt.protocol() == protocol_before
+    assert dt.schema() == schema_before
+    second = datetime(2024, 1, 2, tzinfo=timezone.utc)
+    result = dt.to_pyarrow_table().sort_by("t")
+    assert result == pa.table({"t": pa.array([first, second], utc)})
+
+
 def test_write_transactions(tmp_path: pathlib.Path, sample_table: Table):
     expected_transactions = [
         Transaction(app_id="app_1", version=1),
