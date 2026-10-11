@@ -11,6 +11,7 @@
 //! let df = ctx.read_table(provider).await?;
 
 use crate::DeltaTableError;
+use crate::datafile::ReaderProperties;
 use crate::delta_datafusion::{
     DataFusionMixins, DeltaSessionExt, extract_partition_only_predicate,
 };
@@ -26,7 +27,6 @@ use chrono::{DateTime, Utc};
 use datafusion::catalog::Session;
 use datafusion::common::DFSchema;
 use datafusion::common::ScalarValue;
-use datafusion::config::TableParquetOptions;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
@@ -607,10 +607,7 @@ impl CdfLoadBuilder {
         let remove_table_schema = TableSchema::builder(Arc::clone(&add_remove_file_schema))
             .with_table_partition_cols(add_remove_partition_fields)
             .build();
-        let parquet_options = TableParquetOptions {
-            global: session.config().options().execution.parquet.clone(),
-            ..Default::default()
-        };
+        let parquet_options = ReaderProperties::default().to_table_parquet_options(session);
         let metadata_size_hint = parquet_options.global.metadata_size_hint;
 
         let mut cdc_source = ParquetSource::new(cdc_table_schema)
@@ -842,6 +839,52 @@ pub(crate) mod tests {
         let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri).await?;
         Ok((temp_dir, table))
+    }
+
+    #[tokio::test]
+    async fn test_load_int96_timestamps_outside_nanosecond_range() -> TestResult {
+        let temp_dir = tempfile::tempdir()?;
+        fs_extra::dir::copy(
+            "../test/tests/data/table_with_edge_timestamps",
+            temp_dir.path(),
+            &Default::default(),
+        )?;
+        let table_path = temp_dir.path().join("table_with_edge_timestamps");
+        std::fs::remove_file(table_path.join("_delta_log/00000000000000000000.crc"))?;
+        let log_path = table_path.join("_delta_log/00000000000000000000.json");
+        let log = std::fs::read_to_string(&log_path)?;
+        let updated_log = log
+            .replace("\"minWriterVersion\":2", "\"minWriterVersion\":4")
+            .replace(
+                "\"configuration\":{}",
+                "\"configuration\":{\"delta.enableChangeDataFeed\":\"true\"}",
+            );
+        assert_ne!(log, updated_log);
+        std::fs::write(log_path, updated_log)?;
+
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+        let ctx = SessionContext::new();
+        let provider = DeltaCdfTableProvider::try_new(table.scan_cdf().with_starting_version(0))?;
+        ctx.register_table("cdf", Arc::new(provider))?;
+        let batches = ctx
+            .sql("SELECT \"BIG_DATE\", \"SOME_VALUE\", _change_type FROM cdf")
+            .await?
+            .collect()
+            .await?;
+
+        assert_batches_sorted_eq! {
+            [
+                "+----------------------+------------+--------------+",
+                "| BIG_DATE             | SOME_VALUE | _change_type |",
+                "+----------------------+------------+--------------+",
+                "| 9999-12-30T00:00:00Z | 2          | insert       |",
+                "| 9999-12-31T00:00:00Z | 1          | insert       |",
+                "+----------------------+------------+--------------+",
+            ],
+            &batches
+        }
+        Ok(())
     }
 
     #[tokio::test]
