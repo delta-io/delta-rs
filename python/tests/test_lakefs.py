@@ -62,7 +62,7 @@ def test_create(lakefs_path: str, delta_schema: Schema, lakefs_storage_options):
         mode="error",
         storage_options=lakefs_storage_options,
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     with pytest.raises(DeltaError):
         dt = DeltaTable.create(
@@ -97,7 +97,7 @@ def test_create(lakefs_path: str, delta_schema: Schema, lakefs_storage_options):
     )
     assert dt.version() == 1
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "CREATE OR REPLACE TABLE"
 
@@ -117,7 +117,7 @@ def test_delete(lakefs_path: str, sample_table: Table, lakefs_storage_options):
     old_version = dt.version()
     dt.delete(commit_properties=commit_properties)
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "DELETE"
     assert dt.version() == old_version + 1
     assert last_action["userName"] == "John Doe"
@@ -159,7 +159,7 @@ def test_optimize_min_commit_interval(
 
     dt.optimize.z_order(["sold", "price"], min_commit_interval=timedelta(0))
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "OPTIMIZE"
     # The table has 5 distinct partitions, each of which are Z-ordered
     # independently. So with min_commit_interval=0, each will get its
@@ -197,7 +197,7 @@ def test_optimize(lakefs_path: str, sample_table: Table, lakefs_storage_options)
 
     dt.optimize.z_order(["sold", "price"])
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "OPTIMIZE"
     # The table has 5 distinct partitions, each of which are Z-ordered
     # independently. So with min_commit_interval=0, each will get its
@@ -237,7 +237,7 @@ def test_repair_wo_dry_run(
 
     commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     metrics = dt.repair(dry_run=False, commit_properties=commit_properties)
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert len(metrics["files_removed"]) == 1
     assert metrics["dry_run"] is False
@@ -254,7 +254,7 @@ def test_add_constraint(lakefs_path, sample_table: Table, lakefs_storage_options
 
     dt.alter.add_constraint({"check_price": "price >= 0"})
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "ADD CONSTRAINT"
     assert dt.metadata().configuration == {
         "delta.constraints.check_price": "price >= 0"
@@ -301,7 +301,7 @@ def test_drop_constraint(lakefs_path, sample_table: Table, lakefs_storage_option
 
     dt.alter.add_constraint({"check_price": "price >= 0"})
     dt.alter.drop_constraint(name="check_price")
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "DROP CONSTRAINT"
     assert dt.version() == 2
 
@@ -409,7 +409,7 @@ def test_merge(lakefs_path, sample_table: Table, lakefs_storage_options):
         .read_all()
     )
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert last_action["userName"] == "John Doe"
@@ -446,7 +446,7 @@ def test_restore(
     old_version = dt.version()
     commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     dt.restore(1, commit_properties=commit_properties)
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "RESTORE"
     assert last_action["userName"] == "John Doe"
     assert dt.version() == old_version + 1
@@ -552,7 +552,7 @@ def test_update(lakefs_path, sample_table_update: Table, lakefs_storage_options)
     )
 
     result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "UPDATE"
     assert last_action["userName"] == "John Doe"

@@ -67,7 +67,7 @@ def test_merge_when_matched_delete_wo_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert last_action["userName"] == "John Doe"
@@ -143,7 +143,7 @@ def test_merge_when_matched_delete_with_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -210,7 +210,7 @@ def test_merge_when_matched_update_wo_predicate(
         .read_all()
     )
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -523,7 +523,7 @@ def test_merge_when_matched_update_wo_predicate_with_schema_evolution(
         .read_all()
     )
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result.schema == expected.schema
@@ -600,7 +600,7 @@ def test_merge_when_matched_update_wo_predicate_and_insert_with_schema_evolution
         .read_all()
     )
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result.schema == expected.schema
@@ -675,7 +675,7 @@ def test_merge_when_matched_update_all_wo_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -748,7 +748,7 @@ def test_merge_when_matched_update_all_with_exclude(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -820,7 +820,7 @@ def test_merge_when_matched_update_with_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -897,7 +897,7 @@ def test_merge_when_not_matched_insert_wo_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -975,7 +975,7 @@ def test_merge_when_not_matched_insert_with_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -1061,7 +1061,7 @@ def test_merge_when_not_matched_insert_with_predicate_schema_evolution(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result.schema == expected.schema
@@ -1134,7 +1134,7 @@ def test_merge_when_not_matched_insert_all_with_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -1204,7 +1204,7 @@ def test_merge_when_not_matched_insert_all_with_exclude(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -1281,7 +1281,7 @@ def test_merge_when_not_matched_insert_all_with_exclude_and_with_schema_evo(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result.schema == expected.schema
@@ -1354,7 +1354,7 @@ def test_merge_when_not_matched_insert_all_with_predicate_special_column_names(
         .execute("select * from tbl order by `1id` asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -1428,7 +1428,7 @@ def test_merge_when_not_matched_by_source_update_wo_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -1503,7 +1503,7 @@ def test_merge_when_not_matched_by_source_update_with_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -1573,7 +1573,7 @@ def test_merge_when_not_matched_by_source_delete_with_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -1635,7 +1635,7 @@ def test_merge_when_not_matched_by_source_delete_wo_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -1711,7 +1711,7 @@ def test_merge_multiple_when_matched_update_with_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -1785,7 +1785,7 @@ def test_merge_multiple_when_matched_update_all_with_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -1871,7 +1871,7 @@ def test_merge_multiple_when_not_matched_insert_with_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -1947,7 +1947,7 @@ def test_merge_multiple_when_matched_delete_with_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -2028,7 +2028,7 @@ def test_merge_multiple_when_not_matched_by_source_update_wo_predicate(
         .execute("select * from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -2071,7 +2071,7 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path, streaming: bool):
     ).when_matched_update_all().when_not_matched_insert_all().execute()
 
     result = dt.to_pyarrow_table()
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -2137,7 +2137,7 @@ def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, pre
     ).when_matched_update_all().when_not_matched_insert_all().execute()
 
     result = dt.to_pyarrow_table()
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == data
@@ -2515,7 +2515,7 @@ def test_merge_preserves_casing_in_quoted_identifiers(
         .read_all()
     )
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -2556,7 +2556,7 @@ def test_merge_camelcase_non_nullable_column_4082(tmp_path: pathlib.Path):
         .execute()
     )
 
-    assert dt.history(1)[0]["operation"] == "MERGE"
+    assert next(dt.history(1))["operation"] == "MERGE"
 
     result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
     assert result["submittedAt"].to_pylist() == [123]
@@ -2615,7 +2615,7 @@ def test_merge_non_nullable_column_4527(tmp_path: pathlib.Path):
         .execute()
     )
 
-    assert dt.history(1)[0]["operation"] == "MERGE"
+    assert next(dt.history(1))["operation"] == "MERGE"
 
     result = (
         QueryBuilder()
@@ -2750,7 +2750,7 @@ def test_merge_isin_partition_pruning(tmp_path: pathlib.Path, streaming: bool):
         .execute("select id, partition, sold from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -2840,7 +2840,7 @@ def test_merge_isin_string_partition_pruning(tmp_path: pathlib.Path, streaming: 
         .execute("select id, date_part, sold from tbl order by id asc")
         .read_all()
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
@@ -2882,7 +2882,7 @@ def test_cdc_merge_planning_union_2908(tmp_path, streaming: bool):
         streamed_exec=streaming,
     ).when_not_matched_insert_all().execute()
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert last_action["operation"] == "MERGE"
     assert dt.version() == 1
@@ -3360,7 +3360,7 @@ def test_merge_on_decimal_3033(tmp_path):
         streamed_exec=False,  # only with streamed execution off can we use stats to create a pruning predicate
     ).when_matched_update_all().when_not_matched_insert_all().execute()
 
-    string_predicate = dt.history(1)[0]["operationParameters"]["predicate"]
+    string_predicate = next(dt.history(1))["operationParameters"]["predicate"]
 
     assert (
         string_predicate

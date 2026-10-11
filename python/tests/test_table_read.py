@@ -505,7 +505,7 @@ def test_read_table_with_cdc():
 def test_history_partitioned_table_metadata():
     table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
-    history = dt.history()
+    history = list(dt.history())
     commit_info = history[0]
 
     assert len(history) == 1

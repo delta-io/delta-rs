@@ -58,7 +58,7 @@ def test_delete_respects_writer_properties_issue_4579(tmp_path: pathlib.Path):
     )
 
     # Verify the delete operation succeeded
-    last_action = table.history(1)[0]
+    last_action = next(table.history(1))
     assert last_action["operation"] == "DELETE"
     assert table.version() == initial_version + 1
 
@@ -145,7 +145,7 @@ def test_delete_with_fallback_compression_issue_4579(tmp_path: pathlib.Path):
     table.delete(predicate="id > 5")
 
     # Verify the delete operation succeeded
-    last_action = table.history(1)[0]
+    last_action = next(table.history(1))
     assert last_action["operation"] == "DELETE"
     assert table.version() == initial_version + 1
 

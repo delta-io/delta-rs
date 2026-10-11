@@ -31,7 +31,7 @@ def test_delete_no_predicates(existing_sample_table: DeltaTable):
     commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     existing_sample_table.delete(commit_properties=commit_properties)
 
-    last_action = existing_sample_table.history(1)[0]
+    last_action = next(existing_sample_table.history(1))
     assert last_action["operation"] == "DELETE"
     assert existing_sample_table.version() == old_version + 1
     assert last_action["userName"] == "John Doe"
@@ -59,7 +59,7 @@ def test_delete_a_partition(tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Tab
 
     dt.delete(predicate="bool = true")
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "DELETE"
     assert dt.version() == old_version + 1
 
@@ -132,7 +132,7 @@ def test_delete_some_rows(existing_table: DeltaTable):
 
     existing_table.delete(predicate="utf8 in ('0', '1')")
 
-    last_action = existing_table.history(1)[0]
+    last_action = next(existing_table.history(1))
     assert last_action["operation"] == "DELETE"
     assert existing_table.version() == old_version + 1
 
@@ -220,7 +220,7 @@ def test_delete_concurrent_with_non_overlapping_append(tmp_path: pathlib.Path):
     table_2.delete("k = 1")
 
     assert table_2.version() == 2
-    assert table_2.history(1)[0]["operation"] == "DELETE"
+    assert next(table_2.history(1))["operation"] == "DELETE"
 
     from deltalake.query import QueryBuilder
 
