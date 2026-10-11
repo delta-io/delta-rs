@@ -318,6 +318,19 @@ impl StatsProjection {
             }),
         }
     }
+
+    /// Whether this projection emits column statistics for any physical column.
+    ///
+    /// When it does not (no predicate to prune on), per-file column stats are all `Absent`,
+    /// so callers can skip allocating them (#4522).
+    #[cfg(feature = "datafusion")]
+    pub(crate) fn emits_any_column_stats(&self) -> bool {
+        match self {
+            Self::None | Self::NumRecordsOnly => false,
+            Self::Full => true,
+            Self::PredicateColumns(columns) => !columns.is_empty(),
+        }
+    }
 }
 
 fn num_records_only_stats_schema() -> DeltaResult<KernelSchemaRef> {
