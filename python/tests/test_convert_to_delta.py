@@ -149,7 +149,7 @@ def test_convert_delta_with_directory_partitioning(
     assert dt.metadata().partition_columns == ["utf8"]
 
     expected_paths = sorted(
-        str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*.parquet")
+        p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*.parquet")
     )
     file_uris = sorted(dt.file_uris())
     assert len(file_uris) == len(expected_paths)
