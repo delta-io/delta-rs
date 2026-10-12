@@ -202,7 +202,7 @@ impl DeltaWriterProperties {
         self
     }
 
-    /// The table's target file size and stats config, where none are set.
+    /// Apply the target file size and stats configuration from the table configuration, where they are not already set.
     pub(crate) fn with_table_defaults(mut self, table_config: &TableConfiguration) -> Self {
         if self.target_file_size.is_none() {
             self.target_file_size = Some(table_config.table_properties().target_file_size());
