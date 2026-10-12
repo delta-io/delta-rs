@@ -241,8 +241,9 @@ impl DeltaWriterProperties {
         self.stats.as_ref().unwrap_or(&DEFAULT_STATS)
     }
 
-    /// The parquet writer properties set, or the delta-rs default (SNAPPY, delta-rs
-    /// `created_by`). Every file starts from these; [`Self::resolve`] runs the layers over them.
+    /// The parquet writer properties set, or the delta-rs default properties.
+    /// These are the starting properties used for every file; [`Self::resolve`] may
+    /// run configuration layers over these to customize properties further for each file.
     pub fn parquet_properties_or_default(&self) -> &WriterProperties {
         self.parquet.as_ref().unwrap_or(&DEFAULT_PARQUET_PROPERTIES)
     }
