@@ -1250,7 +1250,7 @@ def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
     ) == _normalize_path(
         (
             delta_table,
-            "file://" + str(tmp_path / "delta_table") + "/",
+            (tmp_path / "delta_table").as_uri() + "/",
         )
     )
 
@@ -1914,7 +1914,7 @@ def test_partition_large_arrow_types(tmp_path: pathlib.Path):
     files = dt.file_uris()
     expected = ["foo=1", "foo=2"]
 
-    result = sorted([abs_path.split(os.path.sep)[-2] for abs_path in files])
+    result = sorted(pathlib.Path(abs_path).parent.name for abs_path in files)
     assert expected == result
 
 
