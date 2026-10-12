@@ -248,8 +248,10 @@ impl DeltaWriterProperties {
         self.parquet.as_ref().unwrap_or(&DEFAULT_PARQUET_PROPERTIES)
     }
 
-    /// One file's parquet writer properties: the configured ones run through
-    /// every layer. `path` is relative to the table root.
+    /// Resolves the Parquet writer properties for a single file.
+    /// Starts with the configured writer properties or defaults,
+    /// and applies any configuration layers.
+    /// `path` is relative to the table root.
     pub async fn resolve(
         &self,
         path: &Path,
