@@ -194,7 +194,7 @@ impl DeltaWriterProperties {
         self
     }
 
-    /// The table's stats config, if none is set.
+    /// Apply the stats configuration from the table configuration, if it is not already set.
     pub(crate) fn with_table_stats(mut self, table_config: &TableConfiguration) -> Self {
         if self.stats.is_none() {
             self.stats = Some(WriterStatsConfig::from_config(table_config));
