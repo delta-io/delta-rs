@@ -8,6 +8,7 @@ from pathlib import Path
 from threading import Barrier, Thread
 from typing import Any
 from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import pytest
 from arro3.core import Array, DataType, Table
@@ -116,6 +117,10 @@ def test_read_simple_in_threads_and_processes(
     executor_class, multiprocessing_start_method, expect_panic
 ):
     if multiprocessing_start_method is not None:
+        if multiprocessing_start_method not in multiprocessing.get_all_start_methods():
+            pytest.skip(
+                f"Multiprocessing start method {multiprocessing_start_method!r} is not available"
+            )
         multiprocessing.set_start_method(multiprocessing_start_method, force=True)
     if expect_panic:
         with pytest.raises(
@@ -602,8 +607,8 @@ def test_get_add_actions_on_empty_table(tmp_path: Path):
 
 
 def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
-    table_path = urlparse(dt.table_uri).path
-    absolute_paths = [os.path.join(table_path, path) for path in expected_paths]
+    table_path = Path(url2pathname(urlparse(dt.table_uri).path))
+    absolute_paths = [(table_path / path).as_posix() for path in expected_paths]
     assert dt.file_uris(partition_filters) == absolute_paths
 
 

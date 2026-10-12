@@ -3714,8 +3714,8 @@ def test_merge_file_pruning_regression_3636(tmp_path: pathlib.Path, streaming: b
             "ts": [*tss] * 4,
             "direction": [i for i in ("S", "W", "N", "E") for _ in range(len(tss))],
             "distance": np.random.randint(0, 10000, size=len(tss) * 4),
-            "updated_on": list(
-                (tss.floor("D") + pd.Timedelta(hours=25)).astype(int) // 1000000
+            "updated_on": list(  # NumPy 1.x uses int32 for int on Windows.
+                (tss.floor("D") + pd.Timedelta(hours=25)).astype("int64") // 1000000
             )
             * 4,
             "date": list(tss.strftime("%Y-%m-%d")) * 4,
