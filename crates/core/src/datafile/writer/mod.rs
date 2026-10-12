@@ -133,13 +133,12 @@ impl From<WriteError> for DeltaTableError {
 pub(crate) mod test_utils {
     use std::num::NonZeroU64;
 
-    use parquet::basic::Compression;
     use parquet::file::properties::WriterProperties;
 
     use super::ArrowWriterOptions;
     use crate::crate_version;
     use crate::datafile::DeltaWriterProperties;
-    use crate::parquet_utils::default_writer_properties;
+    use crate::datafile::properties::DEFAULT_PARQUET_PROPERTIES;
 
     pub(crate) fn assert_default_created_by(writer_properties: &WriterProperties) {
         assert_eq!(
@@ -157,7 +156,7 @@ pub(crate) mod test_utils {
     ) -> DeltaWriterProperties {
         let props = DeltaWriterProperties::default()
             .with_parquet_properties(
-                writer_properties.unwrap_or_else(|| default_writer_properties(Compression::SNAPPY)),
+                writer_properties.unwrap_or_else(|| DEFAULT_PARQUET_PROPERTIES.clone()),
             )
             .with_arrow_options(arrow_options.unwrap_or_default())
             .with_target_file_size(target_file_size);

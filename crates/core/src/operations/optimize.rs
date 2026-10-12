@@ -38,13 +38,13 @@ use futures::{Future, StreamExt, TryStreamExt};
 use indexmap::IndexMap;
 use itertools::Itertools;
 
-use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use tracing::*;
 
 use crate::datafile::DeltaWriterProperties;
+use crate::datafile::properties::OPTIMIZE_PARQUET_PROPERTIES;
 use crate::datafile::writer::{
     ArrowWriterOptions, PartitionWriter, PartitionWriterConfig, UploadBudget,
 };
@@ -58,7 +58,6 @@ use crate::kernel::{Action, Add, DataType, PartitionsExt, Remove, StructType, Ve
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
-use crate::parquet_utils::default_writer_properties;
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
@@ -433,9 +432,8 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
 
             let mut writer_properties = this.writer_properties;
             if writer_properties.parquet_properties().is_none() {
-                writer_properties = writer_properties.with_parquet_properties(
-                    default_writer_properties(Compression::ZSTD(ZstdLevel::try_new(4).unwrap())),
-                );
+                writer_properties =
+                    writer_properties.with_parquet_properties(OPTIMIZE_PARQUET_PROPERTIES.clone());
             }
             let (session, _) = resolve_session_state(
                 this.session.as_deref(),
