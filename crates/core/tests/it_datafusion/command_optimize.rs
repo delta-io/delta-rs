@@ -18,7 +18,9 @@ use deltalake_core::datafile::writer::ArrowWriterOptions;
 use deltalake_core::delta_datafusion::DeltaSessionContext;
 use deltalake_core::ensure_table_uri;
 use deltalake_core::errors::DeltaTableError;
-use deltalake_core::kernel::transaction::{CommitBuilder, CommitProperties};
+use deltalake_core::kernel::transaction::{
+    CommitBuilder, CommitConflictError, CommitProperties, TransactionError,
+};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::parquet_reader::ParquetObjectReader;
 use deltalake_core::logstore::{
@@ -1171,6 +1173,70 @@ async fn test_no_conflict_for_remove_actions_in_other_partition() -> Result<(), 
     dt.update_state().await.unwrap();
     assert_eq!(dt.version().unwrap(), version + 2);
 
+    Ok(())
+}
+
+#[tokio::test]
+/// Validate that optimize with multiple commits fails when files of a later commit are removed
+async fn test_conflict_for_remove_actions_with_commit_interval() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    for partition in ["2022-05-22", "2022-05-23"] {
+        for _i in 0..2 {
+            write(
+                &mut writer,
+                &mut dt,
+                tuples_to_batch(vec![(1, 2), (1, 3), (1, 4)], partition)?,
+            )
+            .await?;
+        }
+    }
+
+    let version = dt.version().unwrap();
+
+    let df_context: SessionContext = DeltaSessionContext::default().into();
+
+    let plan = create_merge_plan(
+        &dt.log_store(),
+        OptimizeType::Compact,
+        dt.snapshot()?.snapshot(),
+        &[],
+        None,
+        WriterProperties::builder().build(),
+        ArrowWriterOptions::default(),
+        df_context.state(),
+    )
+    .await?;
+
+    let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
+    let table_url = ensure_table_uri(uri).unwrap();
+    let other_dt = deltalake_core::open_table(table_url).await?;
+    other_dt
+        .delete()
+        .with_predicate("date = '2022-05-23'")
+        .await?;
+
+    // whichever partition commits first, it must see the concurrent delete
+    let result = plan
+        .execute(
+            dt.log_store(),
+            dt.snapshot()?.snapshot(),
+            1,
+            Some(Duration::from_secs(0)),
+            CommitProperties::default(),
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(DeltaTableError::Transaction {
+            source: TransactionError::CommitConflict(CommitConflictError::ConcurrentDeleteRead)
+        })
+    ));
+    dt.update_state().await?;
+    assert_eq!(dt.version().unwrap(), version + 1);
     Ok(())
 }
 
