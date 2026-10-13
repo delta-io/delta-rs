@@ -312,17 +312,18 @@ impl WriteBuilder {
         self
     }
 
-    /// How the data files are encoded, replacing any parquet writer properties,
-    /// arrow writer options and write batch size set so far. Its target file size
-    /// applies unless [`with_target_file_size`] was called; unset, the table's does,
-    /// as does an unset stats config. Only [`with_target_file_size`] disables rolling.
+    /// How the data files are encoded. Fields set on `writer_properties` replace
+    /// what the builder holds so far, unset fields keep it, so this composes with
+    /// the other setters in any order. Its target file size applies unless
+    /// [`with_target_file_size`] was called; unset, the table's does, as does an
+    /// unset stats config. Only [`with_target_file_size`] disables rolling.
     ///
     /// [`with_target_file_size`]: Self::with_target_file_size
     pub fn with_delta_writer_properties(
         mut self,
         writer_properties: DeltaWriterProperties,
     ) -> Self {
-        self.writer_properties = writer_properties;
+        self.writer_properties = self.writer_properties.merge(writer_properties);
         self
     }
 

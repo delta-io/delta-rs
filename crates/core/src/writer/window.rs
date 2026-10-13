@@ -124,7 +124,7 @@ impl WriteWindow {
 
     /// Set the arrow writer options used for sinks opened from now on.
     pub(crate) fn set_arrow_options(&mut self, arrow_options: ArrowWriterOptions) {
-        self.factory.props.arrow = arrow_options;
+        self.factory.props.arrow = Some(arrow_options);
     }
 
     /// Schema widening rotates the whole window's sink, which only makes sense when

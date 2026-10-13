@@ -108,7 +108,8 @@ impl PartitionWriterConfig {
 
     /// Write below `prefix` under the table root, ahead of the partition path, so the
     /// returned paths stay table-relative (e.g. `_change_data`). `None` leaves the
-    /// prefix as resolved by [`Self::try_new`].
+    /// prefix as resolved by [`Self::try_new`]. Additive, unlike the other `with_`
+    /// setters: each call goes in front of the prefix built so far, so two calls nest.
     pub fn with_path_prefix(mut self, prefix: Option<Path>) -> Self {
         if let Some(prefix) = prefix {
             self.prefix = prefix.parts().chain(self.prefix.parts()).collect();

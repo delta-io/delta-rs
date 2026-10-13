@@ -37,6 +37,9 @@ pub(crate) const DEFAULT_WRITE_BATCH_SIZE: usize = 8192;
 // Python's `WriterProperties` starts from a bare parquet builder instead, so
 // a knob set there without `compression=` writes UNCOMPRESSED files.
 
+/// Arrow writer options when none are set.
+static DEFAULT_ARROW_OPTIONS: LazyLock<ArrowWriterOptions> = LazyLock::new(ArrowWriterOptions::new);
+
 /// Parquet writer properties when none are set: SNAPPY, delta-rs `created_by`.
 pub(crate) static DEFAULT_PARQUET_PROPERTIES: LazyLock<WriterProperties> =
     LazyLock::new(|| default_writer_properties(Compression::SNAPPY));
@@ -148,8 +151,8 @@ impl WriterStatsConfig {
 pub struct DeltaWriterProperties {
     /// Parquet writer properties; `None` is the delta-rs default, or the operation's.
     pub(crate) parquet: Option<WriterProperties>,
-    /// Arrow writer options.
-    pub(crate) arrow: ArrowWriterOptions,
+    /// Arrow writer options; `None` is the default options.
+    pub(crate) arrow: Option<ArrowWriterOptions>,
     /// Size at which a data file rolls. Unset, operations use the table's
     /// ([`Self::apply_table_defaults`]); a writer handed `None` never rolls.
     pub(crate) target_file_size: Option<NonZeroU64>,
@@ -168,8 +171,21 @@ impl DeltaWriterProperties {
 
     /// Arrow writer options.
     pub fn with_arrow_options(mut self, options: ArrowWriterOptions) -> Self {
-        self.arrow = options;
+        self.arrow = Some(options);
         self
+    }
+
+    /// `overrides` on top of `self`: every field set on `overrides` replaces the one
+    /// here, every unset field keeps this value. The operation builders' setters go
+    /// through this, so the order they are called in does not matter.
+    pub fn merge(self, overrides: Self) -> Self {
+        Self {
+            parquet: overrides.parquet.or(self.parquet),
+            arrow: overrides.arrow.or(self.arrow),
+            target_file_size: overrides.target_file_size.or(self.target_file_size),
+            write_batch_size: overrides.write_batch_size.or(self.write_batch_size),
+            stats: overrides.stats.or(self.stats),
+        }
     }
 
     /// Roll data files at `size`. `None` leaves it to the operation (the table's
@@ -190,6 +206,21 @@ impl DeltaWriterProperties {
     pub fn with_stats_config(mut self, stats: WriterStatsConfig) -> Self {
         self.stats = Some(stats);
         self
+    }
+
+    /// Fill the parquet writer properties from `default` if none are set: the
+    /// operation's own fallback (see the table above [`DEFAULT_PARQUET_PROPERTIES`]).
+    /// Unlike [`Self::with_parquet_properties`], this never overrides properties
+    /// already set.
+    pub(crate) fn apply_parquet_default(
+        self,
+        default: impl FnOnce() -> DeltaResult<WriterProperties>,
+    ) -> DeltaResult<Self> {
+        if self.parquet.is_some() {
+            return Ok(self);
+        }
+        let parquet = default()?;
+        Ok(self.with_parquet_properties(parquet))
     }
 
     /// Fill the stats configuration from the table configuration if it is not already set.
@@ -216,9 +247,9 @@ impl DeltaWriterProperties {
         self.parquet.as_ref()
     }
 
-    /// The arrow writer options.
+    /// The arrow writer options set, or the default options.
     pub fn arrow_options(&self) -> &ArrowWriterOptions {
-        &self.arrow
+        self.arrow.as_ref().unwrap_or(&DEFAULT_ARROW_OPTIONS)
     }
 
     /// The size at which data files roll, if set.
@@ -335,6 +366,61 @@ mod tests {
         assert_eq!(props.target_file_size(), NonZeroU64::new(10));
         assert_eq!(props.write_batch_size(), Some(7));
         assert_eq!(props.stats().stats_columns, Some(vec!["a".to_string()]));
+    }
+
+    #[test]
+    fn merge_takes_set_fields_from_overrides_and_keeps_the_rest() {
+        let base = DeltaWriterProperties::default()
+            .with_parquet_properties(
+                WriterProperties::builder()
+                    .set_compression(Compression::UNCOMPRESSED)
+                    .build(),
+            )
+            .with_write_batch_size(7);
+        let overrides = DeltaWriterProperties::default()
+            .with_arrow_options(ArrowWriterOptions::new().with_enable_parallel_encoding(false))
+            .with_write_batch_size(9);
+        let merged = base.merge(overrides);
+        assert_eq!(
+            merged
+                .parquet_properties_or_default()
+                .compression(&ColumnPath::from("id")),
+            Compression::UNCOMPRESSED
+        );
+        assert!(!merged.arrow_options().enable_parallel_encoding());
+        assert_eq!(merged.write_batch_size(), Some(9));
+        assert!(merged.target_file_size().is_none());
+    }
+
+    #[test]
+    fn parquet_default_fills_only_when_unset() {
+        let zstd = || {
+            Ok(WriterProperties::builder()
+                .set_compression(Compression::ZSTD(Default::default()))
+                .build())
+        };
+        let filled = DeltaWriterProperties::default()
+            .apply_parquet_default(zstd)
+            .unwrap();
+        assert!(matches!(
+            filled
+                .parquet_properties_or_default()
+                .compression(&ColumnPath::from("id")),
+            Compression::ZSTD(_)
+        ));
+        let kept = DeltaWriterProperties::default()
+            .with_parquet_properties(
+                WriterProperties::builder()
+                    .set_compression(Compression::UNCOMPRESSED)
+                    .build(),
+            )
+            .apply_parquet_default(zstd)
+            .unwrap();
+        assert_eq!(
+            kept.parquet_properties_or_default()
+                .compression(&ColumnPath::from("id")),
+            Compression::UNCOMPRESSED
+        );
     }
 
     #[test]

@@ -352,14 +352,16 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
-    /// How the rewritten data files are encoded, replacing any parquet writer
-    /// properties and arrow writer options set so far. An unset target file size
-    /// or stats config falls back to the table's.
+    /// How the rewritten data files are encoded. Fields set on `writer_properties`
+    /// replace what the builder holds so far, unset fields keep it, so this composes
+    /// with the other setters in any order. An unset stats config falls back to the
+    /// table's; unset parquet properties to ZSTD(4). Its target file size is not
+    /// used: [`Self::with_target_size`] sets the size optimize compacts to.
     pub fn with_delta_writer_properties(
         mut self,
         writer_properties: DeltaWriterProperties,
     ) -> Self {
-        self.writer_properties = writer_properties;
+        self.writer_properties = self.writer_properties.merge(writer_properties);
         self
     }
 
@@ -430,11 +432,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             }
             PROTOCOL.can_write_to(&snapshot)?;
 
-            let mut writer_properties = this.writer_properties;
-            if writer_properties.parquet_properties().is_none() {
-                writer_properties =
-                    writer_properties.with_parquet_properties(OPTIMIZE_PARQUET_PROPERTIES.clone());
-            }
+            let writer_properties = this.writer_properties;
             let (session, _) = resolve_session_state(
                 this.session.as_deref(),
                 this.session_fallback_policy,
@@ -1004,10 +1002,12 @@ pub async fn create_merge_plan(
     writer_properties: DeltaWriterProperties,
     session: SessionState,
 ) -> Result<MergePlan, DeltaTableError> {
-    let target_size = target_size
-        .or(writer_properties.target_file_size())
-        .unwrap_or_else(|| snapshot.table_properties().target_file_size());
+    let target_size = target_size.unwrap_or_else(|| snapshot.table_properties().target_file_size());
     let _ = optimize_target_size_to_i64(target_size)?;
+    // Compacted files are written rarely and read often, so unset parquet
+    // properties fall back to ZSTD(4) rather than the SNAPPY default.
+    let writer_properties =
+        writer_properties.apply_parquet_default(|| Ok(OPTIMIZE_PARQUET_PROPERTIES.clone()))?;
     let partitions_keys = snapshot.metadata().partition_columns();
 
     let (operations, metrics, planner_stats) = match optimize_type {

@@ -120,7 +120,7 @@ impl DeltaWriter {
 
     /// Apply custom arrow_options to the underlying arrow writer
     pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
-        self.config.writer_properties.arrow = arrow_options;
+        self.config.writer_properties.arrow = Some(arrow_options);
         self
     }
 

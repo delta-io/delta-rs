@@ -275,14 +275,15 @@ impl DeleteBuilder {
         self
     }
 
-    /// How the rewritten data files are encoded, replacing any parquet writer
-    /// properties and arrow writer options set so far. An unset target file size
-    /// or stats config falls back to the table's.
+    /// How the rewritten data files are encoded. Fields set on `writer_properties`
+    /// replace what the builder holds so far, unset fields keep it, so this composes
+    /// with the other setters in any order. An unset target file size or stats
+    /// config falls back to the table's.
     pub fn with_delta_writer_properties(
         mut self,
         writer_properties: DeltaWriterProperties,
     ) -> Self {
-        self.writer_properties = writer_properties;
+        self.writer_properties = self.writer_properties.merge(writer_properties);
         self
     }
 }

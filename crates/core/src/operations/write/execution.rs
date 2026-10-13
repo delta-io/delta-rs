@@ -480,11 +480,9 @@ pub(crate) async fn write_exec_plan(
     table_config: &TableConfiguration,
     exec: Arc<dyn ExecutionPlan>,
     write_as_cdc: bool,
-    mut props: DeltaWriterProperties,
+    props: DeltaWriterProperties,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
-    if props.parquet_properties().is_none() {
-        props = props.with_parquet_properties(session_parquet_properties(session)?);
-    }
+    let props = props.apply_parquet_default(|| session_parquet_properties(session))?;
     let sink_config = WriteSinkConfig::new(table_config, log_store.object_store(), props);
 
     if write_as_cdc {
@@ -912,8 +910,13 @@ async fn write_cdc_plan(
         object_store,
         props,
         column_mapping,
-        path_prefix: _,
+        path_prefix,
     } = sink_config;
+    if path_prefix.is_some() {
+        return Err(DeltaTableError::generic(
+            "a change data write does not take a path prefix: its files go below `_change_data`",
+        ));
+    }
     let (plan, partition_columns, random_prefix_length) =
         apply_column_mapping_to_plan(plan, partition_columns, &column_mapping)?;
     // Change data goes below `_change_data` in the same store, so paths come back table-relative.
