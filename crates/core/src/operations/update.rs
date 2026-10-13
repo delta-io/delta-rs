@@ -379,7 +379,7 @@ async fn execute(
         log_store.object_store(),
         writer_properties
             .clone()
-            .with_table_defaults(snapshot.table_configuration()),
+            .apply_table_defaults(snapshot.table_configuration()),
     )
     .await?;
 
@@ -431,7 +431,7 @@ async fn execute(
                     session,
                     cdc_exec,
                     log_store.object_store(),
-                    writer_properties.with_table_defaults(snapshot.table_configuration()),
+                    writer_properties.apply_table_defaults(snapshot.table_configuration()),
                 )
                 .await?;
                 actions.extend(cdc_actions);

@@ -187,7 +187,7 @@ pub struct DeltaWriterProperties {
     /// Arrow writer options.
     pub(crate) arrow: ArrowWriterOptions,
     /// Size at which a data file rolls. Unset, operations use the table's
-    /// ([`Self::with_table_defaults`]); a writer handed `None` never rolls.
+    /// ([`Self::apply_table_defaults`]); a writer handed `None` never rolls.
     pub(crate) target_file_size: Option<NonZeroU64>,
     /// Rows per slice handed to the parquet writer.
     pub(crate) write_batch_size: Option<usize>,
@@ -230,20 +230,23 @@ impl DeltaWriterProperties {
         self
     }
 
-    /// Apply the stats configuration from the table configuration, if it is not already set.
-    pub(crate) fn with_table_stats(mut self, table_config: &TableConfiguration) -> Self {
+    /// Fill the stats configuration from the table configuration if it is not already set.
+    /// Unlike the `with_` setters, this never overrides a value already set.
+    pub(crate) fn apply_table_stats(mut self, table_config: &TableConfiguration) -> Self {
         if self.stats.is_none() {
             self.stats = Some(WriterStatsConfig::from_config(table_config));
         }
         self
     }
 
-    /// Apply the target file size and stats configuration from the table configuration, where they are not already set.
-    pub(crate) fn with_table_defaults(mut self, table_config: &TableConfiguration) -> Self {
+    /// Fill the target file size and stats configuration from the table configuration
+    /// where they are not already set. Unlike the `with_` setters, this never overrides
+    /// a value already set.
+    pub(crate) fn apply_table_defaults(mut self, table_config: &TableConfiguration) -> Self {
         if self.target_file_size.is_none() {
             self.target_file_size = Some(table_config.table_properties().target_file_size());
         }
-        self.with_table_stats(table_config)
+        self.apply_table_stats(table_config)
     }
 
     /// Run `layer` on every file's parquet properties, after the layers added before it.
@@ -419,7 +422,7 @@ mod tests {
             ]),
         );
 
-        let filled = DeltaWriterProperties::default().with_table_defaults(&table_config);
+        let filled = DeltaWriterProperties::default().apply_table_defaults(&table_config);
         assert_eq!(filled.target_file_size(), NonZeroU64::new(1024));
         assert_eq!(filled.stats().stats_columns, Some(vec!["a".to_string()]));
 
@@ -429,7 +432,7 @@ mod tests {
                 DataSkippingNumIndexedCols::AllColumns,
                 None,
             ))
-            .with_table_defaults(&table_config);
+            .apply_table_defaults(&table_config);
         assert_eq!(kept.target_file_size(), NonZeroU64::new(7));
         assert_eq!(
             kept.stats().num_indexed_cols,

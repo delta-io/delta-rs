@@ -295,7 +295,7 @@ impl WriteSinkConfig {
         Self {
             partition_columns: table_config.metadata().partition_columns().to_vec(),
             object_store,
-            props: props.with_table_stats(table_config),
+            props: props.apply_table_stats(table_config),
             column_mapping: ColumnMappingState::from_table_config(table_config),
             path_prefix: None,
         }

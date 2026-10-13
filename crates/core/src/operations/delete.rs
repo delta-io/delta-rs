@@ -617,7 +617,7 @@ async fn execute(
         snapshot.table_configuration(),
         exec.clone(),
         write_cdc,
-        writer_properties.with_table_defaults(snapshot.table_configuration()),
+        writer_properties.apply_table_defaults(snapshot.table_configuration()),
     )
     .await?;
 

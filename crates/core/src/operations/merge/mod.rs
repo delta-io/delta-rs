@@ -1660,7 +1660,7 @@ async fn execute(
         &state,
         write,
         log_store.object_store(),
-        writer_properties.with_table_defaults(snapshot.table_configuration()),
+        writer_properties.apply_table_defaults(snapshot.table_configuration()),
         None,
         should_cdc, // if true, write execution plan splits batches in [normal, cdc] data before writing
         None,

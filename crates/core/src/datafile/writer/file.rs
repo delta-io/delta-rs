@@ -152,7 +152,7 @@ impl FileArrowWriter {
         config: &PartitionWriterConfig,
         writer_properties: WriterProperties,
     ) -> ParquetResult<Self> {
-        let options = config.props.arrow_options();
+        let options = config.writer_properties.arrow_options();
         if options.enable_parallel_encoding()
             && writer_properties.content_defined_chunking().is_none()
         {
@@ -249,7 +249,10 @@ impl LazyArrowWriter {
         match self {
             LazyArrowWriter::Initialized(path, object_store, config) => {
                 // A layer may key on the path or schema, so resolve per file.
-                let writer_properties = config.props.resolve(path, &config.file_schema).await?;
+                let writer_properties = config
+                    .writer_properties
+                    .resolve(path, &config.file_schema)
+                    .await?;
                 let writer = ParquetObjectWriter(
                     BufWriter::with_capacity(
                         Arc::clone(object_store),

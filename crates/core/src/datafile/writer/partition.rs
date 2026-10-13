@@ -56,8 +56,8 @@ pub struct PartitionWriterConfig {
     prefix: Path,
     /// Values for all partition columns
     partition_values: IndexMap<String, Scalar>,
-    /// How the files are encoded
-    pub(super) props: DeltaWriterProperties,
+    /// Properties of the delta writer (parquet, arrow, etc)
+    pub(super) writer_properties: DeltaWriterProperties,
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
@@ -77,7 +77,7 @@ impl PartitionWriterConfig {
     pub fn try_new(
         file_schema: ArrowSchemaRef,
         partition_values: IndexMap<String, Scalar>,
-        props: DeltaWriterProperties,
+        writer_properties: DeltaWriterProperties,
         max_concurrency_tasks: Option<usize>,
         prefix_override: Option<Path>,
     ) -> DeltaResult<Self> {
@@ -85,12 +85,14 @@ impl PartitionWriterConfig {
             Some(prefix) => prefix,
             None => Path::parse(partition_values.hive_partition_path())?,
         };
-        if props.write_batch_size() == Some(0) {
+        if writer_properties.write_batch_size() == Some(0) {
             return Err(DeltaTableError::generic(
                 "write_batch_size must be greater than 0",
             ));
         }
-        let write_batch_size = props.write_batch_size().unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
+        let write_batch_size = writer_properties
+            .write_batch_size()
+            .unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
 
         Ok(Self {
             file_schema,
@@ -99,8 +101,8 @@ impl PartitionWriterConfig {
             write_batch_size,
             max_concurrency_tasks: max_concurrency_tasks.unwrap_or_else(get_max_concurrency_tasks),
             roll_on_row_group_boundary: roll_on_row_group_boundary_default(),
-            upload_budget: UploadBudget::for_write(props.target_file_size()),
-            props,
+            upload_budget: UploadBudget::for_write(writer_properties.target_file_size()),
+            writer_properties,
         })
     }
 
@@ -168,7 +170,7 @@ impl PartitionWriter {
             &config.prefix,
             0,
             &writer_id,
-            config.props.parquet_properties_or_default(),
+            config.writer_properties.parquet_properties_or_default(),
         );
         let writer = Self::create_writer(object_store.clone(), first_path.clone(), &config);
 
@@ -205,7 +207,9 @@ impl PartitionWriter {
             &self.config.prefix,
             self.part_counter,
             &self.writer_id,
-            self.config.props.parquet_properties_or_default(),
+            self.config
+                .writer_properties
+                .parquet_properties_or_default(),
         )
     }
 
@@ -245,7 +249,10 @@ impl PartitionWriter {
         if !self.config.roll_on_row_group_boundary {
             return None;
         }
-        let writer_properties = self.config.props.parquet_properties_or_default();
+        let writer_properties = self
+            .config
+            .writer_properties
+            .parquet_properties_or_default();
         if writer_properties.max_row_group_bytes().is_some() {
             return None;
         }
@@ -273,14 +280,14 @@ impl PartitionWriter {
             return Ok(());
         }
 
-        let Some(target_file_size) = self.config.props.target_file_size() else {
+        let Some(target_file_size) = self.config.writer_properties.target_file_size() else {
             // No size target means no file rolling, but still slice at row-group
             // boundaries: the async writer only uploads as row groups complete
             // within a `write_batch` call, so one huge call would buffer every
             // row group in memory first.
             let step = self
                 .config
-                .props
+                .writer_properties
                 .parquet_properties_or_default()
                 .max_row_group_row_count()
                 .unwrap_or(self.config.write_batch_size)
@@ -371,8 +378,8 @@ impl PartitionWriter {
                     path.to_string(),
                     file_size as i64,
                     &metadata,
-                    self.config.props.stats().num_indexed_cols,
-                    &self.config.props.stats().stats_columns,
+                    self.config.writer_properties.stats().num_indexed_cols,
+                    &self.config.writer_properties.stats().stats_columns,
                 )
                 .map_err(|err| WriteError::CreateAdd {
                     source: Box::new(err),
@@ -535,7 +542,7 @@ mod tests {
         )
         .unwrap();
 
-        let writer_properties = config.props.parquet_properties_or_default();
+        let writer_properties = config.writer_properties.parquet_properties_or_default();
         assert_default_created_by(writer_properties);
         assert_eq!(
             writer_properties.compression(&ColumnPath::from("id")),

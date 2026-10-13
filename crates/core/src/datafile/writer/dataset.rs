@@ -27,8 +27,8 @@ pub struct WriterConfig {
     table_schema: ArrowSchemaRef,
     /// Column names for columns the table is partitioned by
     partition_columns: Vec<String>,
-    /// How the data files are encoded
-    props: DeltaWriterProperties,
+    /// Properties of the delta writer (parquet, arrow, etc)
+    writer_properties: DeltaWriterProperties,
     /// When set, write data files under a random prefix directory of this length instead of
     /// Hive-style partition dirs — keeps physical (UUID) column names out of paths under CM.
     random_prefix_length: Option<usize>,
@@ -45,15 +45,15 @@ impl WriterConfig {
     pub fn new(
         table_schema: ArrowSchemaRef,
         partition_columns: Vec<String>,
-        props: DeltaWriterProperties,
+        writer_properties: DeltaWriterProperties,
     ) -> Self {
         Self {
             table_schema,
             partition_columns,
             random_prefix_length: None,
             path_prefix: None,
-            upload_budget: UploadBudget::for_write(props.target_file_size()),
-            props,
+            upload_budget: UploadBudget::for_write(writer_properties.target_file_size()),
+            writer_properties,
         }
     }
 
@@ -114,13 +114,13 @@ impl DeltaWriter {
 
     /// Apply custom writer_properties to the underlying parquet writer
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.config.props.parquet = Some(writer_properties);
+        self.config.writer_properties.parquet = Some(writer_properties);
         self
     }
 
     /// Apply custom arrow_options to the underlying arrow writer
     pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
-        self.config.props.arrow = arrow_options;
+        self.config.writer_properties.arrow = arrow_options;
         self
     }
 
@@ -149,7 +149,7 @@ impl DeltaWriter {
         let config = PartitionWriterConfig::try_new(
             self.file_schema.clone(),
             partition_values,
-            self.config.props.clone(),
+            self.config.writer_properties.clone(),
             None,
             random_prefix,
         )?
@@ -403,7 +403,7 @@ mod tests {
         )]));
         let config = WriterConfig::new(schema, vec![], DeltaWriterProperties::default());
 
-        let writer_properties = config.props.parquet_properties_or_default();
+        let writer_properties = config.writer_properties.parquet_properties_or_default();
         assert_default_created_by(writer_properties);
         assert_eq!(
             writer_properties.compression(&ColumnPath::from("id")),

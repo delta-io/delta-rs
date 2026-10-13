@@ -142,7 +142,7 @@ impl DeltaDataSink {
         let column_mapping =
             ColumnMappingState::from_table_config(self.snapshot.table_configuration());
         let props = DeltaWriterProperties::default()
-            .with_table_defaults(self.snapshot.table_configuration());
+            .apply_table_defaults(self.snapshot.table_configuration());
         let (stream, table_schema, physical_partition_columns, random_prefix_length) =
             match &column_mapping {
                 None => (

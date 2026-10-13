@@ -1055,7 +1055,7 @@ pub async fn create_merge_plan(
         planner_stats,
         task_parameters: Arc::new(MergeTaskParameters {
             file_schema,
-            writer_properties: writer_properties.with_table_stats(snapshot.table_configuration()),
+            writer_properties: writer_properties.apply_table_stats(snapshot.table_configuration()),
             input_parameters,
             upload_budget,
         }),
