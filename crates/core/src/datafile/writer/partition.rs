@@ -104,6 +104,16 @@ impl PartitionWriterConfig {
         })
     }
 
+    /// Write below `prefix` under the table root, ahead of the partition path, so the
+    /// returned paths stay table-relative (e.g. `_change_data`). `None` leaves the
+    /// prefix as resolved by [`Self::try_new`].
+    pub fn with_path_prefix(mut self, prefix: Option<Path>) -> Self {
+        if let Some(prefix) = prefix {
+            self.prefix = prefix.parts().chain(self.prefix.parts()).collect();
+        }
+        self
+    }
+
     /// Draw on `budget` instead of the fresh one [`Self::try_new`] makes, so
     /// configs that are not clones of each other still share one bound.
     pub(crate) fn with_upload_budget(mut self, budget: UploadBudget) -> Self {

@@ -141,24 +141,19 @@ impl DeltaWriter {
         &self,
         partition_values: IndexMap<String, Scalar>,
     ) -> DeltaResult<PartitionWriter> {
-        let partition_prefix = match self.config.random_prefix_length {
-            Some(length) => Path::parse(random_prefix(length))?,
-            None => Path::parse(partition_values.hive_partition_path())?,
-        };
-        let prefix = match &self.config.path_prefix {
-            Some(path_prefix) => path_prefix
-                .parts()
-                .chain(partition_prefix.parts())
-                .collect(),
-            None => partition_prefix,
-        };
+        let random_prefix = self
+            .config
+            .random_prefix_length
+            .map(|length| Path::parse(random_prefix(length)))
+            .transpose()?;
         let config = PartitionWriterConfig::try_new(
             self.file_schema.clone(),
             partition_values,
             self.config.props.clone(),
             None,
-            Some(prefix),
+            random_prefix,
         )?
+        .with_path_prefix(self.config.path_prefix.clone())
         .with_upload_budget(self.config.upload_budget.clone());
         PartitionWriter::try_with_config(self.object_store.clone(), config)
     }
