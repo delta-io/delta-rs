@@ -629,7 +629,7 @@ pub struct CommitBuilder {
     app_transaction: Vec<Transaction>,
     max_retries: usize,
     post_commit_hook: Option<PostCommitHookProperties>,
-    read_files: Option<Vec<Add>>,
+    read_files: Option<Arc<[Add]>>,
 }
 
 impl Default for CommitBuilder {
@@ -674,9 +674,10 @@ impl<'a> CommitBuilder {
     ///
     /// If not set, all files matching the operation's read predicate are treated as read, or all
     /// files in the table if there is none. Concurrently added files are still checked against
-    /// the read predicate.
-    pub fn with_read_files(mut self, read_files: impl IntoIterator<Item = Add>) -> Self {
-        self.read_files = Some(read_files.into_iter().collect());
+    /// the read predicate. Files not listed are not checked, so an incomplete list can let a
+    /// conflicting commit through.
+    pub fn with_read_files(mut self, read_files: impl Into<Arc<[Add]>>) -> Self {
+        self.read_files = Some(read_files.into());
         self
     }
 
@@ -714,7 +715,7 @@ pub struct PreCommit<'a> {
     data: CommitData,
     max_retries: usize,
     post_commit_hook: Option<PostCommitHookProperties>,
-    read_files: Option<Vec<Add>>,
+    read_files: Option<Arc<[Add]>>,
 }
 
 impl<'a> IntoFuture for PreCommit<'a> {
@@ -782,7 +783,7 @@ pub struct PreparedCommit<'a> {
     table_data: Option<&'a dyn TableReference>,
     max_retries: usize,
     post_commit: Option<PostCommitHookProperties>,
-    read_files: Option<Vec<Add>>,
+    read_files: Option<Arc<[Add]>>,
 }
 
 impl PreparedCommit<'_> {
