@@ -114,8 +114,7 @@ lakefs = ["lakefs==0.8.0"]
 pyspark = [
     "pyspark==4.2.0",
     "delta-spark",
-    "pandas>=2.2.0,<3",
-    "numpy>2.0.0", # pyspark is not compatible with latest numpy
+    "pandas<3",
 ]
 other = [
     "azure-storage-blob==12.20.0",
