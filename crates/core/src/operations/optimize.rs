@@ -813,7 +813,7 @@ impl MergePlan {
         let operations = std::mem::take(&mut self.operations);
         // Every commit depends on all files in the plan, so a file removed concurrently before
         // a later commit is still detected when there are multiple commits
-        let read_files: Vec<Add> = match &operations {
+        let read_files: Arc<[Add]> = match &operations {
             OptimizeOperations::Compact(bins) => bins
                 .values()
                 .flat_map(|(_, bins)| bins.iter().flat_map(MergeBin::iter))
