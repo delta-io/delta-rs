@@ -611,6 +611,7 @@ impl CdfLoadBuilder {
             global: session.config().options().execution.parquet.clone(),
             ..Default::default()
         };
+        let metadata_size_hint = parquet_options.global.metadata_size_hint;
 
         let mut cdc_source = ParquetSource::new(cdc_table_schema)
             .with_table_parquet_options(parquet_options.clone())
@@ -621,6 +622,11 @@ impl CdfLoadBuilder {
         let mut remove_source = ParquetSource::new(remove_table_schema)
             .with_table_parquet_options(parquet_options)
             .with_parquet_file_reader_factory(self.parquet_metadata_cache.clone());
+        if let Some(hint) = metadata_size_hint {
+            cdc_source = cdc_source.with_metadata_size_hint(hint);
+            add_source = add_source.with_metadata_size_hint(hint);
+            remove_source = remove_source.with_metadata_size_hint(hint);
+        }
 
         // Set up the partition to physical file mapping, this is a mostly unmodified version of what is done in load
         let engine = self.log_store.engine();
