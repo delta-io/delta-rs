@@ -1194,7 +1194,8 @@ async fn test_conflict_for_remove_actions_with_commit_interval() -> Result<(), B
 
     let version = dt.version().unwrap();
 
-    // two bins in one partition, which commit in file order: [x=1, x=2] then [x=3, x=4]
+    // two bins in one partition, which commit in snapshot file order (newest first):
+    // [x=4, x=3] then [x=2, x=1]
     let sizes: Vec<u64> = dt
         .snapshot()?
         .log_data()
@@ -1220,9 +1221,9 @@ async fn test_conflict_for_remove_actions_with_commit_interval() -> Result<(), B
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let table_url = ensure_table_uri(uri).unwrap();
     let other_dt = deltalake_core::open_table(table_url).await?;
-    other_dt.delete().with_predicate("x = 4").await?;
+    other_dt.delete().with_predicate("x = 1").await?;
 
-    // the first commit only removes x=1 and x=2, but must still see the delete of x=4
+    // the first commit only removes x=4 and x=3, but must still see the delete of x=1
     let result = plan
         .execute(
             dt.log_store(),
