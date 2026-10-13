@@ -1223,24 +1223,91 @@ async fn test_conflict_for_remove_actions_with_commit_interval() -> Result<(), B
     let mut dt = context.table;
     let mut writer = RecordBatchWriter::for_table(&dt)?;
 
-    for partition in ["2022-05-22", "2022-05-23"] {
-        for _i in 0..2 {
-            write(
-                &mut writer,
-                &mut dt,
-                tuples_to_batch(vec![(1, 2), (1, 3), (1, 4)], partition)?,
-            )
-            .await?;
-        }
+    for x in 1..=4 {
+        write(
+            &mut writer,
+            &mut dt,
+            tuples_to_batch(vec![(x, 2), (x, 3), (x, 4)], "2022-05-22")?,
+        )
+        .await?;
     }
 
     let version = dt.version().unwrap();
+
+    // two bins in one partition, which commit in file order: [x=1, x=2] then [x=3, x=4]
+    let sizes: Vec<u64> = dt
+        .snapshot()?
+        .log_data()
+        .into_iter()
+        .map(|add| u64::try_from(add.size()).unwrap())
+        .collect();
+    let target_size = NonZeroU64::new(sizes[0] + sizes[1] + 1).unwrap();
 
     let df_context: SessionContext = DeltaSessionContext::default().into();
 
     let plan = create_merge_plan(
         &dt.log_store(),
         OptimizeType::Compact,
+        dt.snapshot()?.snapshot(),
+        &[],
+        Some(target_size),
+        WriterProperties::builder().build(),
+        ArrowWriterOptions::default(),
+        df_context.state(),
+    )
+    .await?;
+
+    let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
+    let table_url = ensure_table_uri(uri).unwrap();
+    let other_dt = deltalake_core::open_table(table_url).await?;
+    other_dt.delete().with_predicate("x = 4").await?;
+
+    // the first commit only removes x=1 and x=2, but must still see the delete of x=4
+    let result = plan
+        .execute(
+            dt.log_store(),
+            dt.snapshot()?.snapshot(),
+            1,
+            Some(Duration::from_secs(0)),
+            CommitProperties::default(),
+        )
+        .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(DeltaTableError::Transaction {
+                source: TransactionError::CommitConflict(CommitConflictError::ConcurrentDeleteRead)
+            })
+        ),
+        "{result:?}"
+    );
+    dt.update_state().await?;
+    assert_eq!(dt.version().unwrap(), version + 1);
+    Ok(())
+}
+
+#[tokio::test]
+/// Validate that z-order fails when a file it rewrites is removed concurrently
+async fn test_zorder_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    for x in 1..=2 {
+        write(
+            &mut writer,
+            &mut dt,
+            tuples_to_batch(vec![(x, 2), (x, 3), (x, 4)], "2022-05-22")?,
+        )
+        .await?;
+    }
+
+    let df_context: SessionContext = DeltaSessionContext::default().into();
+
+    let plan = create_merge_plan(
+        &dt.log_store(),
+        OptimizeType::ZOrder(vec!["x".to_string()]),
         dt.snapshot()?.snapshot(),
         &[],
         None,
@@ -1253,30 +1320,27 @@ async fn test_conflict_for_remove_actions_with_commit_interval() -> Result<(), B
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let table_url = ensure_table_uri(uri).unwrap();
     let other_dt = deltalake_core::open_table(table_url).await?;
-    other_dt
-        .delete()
-        .with_predicate("date = '2022-05-23'")
-        .await?;
+    other_dt.delete().with_predicate("x = 2").await?;
 
-    // whichever partition commits first, it must see the concurrent delete
     let result = plan
         .execute(
             dt.log_store(),
             dt.snapshot()?.snapshot(),
             1,
-            Some(Duration::from_secs(0)),
+            None,
             CommitProperties::default(),
         )
         .await;
 
-    assert!(matches!(
-        result,
-        Err(DeltaTableError::Transaction {
-            source: TransactionError::CommitConflict(CommitConflictError::ConcurrentDeleteRead)
-        })
-    ));
-    dt.update_state().await?;
-    assert_eq!(dt.version().unwrap(), version + 1);
+    assert!(
+        matches!(
+            result,
+            Err(DeltaTableError::Transaction {
+                source: TransactionError::CommitConflict(CommitConflictError::ConcurrentDeleteRead)
+            })
+        ),
+        "{result:?}"
+    );
     Ok(())
 }
 
