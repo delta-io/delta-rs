@@ -220,8 +220,8 @@ jobs:
           uv pip install pyarrow
           uv run --no-sync python -c 'import deltalake'
 
-  test-windows-wheel:
-    name: Python Windows wheel (x64)
+  test-windows:
+    name: Python Windows tests (x64)
     runs-on: windows-latest
     env:
       # This job does not use setup-builder, which installs sccache.
@@ -235,14 +235,22 @@ jobs:
           python-version: '3.11'
           architecture: x64
 
-      - name: Build wheel
+      - name: Install uv
+        # <https://github.com/astral-sh/setup-uv/releases/tag/v8.0.0>
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57
+
+      - name: Install test dependencies
+        run: uv sync --python python --no-install-project --all-extras
+
+      - name: Build and install deltalake
         # <https://github.com/PyO3/maturin-action/releases/tag/v1.50.1>
         uses: messense/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad
         with:
           target: x86_64-pc-windows-msvc
           rust-toolchain: stable
-          command: build
-          args: -m python/Cargo.toml --interpreter python --profile ci --out target/wheels
+          working-directory: python
+          command: develop
+          args: --uv --profile ci
 
       - name: Assert Windows Python wheels do not select Unix-only OpenSSH
         shell: bash
@@ -262,38 +270,8 @@ jobs:
             exit 1
           fi
 
-      - name: Install wheel and runtime dependencies
-        shell: pwsh
-        run: |
-          $wheels = @(Get-ChildItem "..\target\wheels\deltalake-*-cp311-abi3-win_amd64.whl")
-          if ($wheels.Count -ne 1) {
-            throw "Expected exactly one cp311-abi3-win_amd64 wheel, found $($wheels.Count)"
-          }
-          python -m pip install --only-binary=:all: $wheels[0].FullName
+      - name: Install minimum PyArrow version
+        run: uv pip install pyarrow==21.0.0
 
-      - name: Smoke test installed wheel without optional dependencies
-        working-directory: ${{ runner.temp }}
-        shell: python
-        run: |
-          import sysconfig
-          from pathlib import Path
-          from tempfile import TemporaryDirectory
-
-          from arro3.core import Array, DataType, Table
-          from deltalake import DeltaTable, QueryBuilder, write_deltalake
-
-          assert sysconfig.get_platform() == "win-amd64"
-          data = Table.from_pydict({"id": Array([1, 2, 3], DataType.int64())})
-          with TemporaryDirectory() as directory:
-              path = Path(directory) / "table"
-              write_deltalake(path, data)
-              write_deltalake(path, data, mode="append")
-              table = DeltaTable(path)
-              assert table.version() == 1
-              result = (
-                  QueryBuilder()
-                  .register("test_table", table)
-                  .execute("SELECT id FROM test_table ORDER BY id")
-                  .read_all()
-              )
-              assert result["id"].to_pylist() == [1, 1, 2, 2, 3, 3]
+      - name: Run unit tests and doctests
+        run: uv run --no-sync pytest -q -n auto --doctest-modules
