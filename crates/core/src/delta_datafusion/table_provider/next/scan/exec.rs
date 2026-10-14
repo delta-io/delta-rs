@@ -22,15 +22,15 @@ use datafusion::common::{
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::utils::collect_columns;
-use datafusion::physical_expr::{Distribution, EquivalenceProperties};
+use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalSortExpr};
 use datafusion::physical_plan::execution_plan::{CardinalityEffect, PlanProperties};
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
-    InputDistributionRequirements, PhysicalExpr, ReplaceChildrenOptions, Statistics,
-    coalesce_partitions::CoalescePartitionsExec, stream::RecordBatchStreamAdapter,
+    InputDistributionRequirements, PhysicalExpr, ReplaceChildrenOptions, SortOrderPushdownResult,
+    Statistics, coalesce_partitions::CoalescePartitionsExec, stream::RecordBatchStreamAdapter,
     union::UnionExec,
 };
 use datafusion::scalar::ScalarValue;
@@ -692,6 +692,55 @@ impl ExecutionPlan for DeltaScanExec {
                 &self.children(),
             )),
         }
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        if self.has_deletion_vectors()
+            || self.scan_plan.contract.retained_row_index_field().is_some()
+            || self
+                .scan_plan
+                .table_configuration()
+                .is_feature_enabled(&TableFeature::ColumnMapping)
+        {
+            return Ok(SortOrderPushdownResult::Unsupported);
+        }
+
+        if order
+            .iter()
+            .any(|sort_expr| self.references_delta_materialized_column(&sort_expr.expr))
+        {
+            return Ok(SortOrderPushdownResult::Unsupported);
+        }
+
+        let adapter_factory = DeltaPhysicalExprAdapterFactory;
+        let Ok(adapter) = adapter_factory.create(
+            Arc::clone(&self.scan_plan.contract.result_schema),
+            self.input.schema(),
+        ) else {
+            return Ok(SortOrderPushdownResult::Unsupported);
+        };
+
+        let Ok(adapted_order) = order
+            .iter()
+            .map(|sort_expr| {
+                Ok::<_, DataFusionError>(PhysicalSortExpr {
+                    expr: adapter.rewrite(Arc::clone(&sort_expr.expr))?,
+                    options: sort_expr.options,
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+        else {
+            return Ok(SortOrderPushdownResult::Unsupported);
+        };
+
+        Ok(self
+            .input
+            .try_pushdown_sort(&adapted_order)?
+            .into_inexact()
+            .map(|new_input| Arc::new(self.with_new_input(new_input)) as Arc<dyn ExecutionPlan>))
     }
 
     fn apply_expressions(
@@ -3620,6 +3669,142 @@ mod tests {
             .unwrap();
         let batches = datafusion::physical_plan::collect(scan, session.task_ctx()).await?;
         assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_try_pushdown_sort_delegates_data_columns_and_rejects_unsupported_cases()
+    -> TestResult {
+        use arrow_schema::SortOptions;
+
+        let table = TestTables::Delta0_8_0Partitioned
+            .table_builder()?
+            .load()
+            .await?;
+        let provider = table.table_provider().with_file_column("file_id").await?;
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+
+        // Physical data column ("value") should push down as Inexact.
+        let value_idx = exec.schema().index_of("value")?;
+        let value_sort = PhysicalSortExpr {
+            expr: Arc::new(Column::new("value", value_idx)),
+            options: SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        };
+        let pushed = exec.try_pushdown_sort(std::slice::from_ref(&value_sort))?;
+        let SortOrderPushdownResult::Inexact { inner: pushed_plan } = pushed else {
+            panic!("expected Inexact sort pushdown result");
+        };
+        let pushed_exec = pushed_plan
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+        let pushed_display =
+            datafusion::physical_plan::displayable(pushed_exec.input.as_ref())
+                .indent(true)
+                .to_string();
+        assert!(
+            pushed_display.contains("reverse_row_groups=true")
+                && pushed_display.contains("sort_order_for_reorder="),
+            "DESC sort pushdown should configure ParquetSource reorder hints: {pushed_display}"
+        );
+
+        // End-to-end SQL query through DataFusion's PushdownSort physical optimizer rule.
+        session.register_table("partitioned_table", provider.clone())?;
+        let df = session
+            .sql("SELECT value FROM partitioned_table ORDER BY value DESC LIMIT 1")
+            .await?;
+        let physical_plan = df.clone().create_physical_plan().await?;
+        let plan_display = datafusion::physical_plan::displayable(physical_plan.as_ref())
+            .indent(true)
+            .to_string();
+        assert!(
+            plan_display.contains("reverse_row_groups=true")
+                && plan_display.contains("sort_order_for_reorder="),
+            "PushdownSort rule should push sort through DeltaScanExec: {plan_display}"
+        );
+        let batches = df.collect().await?;
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+
+        // Delta-materialized partition column ("year") must be rejected.
+        let year_idx = exec.schema().index_of("year")?;
+        let year_sort = PhysicalSortExpr {
+            expr: Arc::new(Column::new("year", year_idx)),
+            options: SortOptions::default(),
+        };
+        assert!(matches!(
+            exec.try_pushdown_sort(&[year_sort])?,
+            SortOrderPushdownResult::Unsupported
+        ));
+
+        // Synthetic file_id column must be rejected.
+        let file_id_idx = exec.schema().index_of("file_id")?;
+        let file_id_sort = PhysicalSortExpr {
+            expr: Arc::new(Column::new("file_id", file_id_idx)),
+            options: SortOptions::default(),
+        };
+        assert!(matches!(
+            exec.try_pushdown_sort(&[file_id_sort])?,
+            SortOrderPushdownResult::Unsupported
+        ));
+
+        // Retained row index scan must reject sort pushdown.
+        let retained_exec = DeltaScanExec::new(
+            retain_row_index(Arc::clone(&exec.scan_plan), "row_ordinal"),
+            Arc::clone(&exec.input),
+            Arc::clone(&exec.transforms),
+            exec.dv_state.clone(),
+            Arc::clone(&exec.public_file_ids),
+            exec.partition_stats.clone(),
+            exec.metrics.clone(),
+        );
+        assert!(matches!(
+            retained_exec.try_pushdown_sort(std::slice::from_ref(&value_sort))?,
+            SortOrderPushdownResult::Unsupported
+        ));
+
+        // Deletion vector scan must reject sort pushdown.
+        let dv_fixture = physical_dv_fixture()?;
+        let dv_table =
+            crate::open_table(url::Url::from_directory_path(dv_fixture.path()).unwrap()).await?;
+        let dv_provider = dv_table.table_provider().await?;
+        let dv_scan = dv_provider.scan(&session.state(), None, &[], None).await?;
+        let dv_exec = dv_scan
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+        let id_idx = dv_exec.schema().index_of("id")?;
+        let id_sort = PhysicalSortExpr {
+            expr: Arc::new(Column::new("id", id_idx)),
+            options: SortOptions::default(),
+        };
+        assert!(matches!(
+            dv_exec.try_pushdown_sort(&[id_sort])?,
+            SortOrderPushdownResult::Unsupported
+        ));
+
+        // Column-mapped table must reject sort pushdown.
+        let mut cm_table = open_fs_path("../test/tests/data/table_with_column_mapping");
+        cm_table.load().await?;
+        let cm_provider = cm_table.table_provider().await?;
+        let cm_scan = cm_provider.scan(&session.state(), None, &[], None).await?;
+        let cm_exec = cm_scan
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+        let cm_idx = cm_exec.schema().index_of("Super Name")?;
+        let cm_sort = PhysicalSortExpr {
+            expr: Arc::new(Column::new("Super Name", cm_idx)),
+            options: SortOptions::default(),
+        };
+        assert!(matches!(
+            cm_exec.try_pushdown_sort(&[cm_sort])?,
+            SortOrderPushdownResult::Unsupported
+        ));
+
         Ok(())
     }
 }
