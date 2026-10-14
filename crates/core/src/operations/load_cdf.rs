@@ -611,6 +611,7 @@ impl CdfLoadBuilder {
             global: session.config().options().execution.parquet.clone(),
             ..Default::default()
         };
+        let metadata_size_hint = parquet_options.global.metadata_size_hint;
 
         let mut cdc_source = ParquetSource::new(cdc_table_schema)
             .with_table_parquet_options(parquet_options.clone())
@@ -621,6 +622,11 @@ impl CdfLoadBuilder {
         let mut remove_source = ParquetSource::new(remove_table_schema)
             .with_table_parquet_options(parquet_options)
             .with_parquet_file_reader_factory(self.parquet_metadata_cache.clone());
+        if let Some(hint) = metadata_size_hint {
+            cdc_source = cdc_source.with_metadata_size_hint(hint);
+            add_source = add_source.with_metadata_size_hint(hint);
+            remove_source = remove_source.with_metadata_size_hint(hint);
+        }
 
         // Set up the partition to physical file mapping, this is a mostly unmodified version of what is done in load
         let engine = self.log_store.engine();
@@ -1619,6 +1625,143 @@ pub(crate) mod tests {
             .filter(|action| matches!(action, &&Action::Cdc(_)))
             .collect_vec();
         assert!(cdc_actions.is_empty());
+        Ok(())
+    }
+
+    /// Regression test for <https://github.com/delta-io/delta-rs/issues/4864>:
+    /// the CDF scan must apply the DataFusion session's
+    /// `datafusion.execution.parquet.metadata_size_hint` to its `ParquetSource`s so
+    /// the parquet reader prefetches the footer with a single hint-sized range read
+    /// instead of first probing the footer length with a small (8-byte) request.
+    #[tokio::test]
+    async fn test_cdf_applies_parquet_metadata_size_hint() -> TestResult {
+        use crate::delta_datafusion::DeltaSessionContext;
+        use crate::test_utils::object_store::{
+            RecordedObjectStoreOperation, RecordedPathKind, drain_recorded_object_store_operations,
+            recording_log_store,
+        };
+        use futures::TryStreamExt as _;
+
+        const METADATA_SIZE_HINT: u64 = 4321;
+
+        let delta_schema = TestSchemas::simple();
+        let table: DeltaTable = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(delta_schema.fields().cloned())
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await?;
+
+        let schema: Arc<Schema> = Arc::new(delta_schema.try_into_arrow()?);
+        let num_rows = 50_000i32;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from_iter_values(
+                    (0..num_rows).map(|i| i.to_string()),
+                )),
+                Arc::new(Int32Array::from_iter_values(0..num_rows)),
+                Arc::new(StringArray::from_iter_values((0..num_rows).map(|_| "yes"))),
+            ],
+        )?;
+        let table = table.write(vec![batch]).await?;
+        let table = table
+            .write(vec![RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(StringArray::from_iter_values(
+                        (0..num_rows).map(|i| i.to_string()),
+                    )),
+                    Arc::new(Int32Array::from_iter_values(0..num_rows)),
+                    Arc::new(StringArray::from_iter_values((0..num_rows).map(|_| "no"))),
+                ],
+            )?])
+            .with_save_mode(crate::protocol::SaveMode::Overwrite)
+            .await?;
+
+        let (log_store, mut operations) = recording_log_store(table.log_store());
+        let table = DeltaTable {
+            state: table.state,
+            log_store: log_store.clone(),
+        };
+
+        let session =
+            DeltaSessionContext::new_with_session_overrides(&std::collections::HashMap::from([(
+                "datafusion.execution.parquet.metadata_size_hint".to_string(),
+                METADATA_SIZE_HINT.to_string(),
+            )]))?
+            .into_inner();
+
+        let cdf_scan = table
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&session.state(), None)
+            .await
+            .expect("Failed to load CDF");
+        let batches = collect(cdf_scan, session.task_ctx())
+            .await
+            .expect("Failed to collect CDF batches");
+        assert!(
+            batches.iter().map(|batch| batch.num_rows()).sum::<usize>() > 0,
+            "expected CDF rows"
+        );
+
+        // Sanity: every written parquet file must be larger than the hint, so a hinted
+        // reader issues a bounded prefetch read of exactly `metadata_size_hint` bytes
+        // ending at the end of the file.
+        let parquet_sizes: Vec<u64> = log_store
+            .object_store()
+            .list(None)
+            .try_filter_map(|meta| async move {
+                Ok(meta
+                    .location
+                    .as_ref()
+                    .ends_with(".parquet")
+                    .then_some(meta.size))
+            })
+            .try_collect()
+            .await?;
+        assert!(!parquet_sizes.is_empty(), "expected written parquet files");
+        assert!(
+            parquet_sizes.iter().all(|&size| size > METADATA_SIZE_HINT),
+            "test precondition: parquet files must be larger than the metadata size hint, got {parquet_sizes:?}"
+        );
+        // Sanity: delta-rs's parquet footer cache would need to read the last
+        // `max(footer+8, 16KB)` bytes, so the files must be larger than that to keep the
+        // prefetch-read assertion below unambiguous.
+        const FOOTER_CACHE_MIN_TAIL_BYTES: u64 = 16 * 1024;
+        assert!(
+            parquet_sizes
+                .iter()
+                .all(|&size| size > FOOTER_CACHE_MIN_TAIL_BYTES),
+            "test precondition: parquet files must be larger than the footer cache's \
+             minimum tail read, got {parquet_sizes:?}"
+        );
+
+        let operations = drain_recorded_object_store_operations(&mut operations).await;
+        let has_prefetch_read = operations.iter().any(|op| {
+            let is_prefetch = |range: &std::ops::Range<u64>| {
+                range.end - range.start == METADATA_SIZE_HINT && parquet_sizes.contains(&range.end)
+            };
+            match op {
+                RecordedObjectStoreOperation::GetRange(kind, range)
+                    if matches!(kind, RecordedPathKind::Data | RecordedPathKind::Other) =>
+                {
+                    is_prefetch(range)
+                }
+                RecordedObjectStoreOperation::GetRanges(kind, ranges)
+                    if matches!(kind, RecordedPathKind::Data | RecordedPathKind::Other) =>
+                {
+                    ranges.iter().any(is_prefetch)
+                }
+                _ => false,
+            }
+        });
+        assert!(
+            has_prefetch_read,
+            "CDF scans must propagate datafusion.execution.parquet.metadata_size_hint to the \
+             ParquetSource (https://github.com/delta-io/delta-rs/issues/4864); recorded operations: {operations:?}"
+        );
+
         Ok(())
     }
 
