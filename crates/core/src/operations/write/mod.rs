@@ -169,6 +169,8 @@ pub struct WriteBuilder {
     description: Option<String>,
     /// Configurations of the delta table, only used when table doesn't exist
     configuration: HashMap<String, Option<String>>,
+    /// Format options of the delta table, only used when table doesn't exist yet
+    format_options: HashMap<String, String>,
 }
 
 #[derive(Default, Debug, Serialize, Deserialize)]
@@ -211,6 +213,7 @@ impl WriteBuilder {
             name: None,
             description: None,
             configuration: Default::default(),
+            format_options: Default::default(),
         }
     }
 
@@ -306,6 +309,20 @@ impl WriteBuilder {
     /// Specify the arrow writer options to use when writing a parquet file
     pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
         self.arrow_options = Some(arrow_options);
+        self
+    }
+
+    /// Set the `format.options` map stored on the table's `Metadata`, only used when the table
+    /// doesn't exist yet. Data files of the table are written with the parquet settings these
+    /// options configure (e.g. content-defined chunking via `contentDefinedChunking.enabled`).
+    pub fn with_format_options(
+        mut self,
+        options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.format_options = options
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect();
         self
     }
 
@@ -442,7 +459,8 @@ impl WriteBuilder {
                 let mut builder = CreateBuilder::new()
                     .with_log_store(self.log_store.clone())
                     .with_columns(schema.fields().cloned())
-                    .with_configuration(self.configuration.clone());
+                    .with_configuration(self.configuration.clone())
+                    .with_format_options(self.format_options.clone());
                 if let Some(partition_columns) = self.partition_columns.as_ref() {
                     builder = builder.with_partition_columns(partition_columns.clone())
                 }
@@ -3876,5 +3894,220 @@ mod tests {
         let batches = get_data(&table).await;
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 2);
+    }
+
+    const CDC_FORMAT_OPTIONS: [(&str, &str); 3] = [
+        ("contentDefinedChunking.enabled", "true"),
+        ("contentDefinedChunking.minChunkSize", "256"),
+        ("contentDefinedChunking.maxChunkSize", "1024"),
+    ];
+
+    /// A single-column batch whose rows are distinct, non-repeating strings, so that page
+    /// boundaries depend on the content rather than on a repeated template.
+    fn cdc_payload_batch(rows: std::ops::Range<usize>) -> RecordBatch {
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "payload",
+            DataType::Utf8,
+            false,
+        )]));
+        let payloads: Vec<String> = rows.map(|i| i.to_string()).collect();
+        RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(payloads))]).unwrap()
+    }
+
+    /// Compression and data page sizes of the column of every data file in `table`.
+    async fn cdc_column_pages(
+        table: &DeltaTable,
+    ) -> Vec<(parquet::basic::Compression, Vec<usize>)> {
+        use object_store::ObjectStoreExt;
+        use parquet::column::page::Page;
+        use parquet::file::reader::{FileReader, SerializedFileReader};
+
+        let mut columns = Vec::new();
+        for file in table.snapshot().unwrap().log_data().iter() {
+            let path = object_store::path::Path::from(file.path().as_ref());
+            let bytes = table
+                .object_store()
+                .get(&path)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            let reader = SerializedFileReader::new(bytes).unwrap();
+            let row_group = reader.get_row_group(0).unwrap();
+            let compression = row_group.metadata().column(0).compression();
+            let mut page_reader = row_group.get_column_page_reader(0).unwrap();
+            let mut data_page_sizes = Vec::new();
+            while let Some(page) = page_reader.get_next_page().unwrap() {
+                if matches!(page, Page::DataPage { .. } | Page::DataPageV2 { .. }) {
+                    data_page_sizes.push(page.buffer().len());
+                }
+            }
+            columns.push((compression, data_page_sizes));
+        }
+        columns
+    }
+
+    fn assert_content_defined_pages(columns: &[(parquet::basic::Compression, Vec<usize>)]) {
+        assert!(!columns.is_empty(), "expected at least one data file");
+        for (_, pages) in columns {
+            assert!(
+                pages.len() >= 10,
+                "expected content-defined chunking to split the column into at least 10 data pages, got {pages:?}"
+            );
+            assert!(
+                pages.iter().min() != pages.iter().max(),
+                "expected unevenly sized data pages, got {pages:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_content_defined_chunking_produces_uneven_data_pages() {
+        let table = DeltaTable::new_in_memory()
+            .write(vec![cdc_payload_batch(0..2000)])
+            .with_format_options(CDC_FORMAT_OPTIONS)
+            .await
+            .unwrap();
+
+        assert_content_defined_pages(&cdc_column_pages(&table).await);
+    }
+
+    #[tokio::test]
+    async fn test_content_defined_chunking_enabled_is_case_insensitive() {
+        let table = DeltaTable::new_in_memory()
+            .write(vec![cdc_payload_batch(0..2000)])
+            .with_format_options([
+                ("contentDefinedChunking.enabled", "True"),
+                ("contentDefinedChunking.minChunkSize", "256"),
+                ("contentDefinedChunking.maxChunkSize", "1024"),
+            ])
+            .await
+            .unwrap();
+
+        assert_content_defined_pages(&cdc_column_pages(&table).await);
+    }
+
+    #[tokio::test]
+    async fn test_content_defined_chunking_keeps_default_compression() {
+        let table = DeltaTable::new_in_memory()
+            .write(vec![cdc_payload_batch(0..2000)])
+            .with_format_options(CDC_FORMAT_OPTIONS)
+            .await
+            .unwrap();
+
+        for (compression, _) in cdc_column_pages(&table).await {
+            assert_eq!(compression, parquet::basic::Compression::SNAPPY);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_content_defined_chunking_applies_with_explicit_writer_properties() {
+        let zstd = parquet::basic::Compression::ZSTD(Default::default());
+        let table = DeltaTable::new_in_memory()
+            .write(vec![cdc_payload_batch(0..2000)])
+            .with_format_options(CDC_FORMAT_OPTIONS)
+            .with_writer_properties(WriterProperties::builder().set_compression(zstd).build())
+            .await
+            .unwrap();
+
+        let columns = cdc_column_pages(&table).await;
+        assert_content_defined_pages(&columns);
+        for (compression, _) in columns {
+            assert_eq!(compression, zstd);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_write_time_format_options_do_not_apply_to_existing_table() {
+        let table = DeltaTable::new_in_memory()
+            .write(vec![cdc_payload_batch(0..2000)])
+            .await
+            .unwrap();
+        let table = table
+            .write(vec![cdc_payload_batch(2000..4000)])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_format_options(CDC_FORMAT_OPTIONS)
+            .await
+            .unwrap();
+
+        assert!(
+            table
+                .snapshot()
+                .unwrap()
+                .metadata()
+                .format_options()
+                .is_empty()
+        );
+        for (_, pages) in cdc_column_pages(&table).await {
+            assert!(
+                pages.len() < 10,
+                "expected default page splitting, got {pages:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_optimize_keeps_content_defined_chunking() {
+        let table = DeltaTable::new_in_memory()
+            .write(vec![cdc_payload_batch(0..2000)])
+            .with_format_options(CDC_FORMAT_OPTIONS)
+            .await
+            .unwrap();
+        let table = table
+            .write(vec![cdc_payload_batch(2000..4000)])
+            .await
+            .unwrap();
+        let (table, metrics) = table.optimize().await.unwrap();
+
+        assert_eq!(metrics.num_files_removed, 2);
+        assert_content_defined_pages(&cdc_column_pages(&table).await);
+    }
+
+    #[tokio::test]
+    async fn test_delete_keeps_content_defined_chunking() {
+        let table = DeltaTable::new_in_memory()
+            .write(vec![cdc_payload_batch(0..2000)])
+            .with_format_options(CDC_FORMAT_OPTIONS)
+            .await
+            .unwrap();
+        let (table, metrics) = table
+            .delete()
+            .with_predicate(col("payload").eq(lit("7")))
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.num_deleted_rows, Some(1));
+        assert_content_defined_pages(&cdc_column_pages(&table).await);
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_keeps_content_defined_chunking() {
+        let table = DeltaTable::new_in_memory()
+            .write(vec![cdc_payload_batch(0..2000)])
+            .with_format_options(CDC_FORMAT_OPTIONS)
+            .await
+            .unwrap();
+        let source = cdc_payload_batch(2000..4000);
+        let ctx = SessionContext::new();
+        ctx.register_table("delta_table", table.table_provider().await.unwrap())
+            .unwrap();
+        ctx.register_table(
+            "source_data",
+            Arc::new(MemTable::try_new(source.schema(), vec![vec![source]]).unwrap()),
+        )
+        .unwrap();
+        ctx.sql("INSERT INTO delta_table SELECT * FROM source_data")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let mut table = table;
+        table.update_state().await.unwrap();
+        let columns = cdc_column_pages(&table).await;
+        assert_eq!(columns.len(), 2);
+        assert_content_defined_pages(&columns);
     }
 }

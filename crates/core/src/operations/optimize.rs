@@ -58,7 +58,7 @@ use crate::kernel::{Action, Add, DataType, PartitionsExt, Remove, StructType, Ve
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
-use crate::parquet_utils::default_writer_properties;
+use crate::parquet_utils::{apply_format_options, default_writer_properties};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
@@ -421,9 +421,12 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             }
             PROTOCOL.can_write_to(&snapshot)?;
 
-            let writer_properties = this.writer_properties.unwrap_or_else(|| {
-                default_writer_properties(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))
-            });
+            let writer_properties = apply_format_options(
+                this.writer_properties.unwrap_or_else(|| {
+                    default_writer_properties(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))
+                }),
+                snapshot.metadata().format_options(),
+            )?;
             let (session, _) = resolve_session_state(
                 this.session.as_deref(),
                 this.session_fallback_policy,
