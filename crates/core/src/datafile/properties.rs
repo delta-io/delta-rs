@@ -5,9 +5,9 @@
 //! data-skipping stats to collect. Every write path carries one value end to end.
 //!
 //! Concerns that adjust the parquet properties are [`WriterPropertiesLayer`]s, run
-//! in order per file by [`DeltaWriterProperties::resolve`]. A table-level setting
-//! (content-defined chunking from `format.options`) and a per-file one (encryption
-//! keys) compose without knowing about each other.
+//! in order per file by [`DeltaWriterProperties::resolve`], so a table-level
+//! setting and a per-file one (such as encryption keys) compose without knowing
+//! about each other.
 //!
 //! [`ReaderProperties`] is the read-side counterpart: it builds DataFusion's
 //! [`TableParquetOptions`](datafusion::config::TableParquetOptions) for Delta scans.
