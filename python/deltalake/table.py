@@ -786,21 +786,27 @@ class DeltaTable:
         This requires that add actions have been added to the Delta table with
         per-file statistics enabled. Because this is an optional field this
         "count" will be less than or equal to the true row count of the table.
+        Rows marked as deleted by deletion vectors are not counted.
         In order to get an exact number of rows a full table scan must happen
 
         Returns:
             The approximate number of rows for this specific table
         """
-        total_rows = 0
+        actions = self.get_add_actions(flatten=True)
+        num_records: list[int | None] = actions.column("num_records").to_pylist()
+        deleted_rows: list[int | None]
+        if "deletion_vector.cardinality" in actions.column_names:
+            deleted_rows = actions.column("deletion_vector.cardinality").to_pylist()
+        else:
+            deleted_rows = [None] * len(num_records)
 
-        for value in self.get_add_actions().column("num_records").to_pylist():
-            # Add action file statistics are optional and so while most modern
-            # tables are _likely_ to have this information it is not
-            # guaranteed.
-            if value is not None:
-                total_rows += value
-
-        return total_rows
+        # Add action file statistics are optional and so while most modern
+        # tables are _likely_ to have this information it is not guaranteed.
+        return sum(
+            records - (deleted or 0)
+            for records, deleted in zip(num_records, deleted_rows)
+            if records is not None
+        )
 
     def vacuum(
         self,
@@ -1463,6 +1469,10 @@ class DeltaTable:
         When ``flatten=False`` (default), partition values and column
         statistics are returned as nested struct columns (``partition``,
         ``null_count``, ``min``, ``max``).
+
+        If the table supports deletion vectors, a nested ``deletion_vector``
+        column holds each file's deletion vector descriptor (null when the
+        file has none). Its ``cardinality`` field is the number of deleted rows.
 
         When ``flatten=True``, those structs are flattened into
         top-level columns with dot-separated prefixes, e.g.
