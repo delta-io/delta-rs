@@ -273,7 +273,21 @@ impl Snapshot {
         // ratified log tail; filesystem-managed stores return `None` here.
         let catalog_log_tail = log_store.catalog_log_tail().await?;
 
-        Self::try_new_with_engine_and_catalog(engine, table_root, version, catalog_log_tail).await
+        let snapshot =
+            Self::try_new_with_engine_and_catalog(engine, table_root, version, catalog_log_tail)
+                .await?;
+
+        if !log_store.is_catalog_managed() && snapshot.table_configuration().is_catalog_managed() {
+            return Err(DeltaTableError::Generic(
+                "table requires catalog-managed (coordinated) commits but was opened without a \
+                 catalog coordinator; open it through its catalog with catalog-managed commits \
+                 enabled (for Unity Catalog: `uc://catalog.schema.table` with \
+                 `catalog_managed=true`)"
+                    .to_string(),
+            ));
+        }
+
+        Ok(snapshot)
     }
 
     /// Create a [`ScanBuilder`] borrowing this snapshot to configure a read of the table.
@@ -1090,6 +1104,19 @@ impl Snapshot {
             return Ok(Some(version));
         }
         Ok(None)
+    }
+
+    pub(crate) async fn in_commit_timestamp(
+        &self,
+        log_store: &dyn LogStore,
+    ) -> DeltaResult<Option<i64>> {
+        let engine = log_store.engine();
+        let inner = self.inner.clone();
+        Ok(
+            spawn_blocking_with_span(move || inner.get_in_commit_timestamp(engine.as_ref()))
+                .await
+                .map_err(|e| DeltaTableError::GenericError { source: e.into() })??,
+        )
     }
 
     /// Fetch the [domainMetadata] for a specific domain in this snapshot.

@@ -44,6 +44,7 @@ use crate::kernel::{
 use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
+use crate::protocol::checkpoints::catalog_managed_maintenance_error;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 
@@ -552,6 +553,10 @@ impl std::future::IntoFuture for VacuumBuilder {
                     DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot)),
                     Default::default(),
                 ));
+            }
+
+            if this.log_store.is_catalog_managed() {
+                return Err(catalog_managed_maintenance_error("VACUUM"));
             }
 
             // Both vacuum commits and the deletes between them share one write scope.
