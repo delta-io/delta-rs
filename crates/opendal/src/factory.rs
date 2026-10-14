@@ -36,8 +36,7 @@ impl<A: OpendalAdapter + 'static> ObjectStoreFactory for OpendalObjectStoreFacto
         // Whether the service can perform an atomic create-if-absent, which
         // delta needs to commit `_delta_log/N.json`. Services that can't get
         // the conditional-put shim applied below.
-        let needs_conditional_put_shim =
-            !operator.info().full_capability().write_with_if_not_exists;
+        let needs_conditional_put_shim = !operator.info().capability().write_with_if_not_exists;
         // Restore the lexicographic listing order that `object_store` (and
         // delta-kernel) require but `OpendalStore` does not guarantee.
         let sorted: ObjectStoreRef =
