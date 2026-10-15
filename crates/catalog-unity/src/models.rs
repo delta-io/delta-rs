@@ -436,8 +436,9 @@ pub struct TemporaryTableCredentials {
     pub azure_user_delegation_sas: Option<AzureUserDelegationSas>,
     pub gcp_oauth_token: Option<GcpOauthToken>,
     pub r2_temp_credentials: Option<R2TempCredentials>,
-    #[serde(with = "chrono::serde::ts_milliseconds")]
-    pub expiration_time: DateTime<Utc>,
+    /// `None` when the catalog does not vend an expiry (OSS UC returns `null`).
+    #[serde(default, with = "chrono::serde::ts_milliseconds_option")]
+    pub expiration_time: Option<DateTime<Utc>>,
     pub url: String,
 }
 
@@ -826,5 +827,31 @@ pub(crate) mod tests {
         let get_table: Result<GetTableResponse, _> = serde_json::from_str(ERROR_RESPONSE);
         assert!(get_table.is_ok());
         assert!(matches!(get_table.unwrap(), GetTableResponse::Error(_)))
+    }
+
+    #[test]
+    fn test_temp_credentials_without_expiration_time() {
+        // OSS Unity Catalog returns empty credential for file:// tables (#3966)
+        for body in [
+            r#"{"expiration_time":null, "url":"file:///tmp/t"}"#,
+            r#"{"url":"file:///tmp/t"}"#,
+        ] {
+            let resp: TableTempCredentialsResponse = serde_json::from_str(body).unwrap();
+            let TableTempCredentialsResponse::Success(creds) = resp else {
+                panic!("expected Success, got {resp:?}");
+            };
+            assert!(creds.expiration_time.is_none());
+        }
+
+        let resp: TableTempCredentialsResponse =
+            serde_json::from_str(r#"{"expiration_time":1765000000000, "url":"file:///tmp/t"}"#)
+                .unwrap();
+        assert!(matches!(
+            resp,
+            TableTempCredentialsResponse::Success(TemporaryTableCredentials {
+                expiration_time: Some(_),
+                ..
+            })
+        ));
     }
 }

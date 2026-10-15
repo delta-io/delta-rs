@@ -232,3 +232,30 @@ def test_struct_stats_3172(tmp_path: pathlib.Path) -> None:
     actions = dt.get_add_actions()
     min_stats = actions["min"][0].as_py()
     assert "year" in min_stats
+
+
+@pytest.mark.pyarrow
+def test_stats_columns_after_excluded_struct(tmp_path: pathlib.Path) -> None:
+    """
+    Columns listed in `delta.dataSkippingStatsColumns` that come after a struct
+    with no fields with stats must still have their stats parsed from the log.
+    """
+    import pyarrow as pa
+
+    data = pa.table(
+        {
+            "a": pa.array([1, 2], pa.int64()),
+            "st": pa.array([{"x": 1}, {"x": 2}], pa.struct([("x", pa.int64())])),
+            "b": pa.array([3, 4], pa.int64()),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        data,
+        configuration={"delta.dataSkippingStatsColumns": "a,b"},
+    )
+
+    actions = DeltaTable(tmp_path).get_add_actions()
+    assert actions["min"][0].as_py() == {"a": 1, "b": 3}
+    assert actions["max"][0].as_py() == {"a": 2, "b": 4}
+    assert actions["null_count"][0].as_py() == {"a": 0, "b": 0}
