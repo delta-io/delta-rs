@@ -21,10 +21,10 @@ use deltalake_core::protocol::DeltaOperation;
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use tracing::warn;
 use unity_catalog_delta_client_api::{
-    Commit, DeltaTableRequirement, DeltaTableUpdate, TableIdentifier, UpdateTableClient,
-    UpdateTableRequest,
+    Commit, DeltaTableRequirement, DeltaTableUpdate, Error as UCError, TableIdentifier,
+    UpdateTableClient, UpdateTableRequest,
 };
-use unity_catalog_delta_rest_client::{UCClient, UCUpdateTableRestClient};
+use unity_catalog_delta_rest_client::{UCDeltaTableClient, UCUpdateTableRestClient};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Default)]
@@ -56,7 +56,7 @@ fn staged_file_name(file_name: &str) -> DeltaResult<String> {
 
 #[derive(Debug)]
 pub struct UnityCommitCoordinator {
-    rest: Arc<UCClient>,
+    rest: Arc<UCDeltaTableClient>,
     update: Arc<UCUpdateTableRestClient>,
     catalog: String,
     schema: String,
@@ -67,7 +67,7 @@ pub struct UnityCommitCoordinator {
 
 impl UnityCommitCoordinator {
     pub fn new(
-        rest: Arc<UCClient>,
+        rest: Arc<UCDeltaTableClient>,
         update: Arc<UCUpdateTableRestClient>,
         catalog: impl Into<String>,
         schema: impl Into<String>,
@@ -126,21 +126,13 @@ fn commit_failed(msg: String) -> TransactionError {
     }
 }
 
-fn is_version_conflict(err: &unity_catalog_delta_client_api::Error) -> bool {
-    matches!(
-        err,
-        unity_catalog_delta_client_api::Error::Generic(msg) if msg.contains("status 409")
-    )
+fn is_version_conflict(err: &UCError) -> bool {
+    matches!(err, UCError::Generic(msg) if msg.contains("status 409"))
 }
 
-fn is_unbackfilled_limit(err: &unity_catalog_delta_client_api::Error) -> bool {
-    matches!(
-        err,
-        unity_catalog_delta_client_api::Error::MaxUnpublishedCommitsExceeded(_)
-    ) || matches!(
-        err,
-        unity_catalog_delta_client_api::Error::Generic(msg) if msg.contains("status 429")
-    )
+fn is_unbackfilled_limit(err: &UCError) -> bool {
+    matches!(err, UCError::MaxUnpublishedCommitsExceeded(_))
+        || matches!(err, UCError::Generic(msg) if msg.contains("status 429"))
 }
 
 fn classify_attempt(
@@ -149,10 +141,10 @@ fn classify_attempt(
     list: &CommitList,
 ) -> Option<CommitResponse> {
     let commit = list.commits.iter().find(|c| c.version as u64 == version)?;
-    Some(match staged_file_name(&commit.file_name) {
-        Ok(name) if name == file_name => CommitResponse::Committed,
-        _ => CommitResponse::Conflict { version },
-    })
+    match staged_file_name(&commit.file_name) {
+        Ok(name) if name == file_name => Some(CommitResponse::Committed),
+        _ => Some(CommitResponse::Conflict { version }),
+    }
 }
 
 async fn publish_commits(
@@ -160,24 +152,19 @@ async fn publish_commits(
     commits: &[Commit],
     up_to: Version,
 ) -> DeltaResult<Option<Version>> {
-    let mut to_publish: Vec<&Commit> = commits
-        .iter()
-        .filter(|c| c.version >= 0 && (c.version as u64) <= up_to)
-        .collect();
-    to_publish.sort_by_key(|c| c.version);
-    if let Some(gap) = to_publish
-        .windows(2)
-        .find(|pair| pair[1].version != pair[0].version + 1)
-    {
-        return Err(DeltaTableError::Generic(format!(
-            "catalog commits to publish are not contiguous: version {} is followed by {}",
-            gap[0].version, gap[1].version
-        )));
-    }
-
-    let mut published = None;
-    for commit in to_publish {
+    let mut published = 0;
+    let mut commits = commits.to_vec();
+    commits.sort_by_key(|c| c.version);
+    for commit in commits {
         let version = commit.version as u64;
+        if version > up_to {
+            break;
+        }
+        if published + 1 != version {
+            return Err(DeltaTableError::Generic(format!(
+                "catalog commits to publish are not contiguous: version {published} is followed by {version}",
+            )));
+        }
         let numbered = commit_uri_from_version(Some(version));
         if store.head(&numbered).await.is_err() {
             let staged_path = staged_commit_path(&commit.file_name)?;
@@ -190,31 +177,22 @@ async fn publish_commits(
                 Err(e) => return Err(e.into()),
             }
         }
-        published = Some(version);
+        published = version;
     }
-    Ok(published)
+    Ok(Some(published))
 }
 
 fn validate_catalog_managed_commit(
     table_uuid: &str,
-    table: Option<&TableConfiguration>,
+    table: &TableConfiguration,
     actions: &[Action],
 ) -> DeltaResult<()> {
-    let Some(table) = table else {
-        return Err(DeltaTableError::Generic(
-            "creating a Unity Catalog catalog-managed table is not supported by delta-rs"
-                .to_string(),
-        ));
-    };
-
     if !(table.is_catalog_managed()
         && table.is_feature_supported(&TableFeature::VacuumProtocolCheck)
         && table.is_feature_enabled(&TableFeature::InCommitTimestamp))
     {
         return Err(DeltaTableError::Generic(
-            "UC catalog-managed tables require the catalogManaged and vacuumProtocolCheck \
-             features and enabled in-commit timestamps"
-                .to_string(),
+            "UC catalog-managed tables require catalogManaged, vacuumProtocolCheck and in-commit timestamps".to_string(),
         ));
     }
     let id = table
@@ -347,16 +325,15 @@ impl CommitCoordinator for UnityCommitCoordinator {
 
     async fn publish(&self, store: &ObjectStoreRef, up_to: Version) -> DeltaResult<()> {
         let list = self.get_commits().await?;
-        let Some(published) = publish_commits(store, &list.commits, up_to).await? else {
-            return Ok(());
-        };
-        let request = self.update_request(DeltaTableUpdate::SetLatestBackfilledVersion {
-            latest_published_version: published as i64,
-        });
-        self.update
-            .update_table(&self.target(), request)
-            .await
-            .map_err(UnityCatalogError::from)?;
+        if let Some(published) = publish_commits(store, &list.commits, up_to).await? {
+            let request = self.update_request(DeltaTableUpdate::SetLatestBackfilledVersion {
+                latest_published_version: published as i64,
+            });
+            self.update
+                .update_table(&self.target(), request)
+                .await
+                .map_err(UnityCatalogError::from)?;
+        }
         Ok(())
     }
 }
@@ -440,18 +417,18 @@ impl<C: CommitCoordinator + Committer + 'static> LogStore for CatalogManagedLogS
         true
     }
 
+    async fn publish_logs(&self, up_to: Version) -> DeltaResult<()> {
+        self.coordinator.publish(&self.prefixed_store, up_to).await
+    }
+
     fn validate_commit(
         &self,
-        table: Option<&dyn TableReference>,
+        table: &dyn TableReference,
         actions: &[Action],
         _operation: &DeltaOperation,
     ) -> DeltaResult<()> {
-        let table = table.map(|t| t.eager_snapshot().table_configuration());
+        let table = table.eager_snapshot().table_configuration();
         validate_catalog_managed_commit(self.coordinator.table_uuid(), table, actions)
-    }
-
-    async fn publish_logs(&self, up_to: Version) -> DeltaResult<()> {
-        self.coordinator.publish(&self.prefixed_store, up_to).await
     }
 
     fn object_store(&self) -> Arc<dyn ObjectStore> {
@@ -803,7 +780,7 @@ mod tests {
         assert!(
             read(&store, "_delta_log/00000000000000000001.json")
                 .await
-                .is_none()
+                .is_some()
         );
     }
 
@@ -855,19 +832,17 @@ mod tests {
         actions: &[Action],
     ) -> DeltaResult<()> {
         let metadata = deltalake_core::kernel::new_metadata(
-            &deltalake_core::kernel::StructType::try_new(vec![]).unwrap(),
+            &deltalake_core::kernel::StructType::try_new(vec![])?,
             Vec::<String>::new(),
             config.clone(),
-        )
-        .unwrap();
+        )?;
         let table = TableConfiguration::try_new(
             metadata,
             protocol.clone(),
             Url::parse("memory:///table/").unwrap(),
             0,
-        )
-        .unwrap();
-        validate_catalog_managed_commit(TABLE_UUID, Some(&table), actions)
+        )?;
+        validate_catalog_managed_commit(TABLE_UUID, &table, actions)
     }
 
     #[test]
@@ -929,9 +904,6 @@ mod tests {
         );
         let err = validate(&valid_protocol(), &ict_off, &[]).unwrap_err();
         assert!(err.to_string().contains("in-commit timestamps"), "{err}");
-
-        let err = validate_catalog_managed_commit(TABLE_UUID, None, &[]).unwrap_err();
-        assert!(err.to_string().contains("creating"), "{err}");
     }
 
     #[test]

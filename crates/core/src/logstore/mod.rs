@@ -429,7 +429,7 @@ pub trait LogStore: Send + Sync + AsAny {
     /// Reject a commit this log store cannot accept.
     fn validate_commit(
         &self,
-        table: Option<&dyn TableReference>,
+        table: &dyn TableReference,
         actions: &[Action],
         operation: &DeltaOperation,
     ) -> DeltaResult<()> {
@@ -595,7 +595,7 @@ impl<T: LogStore + ?Sized> LogStore for Arc<T> {
 
     fn validate_commit(
         &self,
-        table: Option<&dyn TableReference>,
+        table: &dyn TableReference,
         actions: &[Action],
         operation: &DeltaOperation,
     ) -> DeltaResult<()> {

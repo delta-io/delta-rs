@@ -366,7 +366,7 @@ impl LogStore for ScopedLogStore {
 
     fn validate_commit(
         &self,
-        table: Option<&dyn TableReference>,
+        table: &dyn TableReference,
         actions: &[Action],
         operation: &DeltaOperation,
     ) -> DeltaResult<()> {

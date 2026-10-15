@@ -45,7 +45,9 @@ use deltalake_core::logstore::{
     ObjectStoreFactory, ObjectStoreRef, config::str_is_truthy, object_store_factories,
 };
 use unity_catalog_delta_client_api::{LoadTableResponse, Operation, StorageCredential};
-use unity_catalog_delta_rest_client::{ClientConfig, Error, UCClient, UCUpdateTableRestClient};
+use unity_catalog_delta_rest_client::{
+    ClientConfig, Error, UCDeltaTableClient, UCUpdateTableRestClient,
+};
 
 pub mod catalog_managed;
 pub mod client;
@@ -678,16 +680,11 @@ impl UnityCatalogBuilder {
         let (cc_client, update_client) =
             if let CredentialProvider::BearerToken(ref token) = credential {
                 let config = ClientConfig::build(workspace_url.clone(), token)
-                    .with_additional_user_agent([
-                        (env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
-                        ("Delta", "3.2.0"),
-                        ("Spark", "3.5.0"),
-                    ])
                     .build()
                     .map_err(UnityCatalogError::from)?;
 
                 (
-                    UCClient::new(config.clone()).map(Arc::new).ok(),
+                    UCDeltaTableClient::new(config.clone()).map(Arc::new).ok(),
                     UCUpdateTableRestClient::new(config).map(Arc::new).ok(),
                 )
             } else {
@@ -709,7 +706,7 @@ impl UnityCatalogBuilder {
 
 pub struct UnityCatalog {
     client: reqwest_middleware::ClientWithMiddleware,
-    cc_client: Option<Arc<UCClient>>,
+    cc_client: Option<Arc<UCDeltaTableClient>>,
     update_client: Option<Arc<UCUpdateTableRestClient>>,
     credential: CredentialProvider,
     workspace_url: String,
@@ -909,7 +906,7 @@ impl UnityCatalog {
         Ok(table)
     }
 
-    pub fn delta_rest_client(&self) -> Result<Arc<UCClient>, UnityCatalogError> {
+    pub fn delta_rest_client(&self) -> Result<Arc<UCDeltaTableClient>, UnityCatalogError> {
         self.cc_client
             .as_ref()
             .cloned()
