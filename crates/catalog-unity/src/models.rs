@@ -825,7 +825,6 @@ pub(crate) mod tests {
 
         let get_table: Result<GetTableResponse, _> = serde_json::from_str(ERROR_RESPONSE);
         assert!(get_table.is_ok());
-        dbg!(&get_table);
         assert!(matches!(get_table.unwrap(), GetTableResponse::Error(_)))
     }
 }

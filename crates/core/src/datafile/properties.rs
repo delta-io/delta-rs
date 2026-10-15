@@ -1,9 +1,70 @@
-//! Engine-agnostic Delta read configuration.
+//! Engine-agnostic Delta read and write configuration.
 //!
-//! [`ReaderProperties`] centralizes construction of DataFusion's
-//! [`TableParquetOptions`](datafusion::config::TableParquetOptions) for Delta
-//! scans, so read/parquet-IO config (future: per-file decryption) lives in one
-//! place. Read-side counterpart to `WriterProperties`.
+//! [`DeltaWriterProperties`] holds everything that shapes a data file: the parquet
+//! [`WriterProperties`], the [`ArrowWriterOptions`], file and batch sizes, and the
+//! data-skipping stats to collect. Every write path carries one value end to end.
+//!
+//! [`ReaderProperties`] is the read-side counterpart: it builds DataFusion's
+//! [`TableParquetOptions`](datafusion::config::TableParquetOptions) for Delta scans.
+
+use std::fmt::Debug;
+use std::num::NonZeroU64;
+use std::sync::LazyLock;
+
+use delta_kernel::table_configuration::TableConfiguration;
+use delta_kernel::table_properties::DataSkippingNumIndexedCols;
+use parquet::basic::Compression;
+use parquet::file::properties::WriterProperties;
+
+use crate::datafile::writer::ArrowWriterOptions;
+use crate::errors::DeltaResult;
+use crate::kernel::arrow::engine_ext::stats_table_properties;
+use crate::parquet_utils::default_writer_properties;
+use crate::table::config::{DEFAULT_NUM_INDEX_COLS, TablePropertiesExt as _};
+
+/// Rows per slice handed to the parquet writer when none is set.
+pub(crate) const DEFAULT_WRITE_BATCH_SIZE: usize = 8192;
+
+// Every parquet default an operation falls back to when the user sets none.
+// Keep them together so the per-operation differences stay visible:
+//
+// | operation                            | compression                  | `created_by` |
+// |--------------------------------------|------------------------------|--------------|
+// | write, merge, update, legacy writers | SNAPPY                       | delta-rs     |
+// | optimize                             | ZSTD(4)                      | delta-rs     |
+// | delete                               | DataFusion session (zstd(3)) | datafusion   |
+//
+// Python's `WriterProperties` starts from a bare parquet builder instead, so
+// a knob set there without `compression=` writes UNCOMPRESSED files.
+
+/// Arrow writer options when none are set.
+static DEFAULT_ARROW_OPTIONS: LazyLock<ArrowWriterOptions> = LazyLock::new(ArrowWriterOptions::new);
+
+/// Parquet writer properties when none are set: SNAPPY, delta-rs `created_by`.
+pub(crate) static DEFAULT_PARQUET_PROPERTIES: LazyLock<WriterProperties> =
+    LazyLock::new(|| default_writer_properties(Compression::SNAPPY));
+
+/// Optimize's fallback: ZSTD(4), delta-rs `created_by`. Compacted files are
+/// written rarely and read often, so the slower, denser codec pays off.
+pub(crate) static OPTIMIZE_PARQUET_PROPERTIES: LazyLock<WriterProperties> = LazyLock::new(|| {
+    default_writer_properties(Compression::ZSTD(
+        parquet::basic::ZstdLevel::try_new(4).expect("4 is a valid zstd level"),
+    ))
+});
+
+/// Delete's fallback: whatever the DataFusion session's `execution.parquet`
+/// options say (zstd(3) and a `datafusion version` tag by default).
+#[cfg(feature = "datafusion")]
+pub(crate) fn session_parquet_properties(
+    session: &dyn datafusion::catalog::Session,
+) -> DeltaResult<WriterProperties> {
+    Ok(session
+        .config_options()
+        .execution
+        .parquet
+        .into_writer_properties_builder()?
+        .build())
+}
 
 /// Engine-agnostic parquet read configuration for a Delta scan.
 // Future fields (e.g. per-file decryption) attach here.
@@ -14,13 +75,401 @@ pub struct ReaderProperties {}
 impl ReaderProperties {
     /// Build DataFusion's `TableParquetOptions` for a `ParquetSource`, inheriting
     /// the session's parquet execution settings.
+    ///
+    /// INT96 timestamps are read as microseconds, the precision of Delta timestamps,
+    /// unless the session sets `coerce_int96`.
     pub fn to_table_parquet_options(
         &self,
         session: &dyn datafusion::catalog::Session,
     ) -> datafusion::config::TableParquetOptions {
+        let mut global = session.config().options().execution.parquet.clone();
+        global.coerce_int96.get_or_insert_with(|| "us".to_string());
         datafusion::config::TableParquetOptions {
-            global: session.config().options().execution.parquet.clone(),
+            global,
             ..Default::default()
         }
+    }
+}
+
+/// Which columns get Delta data-skipping stats.
+#[derive(Clone, Debug)]
+pub struct WriterStatsConfig {
+    /// Number of leading columns to collect stats for.
+    pub num_indexed_cols: DataSkippingNumIndexedCols,
+    /// Columns to collect stats for; takes precedence over `num_indexed_cols`.
+    pub stats_columns: Option<Vec<String>>,
+}
+
+/// Stats config when none is set and no table fills one in.
+static DEFAULT_STATS: WriterStatsConfig = WriterStatsConfig {
+    num_indexed_cols: DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
+    stats_columns: None,
+};
+
+impl Default for WriterStatsConfig {
+    fn default() -> Self {
+        DEFAULT_STATS.clone()
+    }
+}
+
+impl WriterStatsConfig {
+    /// Stats for the first `num_indexed_cols` columns, or for `stats_columns` when set.
+    pub fn new(
+        num_indexed_cols: DataSkippingNumIndexedCols,
+        stats_columns: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            num_indexed_cols,
+            stats_columns,
+        }
+    }
+
+    /// The table's stats configuration, with column names made physical.
+    pub fn from_config(config: &TableConfiguration) -> Self {
+        let properties = stats_table_properties(
+            config.logical_schema().as_ref(),
+            config.table_properties(),
+            config.column_mapping_mode(),
+        );
+        Self {
+            num_indexed_cols: properties.num_indexed_cols(),
+            stats_columns: properties
+                .data_skipping_stats_columns
+                .as_ref()
+                .map(|columns| columns.iter().map(|c| c.to_string()).collect()),
+        }
+    }
+}
+
+/// Everything that shapes a Delta data file.
+///
+/// Unset fields fall back to delta-rs defaults, or to the table's where an
+/// operation knows them, so `Default::default()` is a complete configuration.
+/// The parquet fallback differs by operation; see the table above
+/// [`DEFAULT_PARQUET_PROPERTIES`].
+#[derive(Clone, Debug, Default)]
+pub struct DeltaWriterProperties {
+    /// Parquet writer properties; `None` is the delta-rs default, or the operation's.
+    pub(crate) parquet: Option<WriterProperties>,
+    /// Arrow writer options; `None` is the default options.
+    pub(crate) arrow: Option<ArrowWriterOptions>,
+    /// Size at which a data file rolls. Unset, operations use the table's
+    /// ([`Self::apply_table_defaults`]); a writer handed `None` never rolls.
+    pub(crate) target_file_size: Option<NonZeroU64>,
+    /// Rows per slice handed to the parquet writer.
+    pub(crate) write_batch_size: Option<usize>,
+    /// Which columns get data-skipping stats. Unset, operations use the table's.
+    pub(crate) stats: Option<WriterStatsConfig>,
+}
+
+impl DeltaWriterProperties {
+    /// Parquet writer properties, instead of the delta-rs default.
+    pub fn with_parquet_properties(mut self, properties: WriterProperties) -> Self {
+        self.parquet = Some(properties);
+        self
+    }
+
+    /// Arrow writer options.
+    pub fn with_arrow_options(mut self, options: ArrowWriterOptions) -> Self {
+        self.arrow = Some(options);
+        self
+    }
+
+    /// `overrides` on top of `self`: every field set on `overrides` replaces the one
+    /// here, every unset field keeps this value. The operation builders' setters go
+    /// through this, so the order they are called in does not matter.
+    pub fn merge(self, overrides: Self) -> Self {
+        Self {
+            parquet: overrides.parquet.or(self.parquet),
+            arrow: overrides.arrow.or(self.arrow),
+            target_file_size: overrides.target_file_size.or(self.target_file_size),
+            write_batch_size: overrides.write_batch_size.or(self.write_batch_size),
+            stats: overrides.stats.or(self.stats),
+        }
+    }
+
+    /// Roll data files at `size`. `None` leaves it to the operation (the table's
+    /// size); only `WriteBuilder::with_target_file_size(None)` disables rolling.
+    pub fn with_target_file_size(mut self, size: Option<NonZeroU64>) -> Self {
+        self.target_file_size = size;
+        self
+    }
+
+    /// Rows per slice handed to the parquet writer; zero is rejected when a
+    /// writer is built.
+    pub fn with_write_batch_size(mut self, rows: usize) -> Self {
+        self.write_batch_size = Some(rows);
+        self
+    }
+
+    /// Which columns get data-skipping stats, instead of the table's configuration.
+    pub fn with_stats_config(mut self, stats: WriterStatsConfig) -> Self {
+        self.stats = Some(stats);
+        self
+    }
+
+    /// Fill the parquet writer properties from `default` if none are set: the
+    /// operation's own fallback (see the table above [`DEFAULT_PARQUET_PROPERTIES`]).
+    /// Unlike [`Self::with_parquet_properties`], this never overrides properties
+    /// already set.
+    pub(crate) fn apply_parquet_default(
+        self,
+        default: impl FnOnce() -> DeltaResult<WriterProperties>,
+    ) -> DeltaResult<Self> {
+        if self.parquet.is_some() {
+            return Ok(self);
+        }
+        let parquet = default()?;
+        Ok(self.with_parquet_properties(parquet))
+    }
+
+    /// Fill the stats configuration from the table configuration if it is not already set.
+    /// Unlike the `with_` setters, this never overrides a value already set.
+    pub(crate) fn apply_table_stats(mut self, table_config: &TableConfiguration) -> Self {
+        if self.stats.is_none() {
+            self.stats = Some(WriterStatsConfig::from_config(table_config));
+        }
+        self
+    }
+
+    /// Fill the target file size and stats configuration from the table configuration
+    /// where they are not already set. Unlike the `with_` setters, this never overrides
+    /// a value already set.
+    pub(crate) fn apply_table_defaults(mut self, table_config: &TableConfiguration) -> Self {
+        if self.target_file_size.is_none() {
+            self.target_file_size = Some(table_config.table_properties().target_file_size());
+        }
+        self.apply_table_stats(table_config)
+    }
+
+    /// The parquet writer properties set, if any.
+    pub fn parquet_properties(&self) -> Option<&WriterProperties> {
+        self.parquet.as_ref()
+    }
+
+    /// The arrow writer options set, or the default options.
+    pub fn arrow_options(&self) -> &ArrowWriterOptions {
+        self.arrow.as_ref().unwrap_or(&DEFAULT_ARROW_OPTIONS)
+    }
+
+    /// The size at which data files roll, if set.
+    pub fn target_file_size(&self) -> Option<NonZeroU64> {
+        self.target_file_size
+    }
+
+    /// Rows per slice handed to the parquet writer, if set.
+    pub fn write_batch_size(&self) -> Option<usize> {
+        self.write_batch_size
+    }
+
+    /// Which columns get data-skipping stats: the set value, or the delta-rs default.
+    pub fn stats(&self) -> &WriterStatsConfig {
+        self.stats.as_ref().unwrap_or(&DEFAULT_STATS)
+    }
+
+    /// The parquet writer properties set, or the delta-rs default properties.
+    pub fn parquet_properties_or_default(&self) -> &WriterProperties {
+        self.parquet.as_ref().unwrap_or(&DEFAULT_PARQUET_PROPERTIES)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use delta_kernel::schema::{DataType, StructField, StructType};
+    use parquet::schema::types::ColumnPath;
+
+    use super::*;
+    use crate::test_utils::{build_test_table_configuration, column_mapping_test_field};
+
+    #[test]
+    fn table_defaults_fill_only_what_is_unset() {
+        let logical_schema = StructType::try_new([
+            StructField::nullable("a", DataType::STRING),
+            StructField::nullable("b", DataType::STRING),
+        ])
+        .unwrap();
+        let table_config = build_test_table_configuration(
+            logical_schema,
+            vec![],
+            HashMap::from([
+                ("delta.targetFileSize".to_string(), "1024".to_string()),
+                (
+                    "delta.dataSkippingStatsColumns".to_string(),
+                    "a".to_string(),
+                ),
+            ]),
+        );
+
+        let filled = DeltaWriterProperties::default().apply_table_defaults(&table_config);
+        assert_eq!(filled.target_file_size(), NonZeroU64::new(1024));
+        assert_eq!(filled.stats().stats_columns, Some(vec!["a".to_string()]));
+
+        let kept = DeltaWriterProperties::default()
+            .with_target_file_size(NonZeroU64::new(7))
+            .with_stats_config(WriterStatsConfig::new(
+                DataSkippingNumIndexedCols::AllColumns,
+                None,
+            ))
+            .apply_table_defaults(&table_config);
+        assert_eq!(kept.target_file_size(), NonZeroU64::new(7));
+        assert_eq!(
+            kept.stats().num_indexed_cols,
+            DataSkippingNumIndexedCols::AllColumns
+        );
+        assert_eq!(kept.stats().stats_columns, None);
+    }
+
+    #[test]
+    fn defaults_fall_back_to_delta_rs_parquet_properties() {
+        let props = DeltaWriterProperties::default();
+        assert!(props.parquet_properties().is_none());
+        let default = props.parquet_properties_or_default();
+        assert_eq!(
+            default.created_by(),
+            format!("delta-rs version {}", crate::crate_version())
+        );
+        assert_eq!(
+            default.compression(&ColumnPath::from("id")),
+            Compression::SNAPPY
+        );
+        assert!(props.target_file_size().is_none());
+        assert!(props.write_batch_size().is_none());
+        assert_eq!(
+            props.stats().num_indexed_cols,
+            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS)
+        );
+    }
+
+    #[test]
+    fn setters_round_trip() {
+        let parquet = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .build();
+        let props = DeltaWriterProperties::default()
+            .with_parquet_properties(parquet)
+            .with_arrow_options(ArrowWriterOptions::new().with_enable_parallel_encoding(false))
+            .with_target_file_size(NonZeroU64::new(10))
+            .with_write_batch_size(7)
+            .with_stats_config(WriterStatsConfig::new(
+                DataSkippingNumIndexedCols::AllColumns,
+                Some(vec!["a".to_string()]),
+            ));
+        assert_eq!(
+            props
+                .parquet_properties_or_default()
+                .compression(&ColumnPath::from("id")),
+            Compression::UNCOMPRESSED
+        );
+        assert!(!props.arrow_options().enable_parallel_encoding());
+        assert_eq!(props.target_file_size(), NonZeroU64::new(10));
+        assert_eq!(props.write_batch_size(), Some(7));
+        assert_eq!(props.stats().stats_columns, Some(vec!["a".to_string()]));
+    }
+
+    #[test]
+    fn merge_takes_set_fields_from_overrides_and_keeps_the_rest() {
+        let base = DeltaWriterProperties::default()
+            .with_parquet_properties(
+                WriterProperties::builder()
+                    .set_compression(Compression::UNCOMPRESSED)
+                    .build(),
+            )
+            .with_write_batch_size(7);
+        let overrides = DeltaWriterProperties::default()
+            .with_arrow_options(ArrowWriterOptions::new().with_enable_parallel_encoding(false))
+            .with_write_batch_size(9);
+        let merged = base.merge(overrides);
+        assert_eq!(
+            merged
+                .parquet_properties_or_default()
+                .compression(&ColumnPath::from("id")),
+            Compression::UNCOMPRESSED
+        );
+        assert!(!merged.arrow_options().enable_parallel_encoding());
+        assert_eq!(merged.write_batch_size(), Some(9));
+        assert!(merged.target_file_size().is_none());
+    }
+
+    #[test]
+    fn parquet_default_fills_only_when_unset() {
+        let zstd = || {
+            Ok(WriterProperties::builder()
+                .set_compression(Compression::ZSTD(Default::default()))
+                .build())
+        };
+        let filled = DeltaWriterProperties::default()
+            .apply_parquet_default(zstd)
+            .unwrap();
+        assert!(matches!(
+            filled
+                .parquet_properties_or_default()
+                .compression(&ColumnPath::from("id")),
+            Compression::ZSTD(_)
+        ));
+        let kept = DeltaWriterProperties::default()
+            .with_parquet_properties(
+                WriterProperties::builder()
+                    .set_compression(Compression::UNCOMPRESSED)
+                    .build(),
+            )
+            .apply_parquet_default(zstd)
+            .unwrap();
+        assert_eq!(
+            kept.parquet_properties_or_default()
+                .compression(&ColumnPath::from("id")),
+            Compression::UNCOMPRESSED
+        );
+    }
+
+    #[test]
+    fn from_config_translates_stats_columns_to_physical_names() {
+        // `physical_name` resolves to the `physicalName` annotation under both name and id modes.
+        for mode in ["name", "id"] {
+            let logical_schema = StructType::try_new([
+                column_mapping_test_field("p", "col_p", 1),
+                column_mapping_test_field("a", "col_a", 2),
+            ])
+            .unwrap();
+            let table_config = build_test_table_configuration(
+                logical_schema,
+                vec!["p".to_string()],
+                HashMap::from([
+                    ("delta.columnMapping.mode".to_string(), mode.to_string()),
+                    (
+                        "delta.dataSkippingStatsColumns".to_string(),
+                        "a".to_string(),
+                    ),
+                ]),
+            );
+
+            let config = WriterStatsConfig::from_config(&table_config);
+            assert_eq!(
+                config.stats_columns,
+                Some(vec!["col_a".to_string()]),
+                "stats columns should be physical names in {mode} mode"
+            );
+        }
+    }
+
+    #[test]
+    fn from_config_keeps_logical_names_without_column_mapping() {
+        let logical_schema = StructType::try_new([
+            StructField::nullable("a", DataType::STRING),
+            StructField::nullable("b", DataType::STRING),
+        ])
+        .unwrap();
+        let table_config = build_test_table_configuration(
+            logical_schema,
+            vec![],
+            HashMap::from([(
+                "delta.dataSkippingStatsColumns".to_string(),
+                "a".to_string(),
+            )]),
+        );
+
+        let config = WriterStatsConfig::from_config(&table_config);
+        assert_eq!(config.stats_columns, Some(vec!["a".to_string()]));
     }
 }
