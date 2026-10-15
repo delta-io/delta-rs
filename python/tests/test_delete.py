@@ -6,6 +6,7 @@ import pytest
 from arro3.core import Array, DataType, Field, Table
 
 from deltalake import CommitProperties, write_deltalake
+from deltalake.query import QueryBuilder
 from deltalake.table import DeltaTable
 
 if TYPE_CHECKING:
@@ -237,3 +238,57 @@ def test_delete_concurrent_with_non_overlapping_append(tmp_path: pathlib.Path):
         .read_all()
     )
     assert result == expected
+
+
+def _write_partitioned_table(path: pathlib.Path) -> None:
+    write_deltalake(
+        path,
+        Table(
+            {
+                "id": Array(
+                    [0, 1, 2, 3], type=Field("id", DataType.int64(), nullable=True)
+                ),
+                "x": Array(
+                    [0, 1, 2, None], type=Field("x", DataType.int64(), nullable=True)
+                ),
+                "p": Array(
+                    [0, 1, None, 2], type=Field("p", DataType.int32(), nullable=True)
+                ),
+                "q": Array(
+                    ["a", "b", None, "c"],
+                    type=Field("q", DataType.string(), nullable=True),
+                ),
+            }
+        ),
+        partition_by=["p", "q"],
+    )
+
+
+@pytest.mark.parametrize(
+    ("predicate", "expected_remaining"),
+    [
+        ("p + 1 = 2", [0, 2, 3]),
+        ("CASE WHEN p = 1 THEN true ELSE false END", [0, 2, 3]),
+        ("NOT coalesce(q > 'a', false)", [1, 3]),
+        ("x = NULL", [0, 1, 2, 3]),
+        ("p = 1 AND x = NULL", [0, 1, 2, 3]),
+        ("p = 1", [0, 2, 3]),
+        ("p IS NULL", [0, 1, 3]),
+    ],
+)
+def test_delete_partition_predicate_follows_sql_semantics(
+    tmp_path: pathlib.Path, predicate: str, expected_remaining: list[int]
+):
+    _write_partitioned_table(tmp_path)
+
+    metrics = DeltaTable(tmp_path).delete(predicate)
+
+    remaining = (
+        QueryBuilder()
+        .register("tbl", DeltaTable(tmp_path))
+        .execute("select id from tbl")
+        .read_all()["id"]
+        .to_pylist()
+    )
+    assert sorted(remaining) == expected_remaining
+    assert metrics["num_deleted_rows"] == 4 - len(expected_remaining)
