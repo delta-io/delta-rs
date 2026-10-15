@@ -16,7 +16,6 @@ use crate::errors::{ColumnMappingOperation, DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{Action, DataType, MetadataExt, ProtocolExt as _, StructField, StructType};
 use crate::kernel::{ProtocolInner, new_metadata};
-use crate::kernel::{reader_features_for_version, writer_features_for_version};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
