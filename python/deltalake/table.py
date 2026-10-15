@@ -905,6 +905,7 @@ class DeltaTable:
     ) -> dict[str, Any]:
         """`UPDATE` records in the Delta Table that matches an optional predicate. Either updates or new_values needs
         to be passed for it to execute.
+        If a datetime object without a timezone is passed in `new_values`, the UTC timezone will be assumed.
 
         Args:
             updates: a mapping of column name to update SQL expression.
@@ -972,6 +973,8 @@ class DeltaTable:
                 elif isinstance(value, str):
                     value = "'" + value.replace("'", "''") + "'"
                 elif isinstance(value, datetime):
+                    if value.tzinfo is None:
+                        value = value.replace(tzinfo=timezone.utc)
                     value = str(
                         int(value.timestamp() * 1000 * 1000)
                     )  # convert to microseconds

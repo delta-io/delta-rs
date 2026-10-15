@@ -1,4 +1,6 @@
+import datetime
 import pathlib
+import time
 
 import pytest
 from arro3.core import Array, DataType, Table
@@ -246,6 +248,36 @@ def test_update_new_values_preserves_strings(tmp_path, value):
         QueryBuilder().register("tbl", dt).execute("SELECT name FROm tbl").read_all()
     )
     assert result.column("name")[0].as_py() == value
+
+
+@pytest.mark.parametrize("tz", ["UTC", "Asia/Seoul", "America/Los_Angeles"])
+def test_update_new_values_naive_datetime_is_utc(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, tz: str
+):
+    import pyarrow as pa
+
+    if not hasattr(time, "tzset"):
+        pytest.skip("time.tzset is not available on this platform")
+
+    data = pa.table(
+        {
+            "ts": pa.array(
+                [datetime.datetime(2026, 1, 1)], type=pa.timestamp("us", "UTC")
+            )
+        }
+    )
+    write_deltalake(tmp_path, data)
+    dt = DeltaTable(tmp_path)
+
+    monkeypatch.setenv("TZ", tz)
+    time.tzset()
+
+    dt.update(new_values={"ts": datetime.datetime(2026, 6, 1, 12, 30)})
+
+    result = QueryBuilder().register("tbl", dt).execute("SELECT ts FROM tbl").read_all()
+    assert result.column("ts")[0].as_py() == datetime.datetime(
+        2026, 6, 1, 12, 30, tzinfo=datetime.timezone.utc
+    )
 
 
 def test_update_no_inputs(tmp_path: pathlib.Path, sample_table: Table):
