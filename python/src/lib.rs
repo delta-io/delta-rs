@@ -2425,18 +2425,6 @@ fn maybe_create_commit_properties(
     Some(commit_properties)
 }
 
-/// Append an explicit UTC offset marker (`Z`) to a serialized timestamp, unless it
-/// already carries one. pyarrow's string-to-timestamp cast requires the offset,
-/// but timezone-aware serialization already emits it, so a blind append would
-/// produce an invalid `...ZZ` value.
-fn with_utc_offset(value: String) -> String {
-    if value.ends_with('Z') {
-        value
-    } else {
-        format!("{value}Z")
-    }
-}
-
 fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     use Scalar::*;
 
@@ -2454,13 +2442,13 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
         Double(val) => val.into_py_any(py)?,
         Timestamp(_) => {
             // pyarrow needs an explicit UTC offset to cast the scalar value to
-            // pa.timestamp("us", "UTC") or pa.timestamp("ns", "UTC"). serialize()
-            // already emits one (`...Z`) for timezone-aware timestamps, so only
-            // append 'Z' when the representation lacks it.
-            with_utc_offset(value.serialize()).into_py_any(py)?
+            // pa.timestamp("us", "UTC") or pa.timestamp("ns", "UTC"), and
+            // serialize() already emits one (`...Z`) for timezone-aware
+            // timestamps, so the value can be passed through as-is.
+            value.serialize().into_py_any(py)?
         }
         #[cfg(feature = "nanosecond-timestamps")]
-        TimestampNanos(_) => with_utc_offset(value.serialize()).into_py_any(py)?,
+        TimestampNanos(_) => value.serialize().into_py_any(py)?,
         #[cfg(feature = "nanosecond-timestamps")]
         TimestampNanosNtz(_) => {
             let value = value.serialize();
