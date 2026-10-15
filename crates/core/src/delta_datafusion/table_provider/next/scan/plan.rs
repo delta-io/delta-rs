@@ -36,7 +36,7 @@ use tracing::debug;
 
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::engine::{
-    to_datafusion_expr, to_delta_expression, to_delta_predicate,
+    is_exact_partition_predicate, to_datafusion_expr, to_delta_expression, to_delta_predicate,
 };
 use crate::delta_datafusion::table_provider::next::FILE_ID_COLUMN_DEFAULT;
 use crate::kernel::{Scan, Snapshot};
@@ -599,15 +599,13 @@ fn process_predicate<'a>(
         let logical_schema = config.logical_schema();
         match resolve_predicate(&logical_schema, &kernel_predicate) {
             ColumnResolution::Skippable | ColumnResolution::Unknown => {
-                let (pushdown, parquet_predicate) = if only_partition_refs {
-                    // All references are to partition columns so the kernel
-                    // scan can fully handle the predicate and return exact results
+                let (pushdown, parquet_predicate) = if is_exact_partition_predicate(expr, cols) {
+                    // The kernel scan evaluates this predicate exactly on partition values
                     (TableProviderFilterPushDown::Exact, None)
                 } else if any_partition_refs {
-                    // Some references are to partition columns, so the kernel
-                    // scan can only handle the predicate on best effort. Since the
-                    // parquet scan cannot reference partition columns, we do not
-                    // push down any predicate to parquet
+                    // The kernel scan can only prune partitions on best effort for this
+                    // predicate. Since the parquet scan cannot reference partition columns,
+                    // we do not push down any predicate to parquet
                     (TableProviderFilterPushDown::Inexact, None)
                 } else {
                     // For non-partition predicates we can *attempt* Parquet pushdown, but it is not a
@@ -1429,6 +1427,26 @@ mod tests {
             supports_filters_pushdown(&[&partition_only, &data_only], table_config, &scan_config),
             vec![
                 TableProviderFilterPushDown::Exact,
+                TableProviderFilterPushDown::Inexact,
+            ]
+        );
+
+        // Kernel partition pruning keeps files for terms it cannot evaluate, so these must stay
+        // inexact and DataFusion must keep a filter above the scan.
+        let null_literal = lit(ScalarValue::Boolean(None));
+        let simplified_case = datafusion::logical_expr::binary_expr(
+            partition_only.clone(),
+            datafusion::logical_expr::Operator::IsNotDistinctFrom,
+            lit(true),
+        );
+        assert_eq!(
+            supports_filters_pushdown(
+                &[&null_literal, &simplified_case],
+                table_config,
+                &scan_config
+            ),
+            vec![
+                TableProviderFilterPushDown::Inexact,
                 TableProviderFilterPushDown::Inexact,
             ]
         );

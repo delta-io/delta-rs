@@ -23,6 +23,51 @@ pub(crate) fn to_delta_predicate(expr: &Expr) -> Result<Predicate> {
     }
 }
 
+/// Returns true when kernel file skipping selects exactly the files whose partition values
+/// satisfy `expr` under SQL semantics.
+///
+/// Kernel file skipping is best effort: it keeps every file for any term it cannot evaluate
+/// (arithmetic, `IS NOT DISTINCT FROM`, `IS NULL` over a comparison, NULL literals, ...). Only
+/// comparisons between a partition column and a non-null literal, `IS [NOT] NULL` on a partition
+/// column and `IN` lists of non-null literals, combined with `AND` / `OR`, are evaluated exactly.
+pub(crate) fn is_exact_partition_predicate(expr: &Expr, partition_columns: &[String]) -> bool {
+    let is_partition_column =
+        |expr: &Expr| matches!(expr, Expr::Column(c) if partition_columns.contains(&c.name));
+    let is_non_null_literal = |expr: &Expr| matches!(expr, Expr::Literal(v, _) if !v.is_null());
+
+    match expr {
+        Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::And | Operator::Or,
+            right,
+        }) => {
+            is_exact_partition_predicate(left, partition_columns)
+                && is_exact_partition_predicate(right, partition_columns)
+        }
+        Expr::BinaryExpr(BinaryExpr {
+            left,
+            op:
+                Operator::Eq
+                | Operator::NotEq
+                | Operator::Lt
+                | Operator::LtEq
+                | Operator::Gt
+                | Operator::GtEq,
+            right,
+        }) => {
+            (is_partition_column(left) && is_non_null_literal(right))
+                || (is_non_null_literal(left) && is_partition_column(right))
+        }
+        Expr::IsNull(inner) | Expr::IsNotNull(inner) => is_partition_column(inner),
+        Expr::InList(in_list) => {
+            is_partition_column(&in_list.expr)
+                && !in_list.list.is_empty()
+                && in_list.list.iter().all(is_non_null_literal)
+        }
+        _ => false,
+    }
+}
+
 fn normalize_delta_predicate_expr(expr: &Expr) -> Result<Expr> {
     let transformed = expr.clone().transform_up(|expr| match expr {
         Expr::InList(in_list) => Ok(match rewrite_in_list_expr_for_kernel(&in_list) {
@@ -345,7 +390,7 @@ mod tests {
     use datafusion::{
         common::Column,
         functions::core::expr_ext::FieldAccessor,
-        logical_expr::{col, lit},
+        logical_expr::{binary_expr, col, lit},
     };
     use delta_kernel::expressions::{BinaryExpressionOp, JunctionPredicateOp, Scalar};
 
@@ -945,5 +990,38 @@ mod tests {
             },
             _ => panic!("Expected Predicate expression"),
         }
+    }
+
+    #[test]
+    fn test_is_exact_partition_predicate() {
+        let partition_columns = ["p".to_string(), "q".to_string()];
+        let exact = |expr: Expr| is_exact_partition_predicate(&expr, &partition_columns);
+        let null_bool = || lit(ScalarValue::Boolean(None));
+
+        assert!(exact(col("p").eq(lit(1))));
+        assert!(exact(lit(1).lt(col("p"))));
+        assert!(exact(col("p").not_eq(lit(1)).and(col("q").gt_eq(lit("a")))));
+        assert!(exact(col("p").is_null().or(col("q").is_not_null())));
+        assert!(exact(col("p").in_list(vec![lit(1), lit(2)], true)));
+
+        assert!(!exact(col("x").eq(lit(1))));
+        assert!(!exact(col("p").eq(col("q"))));
+        assert!(!exact((col("p") + lit(1)).eq(lit(2))));
+        assert!(!exact(binary_expr(
+            col("p").eq(lit(1)),
+            Operator::IsNotDistinctFrom,
+            lit(true)
+        )));
+        assert!(!exact(
+            col("q").gt(lit("a")).is_null().or(col("q").lt_eq(lit("a")))
+        ));
+        assert!(!exact(null_bool()));
+        assert!(!exact(null_bool().and(col("p").eq(lit(1)))));
+        assert!(!exact(col("p").eq(lit(1)).or(col("x").eq(lit(1)))));
+        assert!(!exact(col("p").eq(lit(ScalarValue::Int32(None)))));
+        assert!(!exact(
+            col("p").in_list(vec![lit(1), lit(ScalarValue::Int32(None))], true)
+        ));
+        assert!(!exact(col("p").in_list(vec![], false)));
     }
 }
