@@ -272,8 +272,6 @@ pub struct Schema {
 /// Possible data source formats for unity tables
 #[derive(Clone, PartialEq)]
 pub enum DataSourceFormat {
-    #[default]
-    Undefined,
     Delta,
     Csv,
     Json,
@@ -297,6 +295,10 @@ pub enum DataSourceFormat {
     HiveSerde,
     HiveCustom,
     VectorIndexFormat,
+    /// Unspecified or any value this crate does not know yet
+    #[default]
+    #[serde(other)]
+    Undefined,
 }
 
 #[derive(Deserialize, Default, Debug, PartialEq, Clone)]
@@ -304,13 +306,19 @@ pub enum DataSourceFormat {
 #[allow(missing_docs)]
 /// Possible data source formats for unity tables
 pub enum TableType {
-    #[default]
-    Undefined,
     Managed,
     External,
     View,
     MaterializedView,
     StreamingTable,
+    Foreign,
+    ExternalShallowClone,
+    ManagedShallowClone,
+    MetricView,
+    /// Unspecified or any value this crate does not know yet
+    #[default]
+    #[serde(other)]
+    Undefined,
 }
 
 impl Display for TableType {
@@ -322,6 +330,10 @@ impl Display for TableType {
             TableType::View => write!(f, "View"),
             TableType::MaterializedView => write!(f, "MaterializedView"),
             TableType::StreamingTable => write!(f, "StreamingTable"),
+            TableType::Foreign => write!(f, "Foreign"),
+            TableType::ExternalShallowClone => write!(f, "ExternalShallowClone"),
+            TableType::ManagedShallowClone => write!(f, "ManagedShallowClone"),
+            TableType::MetricView => write!(f, "MetricView"),
         }
     }
 }
@@ -853,5 +865,23 @@ pub(crate) mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn test_unknown_enum_values_fall_back_to_undefined() {
+        let resp: ListTableSummariesResponse = serde_json::from_str(
+            r#"{"tables": [{"full_name": "c.s.t", "table_type": "SOMETHING_NEW"}]}"#,
+        )
+        .unwrap();
+        let ListTableSummariesResponse::Success { tables, .. } = resp else {
+            panic!("expected Success, got {resp:?}");
+        };
+        assert_eq!(tables[0].table_type, TableType::Undefined);
+
+        let body = GET_TABLE_RESPONSE.replace(r#""DELTA""#, r#""SOMETHING_NEW""#);
+        let GetTableResponse::Success(t) = serde_json::from_str(&body).unwrap() else {
+            panic!("expected Success");
+        };
+        assert_eq!(t.data_source_format, Some(DataSourceFormat::Undefined));
     }
 }
