@@ -28,32 +28,34 @@ pub(crate) const DEFAULT_WRITE_BATCH_SIZE: usize = 8192;
 // Every parquet default an operation falls back to when the user sets none.
 // Keep them together so the per-operation differences stay visible:
 //
-// | operation                            | compression                  | `created_by` |
-// |--------------------------------------|------------------------------|--------------|
-// | write, merge, update, legacy writers | SNAPPY                       | delta-rs     |
-// | optimize                             | ZSTD(4)                      | delta-rs     |
-// | delete                               | DataFusion session (zstd(3)) | datafusion   |
+// | operation                                    | compression | `created_by` |
+// |----------------------------------------------|-------------|--------------|
+// | write, merge, update, delete, legacy writers | SNAPPY      | delta-rs     |
+// | optimize                                     | ZSTD(4)     | delta-rs     |
 //
-// Python's `WriterProperties` starts from a bare parquet builder instead, so
-// a knob set there without `compression=` writes UNCOMPRESSED files.
+// Delete given a session via `with_session_state` takes the session's
+// `execution.parquet` options instead (see `session_parquet_properties`).
+//
+// Python's `WriterProperties` starts from the operation's default here, so
+// knobs it leaves unset keep these defaults.
 
 /// Arrow writer options when none are set.
 static DEFAULT_ARROW_OPTIONS: LazyLock<ArrowWriterOptions> = LazyLock::new(ArrowWriterOptions::new);
 
 /// Parquet writer properties when none are set: SNAPPY, delta-rs `created_by`.
-pub(crate) static DEFAULT_PARQUET_PROPERTIES: LazyLock<WriterProperties> =
+pub static DEFAULT_PARQUET_PROPERTIES: LazyLock<WriterProperties> =
     LazyLock::new(|| default_writer_properties(Compression::SNAPPY));
 
 /// Optimize's fallback: ZSTD(4), delta-rs `created_by`. Compacted files are
 /// written rarely and read often, so the slower, denser codec pays off.
-pub(crate) static OPTIMIZE_PARQUET_PROPERTIES: LazyLock<WriterProperties> = LazyLock::new(|| {
+pub static OPTIMIZE_PARQUET_PROPERTIES: LazyLock<WriterProperties> = LazyLock::new(|| {
     default_writer_properties(Compression::ZSTD(
         parquet::basic::ZstdLevel::try_new(4).expect("4 is a valid zstd level"),
     ))
 });
 
-/// Delete's fallback: whatever the DataFusion session's `execution.parquet`
-/// options say (zstd(3) and a `datafusion version` tag by default).
+/// Parquet writer properties from a DataFusion session's `execution.parquet`
+/// options (zstd(3) and a `datafusion version` tag unless the session sets them).
 #[cfg(feature = "datafusion")]
 pub(crate) fn session_parquet_properties(
     session: &dyn datafusion::catalog::Session,
@@ -212,6 +214,8 @@ impl DeltaWriterProperties {
     /// operation's own fallback (see the table above [`DEFAULT_PARQUET_PROPERTIES`]).
     /// Unlike [`Self::with_parquet_properties`], this never overrides properties
     /// already set.
+    // Only the DataFusion write paths call this.
+    #[cfg_attr(not(feature = "datafusion"), allow(dead_code))]
     pub(crate) fn apply_parquet_default(
         self,
         default: impl FnOnce() -> DeltaResult<WriterProperties>,
@@ -225,6 +229,8 @@ impl DeltaWriterProperties {
 
     /// Fill the stats configuration from the table configuration if it is not already set.
     /// Unlike the `with_` setters, this never overrides a value already set.
+    // Only the DataFusion write paths call this.
+    #[cfg_attr(not(feature = "datafusion"), allow(dead_code))]
     pub(crate) fn apply_table_stats(mut self, table_config: &TableConfiguration) -> Self {
         if self.stats.is_none() {
             self.stats = Some(WriterStatsConfig::from_config(table_config));
@@ -235,6 +241,8 @@ impl DeltaWriterProperties {
     /// Fill the target file size and stats configuration from the table configuration
     /// where they are not already set. Unlike the `with_` setters, this never overrides
     /// a value already set.
+    // Only the DataFusion write paths call this.
+    #[cfg_attr(not(feature = "datafusion"), allow(dead_code))]
     pub(crate) fn apply_table_defaults(mut self, table_config: &TableConfiguration) -> Self {
         if self.target_file_size.is_none() {
             self.target_file_size = Some(table_config.table_properties().target_file_size());

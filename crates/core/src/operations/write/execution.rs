@@ -21,7 +21,6 @@ use tokio::task::JoinSet;
 
 use crate::DeltaTableError;
 use crate::datafile::DeltaWriterProperties;
-use crate::datafile::properties::session_parquet_properties;
 use crate::datafile::writer::{DeltaWriter, UploadBudget, WriterConfig, write_batches_timed};
 use crate::delta_datafusion::{ColumnMappingState, DataValidationExec, validation_predicates};
 use crate::errors::DeltaResult;
@@ -482,7 +481,6 @@ pub(crate) async fn write_exec_plan(
     write_as_cdc: bool,
     props: DeltaWriterProperties,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
-    let props = props.apply_parquet_default(|| session_parquet_properties(session))?;
     let sink_config = WriteSinkConfig::new(table_config, log_store.object_store(), props);
 
     if write_as_cdc {
