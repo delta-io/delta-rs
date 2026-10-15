@@ -119,7 +119,11 @@ impl Expiry<String, TemporaryTableCredentials> for TokenExpiry {
         _duration_until_expiry: Option<Duration>,
         _last_modified_at: Instant,
     ) -> Option<Duration> {
-        let time_to_expire = value.expiration_time - Utc::now();
+        let Some(expiration_time) = value.expiration_time else {
+            tracing::info!("Token {_key} has no expiry; keeping it until evicted");
+            return None;
+        };
+        let time_to_expire = expiration_time - Utc::now();
         tracing::info!("Token {_key} expires in {time_to_expire}");
         time_to_expire.to_std().ok()
     }
