@@ -2454,16 +2454,14 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
         Float(val) => val.into_py_any(py)?,
         Double(val) => val.into_py_any(py)?,
         Timestamp(_) => {
-            // We need to manually append 'Z' add to end so that pyarrow can cast the
-            // scalar value to pa.timestamp("us","UTC") or pa.timestamp("ns", "UTC")
-            let value = value.serialize();
-            format!("{value}Z").into_py_any(py)?
+            // pyarrow needs an explicit UTC offset to cast the scalar value to
+            // pa.timestamp("us", "UTC") or pa.timestamp("ns", "UTC"), and
+            // serialize() already emits one (`...Z`) for timezone-aware
+            // timestamps, so the value can be passed through as-is.
+            value.serialize().into_py_any(py)?
         }
         #[cfg(feature = "nanosecond-timestamps")]
-        TimestampNanos(_) => {
-            let value = value.serialize();
-            format!("{value}Z").into_py_any(py)?
-        }
+        TimestampNanos(_) => value.serialize().into_py_any(py)?,
         #[cfg(feature = "nanosecond-timestamps")]
         TimestampNanosNtz(_) => {
             let value = value.serialize();
