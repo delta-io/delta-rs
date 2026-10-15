@@ -391,12 +391,12 @@ async fn test_checkpoint_protection_old_version_does_not_bypass_constraint() -> 
     // `table.snapshot()?.version()` — which is 0 here — and calls
     // `create_checkpoint_for(0, ...)`.  The kernel Snapshot is built at_version(0), so it
     // sees only the v0 protocol and has no checkpointProtection restriction to satisfy.
-    create_checkpoint(&table_v0).await?;
+    create_checkpoint(&table_v0, None).await?;
 
     // The checkpoint file must be written at version 0, *not* at the latest version.
     let v0_ckpt_exists = table_v0
         .log_store()
-        .object_store()
+        .object_store(None)
         .head(&Path::from(
             "_delta_log/00000000000000000000.checkpoint.parquet",
         ))
@@ -410,7 +410,7 @@ async fn test_checkpoint_protection_old_version_does_not_bypass_constraint() -> 
     // A checkpoint for v2 must NOT have been created by the v0 handle.
     let v2_ckpt_absent = table_v0
         .log_store()
-        .object_store()
+        .object_store(None)
         .head(&Path::from(
             "_delta_log/00000000000000000002.checkpoint.parquet",
         ))
@@ -452,10 +452,10 @@ async fn test_checkpoint_protection_old_version_does_not_bypass_constraint() -> 
     // ── Step 4: current-version checkpoint path must also work ────────────────────────
     // Proves the PR's `checkpointProtection` registration does not block normal
     // (non-time-travel) checkpoint creation.
-    create_checkpoint(&table_latest).await?;
+    create_checkpoint(&table_latest, None).await?;
     let v2_ckpt_exists = table_latest
         .log_store()
-        .object_store()
+        .object_store(None)
         .head(&Path::from(
             "_delta_log/00000000000000000002.checkpoint.parquet",
         ))
