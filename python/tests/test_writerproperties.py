@@ -105,6 +105,40 @@ def test_write_with_writerproperties(
 
 
 @pytest.mark.pyarrow
+def test_write_with_writerproperties_keeps_delta_rs_defaults(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    import pyarrow.parquet as pq
+
+    # Setting one knob must not reset compression or the created_by tag.
+    writer_properties = WriterProperties(max_row_group_size=1000)
+    write_deltalake(tmp_path, sample_table, writer_properties=writer_properties)
+
+    parquet_path = DeltaTable(tmp_path).file_uris()[0]
+    metadata = pq.read_metadata(parquet_path)
+
+    assert metadata.created_by.startswith("delta-rs")
+    assert metadata.to_dict()["row_groups"][0]["columns"][0]["compression"] == "SNAPPY"
+
+
+@pytest.mark.pyarrow
+def test_optimize_with_writerproperties_keeps_optimize_default(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    import pyarrow.parquet as pq
+
+    write_deltalake(tmp_path, sample_table)
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+    dt.optimize.compact(writer_properties=WriterProperties(max_row_group_size=1000))
+
+    metadata = pq.read_metadata(DeltaTable(tmp_path).file_uris()[0])
+    compression = metadata.to_dict()["row_groups"][0]["columns"][0]["compression"]
+    assert compression == "ZSTD"
+
+
+@pytest.mark.pyarrow
 def test_write_with_writerproperties_encoding(
     tmp_path: pathlib.Path, sample_table: Table
 ):
