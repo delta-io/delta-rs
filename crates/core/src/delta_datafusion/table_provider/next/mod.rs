@@ -1644,6 +1644,72 @@ mod tests {
         Ok(())
     }
 
+    #[rstest::rstest]
+    #[case::case_when("CASE WHEN p = 1 THEN true ELSE false END", &[1])]
+    #[case::not_coalesce("NOT coalesce(q > 'a', false)", &[0, 2])]
+    #[case::partition_and_null_comparison("p = 1 AND x = NULL", &[])]
+    #[case::not_in_with_null("x NOT IN (1, NULL)", &[])]
+    #[case::eq("p = 1", &[1])]
+    #[case::in_list("p IN (0, 1)", &[0, 1])]
+    #[case::is_null("p IS NULL", &[2])]
+    #[tokio::test]
+    async fn test_partition_filters_follow_sql_semantics(
+        #[case] filter: &str,
+        #[case] expected: &[i64],
+    ) -> TestResult {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int64, true),
+            ArrowField::new("x", ArrowDataType::Int64, true),
+            ArrowField::new("p", ArrowDataType::Int32, true),
+            ArrowField::new("q", ArrowDataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![0, 1, 2, 3])),
+                Arc::new(Int64Array::from(vec![Some(0), Some(1), Some(2), None])),
+                Arc::new(Int32Array::from(vec![Some(0), Some(1), None, Some(2)])),
+                Arc::new(StringArray::from(vec![
+                    Some("a"),
+                    Some("b"),
+                    None,
+                    Some("c"),
+                ])),
+            ],
+        )?;
+        let table = crate::DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_partition_columns(["p", "q"])
+            .await?;
+        let provider = DeltaScan::new(
+            table.snapshot()?.snapshot().snapshot().clone(),
+            DeltaScanConfig::default(),
+        )?
+        .with_log_store(table.log_store());
+        let session = Arc::new(create_session().into_inner());
+        session.register_table("delta_table", Arc::new(provider))?;
+
+        let batches = session
+            .sql(&format!("SELECT id FROM delta_table WHERE {filter}"))
+            .await?
+            .collect()
+            .await?;
+
+        let mut ids: Vec<i64> = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int64Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, expected);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_boolean_predicate_does_not_require_minmax_stats() -> TestResult {
         let schema = Arc::new(ArrowSchema::new(vec![
