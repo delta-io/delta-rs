@@ -24,7 +24,7 @@ use typed_builder::TypedBuilder;
 
 use crate::credential::{
     AzureCliCredential, ClientSecretOAuthProvider, CredentialProvider, TokenCredential,
-    WorkspaceOAuthProvider,
+    WorkspaceOAuthProvider, WorkspaceWorkloadIdentityOAuthProvider,
 };
 use crate::models::{
     ErrorResponse, GetSchemaResponse, GetTableResponse, ListCatalogsResponse, ListSchemasResponse,
@@ -120,8 +120,13 @@ pub enum UnityCatalogError {
         message: String,
     },
 
-    #[error("Missing or corrupted federated token file for WorkloadIdentity.")]
-    FederatedTokenFile,
+    #[error("Failed to read federated token file '{path}': {source}")]
+    FederatedTokenFile {
+        /// Path of the token file
+        path: String,
+        /// Underlying I/O error
+        source: std::io::Error,
+    },
 
     #[cfg(feature = "datafusion")]
     #[error("Datafusion error: {0}")]
@@ -267,11 +272,14 @@ pub enum UnityCatalogConfigKey {
     /// - `msi_resource_id`
     MsiResourceId,
 
-    /// File containing token for Azure AD workload identity federation
+    /// File containing a JWT for Databricks workload identity federation,
+    /// used together with the client id and workspace host. The file is
+    /// read again each time the token is refreshed.
     ///
     /// Supported keys:
-    /// - `azure_federated_token_file`
     /// - `federated_token_file`
+    /// - `unity_federated_token_file`
+    /// - `databricks_federated_token_file`
     FederatedTokenFile,
 
     /// Use azure cli for acquiring access token
@@ -623,6 +631,23 @@ impl UnityCatalogBuilder {
                 Box::new(WorkspaceOAuthProvider::new(
                     client_id,
                     client_secret,
+                    workspace_host,
+                )),
+            ));
+        }
+
+        // Workload identity federation: no secret, the token file is exchanged
+        // with the workspace and refreshed through the TokenCache.
+        if let (Some(client_id), Some(token_file), Some(workspace_host)) = (
+            &self.client_id,
+            &self.federated_token_file,
+            &self.workspace_url,
+        ) {
+            return Some(CredentialProvider::TokenCredential(
+                Default::default(),
+                Box::new(WorkspaceWorkloadIdentityOAuthProvider::new(
+                    client_id,
+                    token_file,
                     workspace_host,
                 )),
             ));
@@ -1259,6 +1284,67 @@ mod tests {
             .await
             .unwrap();
         assert!(storage_location.eq_ignore_ascii_case("string"));
+    }
+
+    #[tokio::test]
+    async fn test_unity_client_workload_identity_refresh() {
+        let server = MockServer::start_async().await;
+        let token_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(token_file.path(), "jwt-one").unwrap();
+
+        let storage_options = HashMap::from([
+            ("databricks_host".to_string(), server.url("")),
+            ("unity_client_id".to_string(), "sp-app-id".to_string()),
+            (
+                "unity_federated_token_file".to_string(),
+                token_file.path().to_str().unwrap().to_string(),
+            ),
+            ("unity_allow_http_url".to_string(), "true".to_string()),
+        ]);
+        let client = UnityCatalogBuilder::builder()
+            .build()
+            .try_with_options(&storage_options)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // expires_in is below the TokenCache refresh margin, so every call
+        // must exchange again and pick up the rotated token file.
+        let mut exchanges = Vec::new();
+        let mut api_calls = Vec::new();
+        for (jwt, access) in [("jwt-one", "access-one"), ("jwt-two", "access-two")] {
+            exchanges.push(
+                server
+                    .mock_async(|when, then| {
+                        when.path("/oidc/v1/token")
+                            .method("POST")
+                            .form_urlencoded_tuple("subject_token", jwt)
+                            .form_urlencoded_tuple("client_id", "sp-app-id");
+                        then.body(format!(
+                            r#"{{"access_token": "{access}", "expires_in": 60}}"#
+                        ));
+                    })
+                    .await,
+            );
+            api_calls.push(
+                server
+                    .mock_async(|when, then| {
+                        when.path("/api/2.1/unity-catalog/schemas")
+                            .method("GET")
+                            .header("authorization", format!("Bearer {access}"));
+                        then.body(LIST_SCHEMAS_RESPONSE);
+                    })
+                    .await,
+            );
+        }
+
+        client.list_schemas("catalog_name").await.unwrap();
+        std::fs::write(token_file.path(), "jwt-two").unwrap();
+        client.list_schemas("catalog_name").await.unwrap();
+
+        for mock in exchanges.iter().chain(api_calls.iter()) {
+            mock.assert_async().await;
+        }
     }
 
     #[test]
