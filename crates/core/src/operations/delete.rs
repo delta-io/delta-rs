@@ -59,6 +59,7 @@ use serde::Serialize;
 use super::cdc::should_write_cdc;
 use crate::DeltaTable;
 use crate::datafile::DeltaWriterProperties;
+use crate::datafile::properties::session_parquet_properties;
 use crate::datafile::writer::ArrowWriterOptions;
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::DeltaSessionExt;
@@ -333,12 +334,21 @@ impl std::future::IntoFuture for DeleteBuilder {
                     predicate: predicate.as_ref().map(fmt_expr_to_sql).transpose()?,
                 };
 
+                // A caller-supplied session's parquet options configure the rewrite;
+                // delta-rs's own session falls through to the delta-rs default.
+                let writer_properties = if this.session.is_some() {
+                    this.writer_properties
+                        .clone()
+                        .apply_parquet_default(|| session_parquet_properties(&session))?
+                } else {
+                    this.writer_properties.clone()
+                };
                 let (actions, metrics) = execute(
                     predicate,
                     log_store.clone(),
                     snapshot.clone(),
                     &session,
-                    this.writer_properties.clone(),
+                    writer_properties,
                 )
                 .await?;
 
@@ -917,6 +927,74 @@ mod tests {
         assert_eq!(metrics.num_removed_files, 0);
         assert_eq!(metrics.num_deleted_rows, Some(0));
         assert_eq!(metrics.num_copied_rows, 0);
+    }
+
+    /// Delete `value = 1` from a one-file table and return each rewritten file's
+    /// path and parquet footer.
+    async fn delete_and_read_footers(
+        session: Option<Arc<dyn Session>>,
+    ) -> Vec<(
+        object_store::path::Path,
+        parquet::file::metadata::ParquetMetaData,
+    )> {
+        use crate::logstore::parquet_reader::ParquetObjectReader;
+        use parquet::arrow::ParquetRecordBatchStreamBuilder;
+
+        let table = setup_table(None).await;
+        let table = write_batch(table, get_record_batch(None, false)).await;
+        let mut delete = table.delete().with_predicate(col("value").eq(lit(1)));
+        if let Some(session) = session {
+            delete = delete.with_session_state(session);
+        }
+        let (table, metrics) = delete.await.unwrap();
+        assert_eq!(metrics.num_added_files, 1);
+
+        let store = table.log_store().object_store();
+        let mut footers = vec![];
+        for add in table.snapshot().unwrap().log_data() {
+            let path = add.object_store_path();
+            let reader = ParquetObjectReader::new(store.clone(), path.clone());
+            let builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
+            footers.push((path, builder.metadata().as_ref().clone()));
+        }
+        footers
+    }
+
+    #[tokio::test]
+    async fn test_delete_rewrites_with_delta_rs_parquet_defaults() {
+        use parquet::basic::Compression;
+
+        for (path, metadata) in delete_and_read_footers(None).await {
+            assert!(path.as_ref().ends_with(".snappy.parquet"), "{path}");
+            let created_by = metadata.file_metadata().created_by().unwrap();
+            assert!(created_by.starts_with("delta-rs"), "{created_by}");
+            for column in metadata.row_group(0).columns() {
+                assert_eq!(column.compression(), Compression::SNAPPY);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_rewrites_with_caller_session_parquet_options() {
+        use parquet::basic::{Compression, GzipLevel};
+
+        let mut state = create_session().state();
+        state
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .compression = Some("gzip(6)".into());
+
+        for (path, metadata) in delete_and_read_footers(Some(Arc::new(state))).await {
+            assert!(path.as_ref().ends_with(".gz.parquet"), "{path}");
+            for column in metadata.row_group(0).columns() {
+                assert_eq!(
+                    column.compression(),
+                    Compression::GZIP(GzipLevel::try_new(6).unwrap())
+                );
+            }
+        }
     }
 
     #[tokio::test]
