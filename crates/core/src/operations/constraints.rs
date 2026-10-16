@@ -10,8 +10,8 @@ use futures::StreamExt as _;
 use futures::future::BoxFuture;
 
 use crate::delta_datafusion::{
-    DataValidationExec, DeltaScanNext, DeltaSessionExt, Expression, constraints_to_exprs,
-    create_session, expr::fmt_expr_to_sql, into_expr,
+    DataValidationExec, DeltaScanNext, DeltaSessionExt, Expression, LossyLiterals,
+    constraints_to_exprs, create_session, expr::fmt_expr_to_sql,
 };
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
@@ -136,15 +136,17 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 let proivider = DeltaScanNext::builder()
                     .with_snapshot(snapshot.snapshot().clone())
                     .await?;
-                let schema = proivider.schema().to_dfschema()?;
+                let schema = proivider.schema().to_dfschema_ref()?;
 
                 // Create an Hashmap of the name to the processed expression
                 let mut constraints_sql_mapper = HashMap::with_capacity(this.check_constraints.len());
                 for (name, _) in configuration_key_mapper.iter() {
-                    let converted_expr = into_expr(
-                        this.check_constraints[name].clone(),
-                        &schema,
+                    // Keep lossy literal comparisons as written: the stored SQL is read back by
+                    // other engines, which must not see delta-rs specific casts.
+                    let converted_expr = this.check_constraints[name].resolve_with(
                         session.as_ref(),
+                        schema.clone(),
+                        LossyLiterals::Keep,
                     )?;
                     let constraint_sql = fmt_expr_to_sql(&converted_expr)?;
                     constraints_sql_mapper.insert(name, constraint_sql);
@@ -573,6 +575,46 @@ mod tests {
             .await?;
         let err = table.write(vec![decimal_batch(vec![4], vec![500])?]).await;
         assert!(err.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_add_constraint_keeps_fractional_literals() -> DeltaResult<()> {
+        let table = DeltaTable::new_in_memory()
+            .write(vec![decimal_batch(vec![9], vec![1100])?])
+            .await?;
+
+        let table = table
+            .add_constraint()
+            .with_constraint("min_id", "id >= 8.5")
+            .with_constraint("price_floor", "price > 10.505")
+            .await?;
+
+        assert_eq!(
+            get_constraint(&table, "delta.constraints.min_id"),
+            "id >= 8.5"
+        );
+        assert_eq!(
+            get_constraint(&table, "delta.constraints.price_floor"),
+            "price > 10.505"
+        );
+
+        let table = table
+            .write(vec![decimal_batch(vec![9], vec![1051])?])
+            .await?;
+        assert!(
+            table
+                .clone()
+                .write(vec![decimal_batch(vec![8], vec![1100])?])
+                .await
+                .is_err()
+        );
+        assert!(
+            table
+                .write(vec![decimal_batch(vec![9], vec![1050])?])
+                .await
+                .is_err()
+        );
         Ok(())
     }
 }

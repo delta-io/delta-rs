@@ -7,7 +7,7 @@ use crate::writer::test_utils::{
     get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
 };
 use crate::{DeltaTable, TableProperty};
-use arrow::array::{Int32Array, ListArray, StringArray};
+use arrow::array::{AsArray as _, Int32Array, ListArray, StringArray};
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -551,6 +551,52 @@ async fn test_no_update_operations() {
     assert_eq!(metrics.num_removed_files, 0);
     assert_eq!(metrics.scan_time_ms, 0);
     assert_eq!(metrics.execution_time_ms, 0);
+}
+
+#[tokio::test]
+async fn test_update_does_not_narrow_fractional_literals() -> DeltaResult<()> {
+    for (predicate, expected_updated) in [
+        ("value = 10.5", vec![]),
+        ("value != 10.5", vec!["A", "B", "C", "D"]),
+        ("value < 10.5", vec!["A", "B", "C"]),
+    ] {
+        let batch = RecordBatch::try_new(
+            get_arrow_schema(&None),
+            vec![
+                Arc::new(StringArray::from(vec!["A", "B", "C", "D"])),
+                Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+                Arc::new(StringArray::from(vec!["2021-02-02"; 4])),
+            ],
+        )?;
+        let table = write_batch(setup_table(None).await, batch).await;
+
+        let (table, _) = table
+            .update()
+            .with_update("modified", lit("2023-05-14"))
+            .with_predicate(predicate)
+            .await?;
+
+        let mut updated: Vec<String> = get_data(&table)
+            .await
+            .iter()
+            .flat_map(|batch| {
+                let column = |name| {
+                    arrow::compute::cast(batch.column_by_name(name).unwrap(), &DataType::Utf8)
+                        .unwrap()
+                };
+                let (ids, modified) = (column("id"), column("modified"));
+                let (ids, modified) = (ids.as_string::<i32>(), modified.as_string::<i32>());
+                ids.iter()
+                    .zip(modified.iter())
+                    .filter(|(_, modified)| *modified == Some("2023-05-14"))
+                    .map(|(id, _)| id.unwrap().to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        updated.sort();
+        assert_eq!(updated, expected_updated, "predicate: {predicate}");
+    }
+    Ok(())
 }
 
 #[tokio::test]
