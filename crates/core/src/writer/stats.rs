@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::ops::Not;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,12 +20,11 @@ use parquet::{
     basic::TimeUnit,
     file::{metadata::RowGroupMetaData, statistics::Statistics},
 };
-use serde_json::value::RawValue;
 use tracing::warn;
 
 use super::*;
-use crate::kernel::Add;
-use crate::kernel::scalars::{ScalarExt, serialize_scaled_decimal};
+use crate::kernel::{Add, scalars::ScalarExt};
+use crate::protocol::{ColumnValueStat, Stats};
 
 /// Creates an [`Add`] log action struct.
 pub(crate) fn create_add(
@@ -86,7 +86,7 @@ pub(crate) fn stats_from_parquet_metadata(
     parquet_metadata: &ParquetMetaData,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<String>>,
-) -> Result<FileStats, DeltaWriterError> {
+) -> Result<Stats, DeltaWriterError> {
     let num_rows = parquet_metadata.file_metadata().num_rows();
     let schema_descriptor = parquet_metadata.file_metadata().schema_descr_ptr();
     let row_group_metadata = parquet_metadata.row_groups().to_vec();
@@ -106,7 +106,7 @@ fn stats_from_file_metadata(
     file_metadata: &ParquetMetaData,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
-) -> Result<FileStats, DeltaWriterError> {
+) -> Result<Stats, DeltaWriterError> {
     let schema_descriptor = file_metadata.file_metadata().schema_descr();
 
     let row_group_metadata: Vec<RowGroupMetaData> = file_metadata.row_groups().to_vec();
@@ -128,9 +128,9 @@ fn stats_from_metadata(
     num_rows: i64,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
-) -> Result<FileStats, DeltaWriterError> {
-    let mut min_values: HashMap<String, ColumnValueJson> = HashMap::new();
-    let mut max_values: HashMap<String, ColumnValueJson> = HashMap::new();
+) -> Result<Stats, DeltaWriterError> {
+    let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
+    let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut null_count: HashMap<String, ColumnCountStat> = HashMap::new();
     let dialect = sqlparser::dialect::GenericDialect {};
 
@@ -250,32 +250,12 @@ fn stats_from_metadata(
         }
     }
 
-    Ok(FileStats {
+    Ok(Stats {
         min_values,
         max_values,
         num_records: num_rows,
         null_count,
     })
-}
-
-/// The `stats` of an add action, laid out like [`crate::protocol::Stats`].
-///
-/// Min and max values are kept as JSON text because a `serde_json::Value` number cannot hold
-/// a decimal exactly.
-#[derive(Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct FileStats {
-    num_records: i64,
-    min_values: HashMap<String, ColumnValueJson>,
-    max_values: HashMap<String, ColumnValueJson>,
-    null_count: HashMap<String, ColumnCountStat>,
-}
-
-#[derive(Debug, serde::Serialize)]
-#[serde(untagged)]
-enum ColumnValueJson {
-    Column(HashMap<String, ColumnValueJson>),
-    Value(Box<RawValue>),
 }
 
 /// Logical scalars extracted from statistics. These are used to aggregate
@@ -292,8 +272,12 @@ enum StatsScalar {
     Date(chrono::NaiveDate),
     Timestamp(chrono::NaiveDateTime),
     TimestampNtz(chrono::NaiveDateTime),
-    // All values of a column share one scale, so ordering by the unscaled value is correct
-    Decimal { unscaled: i128, scale: u8 },
+    // All values of a column share one precision and scale, so this orders by the unscaled value
+    Decimal {
+        unscaled: i128,
+        precision: i32,
+        scale: i32,
+    },
     String(String),
     Bytes(Vec<u8>),
     Uuid(uuid::Uuid),
@@ -323,9 +307,11 @@ impl StatsScalar {
                 let date = epoch_start + chrono::Duration::days(get_stat!(v) as i64);
                 Ok(Self::Date(date))
             }
-            (Statistics::Int32(v), Some(LogicalType::Decimal(decimal_type))) => {
-                Self::decimal(get_stat!(v).into(), decimal_type)
-            }
+            (Statistics::Int32(v), Some(LogicalType::Decimal(decimal_type))) => Ok(Self::Decimal {
+                unscaled: get_stat!(v).into(),
+                precision: decimal_type.precision,
+                scale: decimal_type.scale,
+            }),
             (Statistics::Int32(v), _) => Ok(Self::Int32(get_stat!(v))),
             // Int64 can be timestamp, decimal, or integer
             (Statistics::Int64(v), Some(LogicalType::Timestamp(timestamp_type))) => {
@@ -352,9 +338,11 @@ impl StatsScalar {
                     Ok(Self::TimestampNtz(timestamp.naive_utc()))
                 }
             }
-            (Statistics::Int64(v), Some(LogicalType::Decimal(decimal_type))) => {
-                Self::decimal(get_stat!(v).into(), decimal_type)
-            }
+            (Statistics::Int64(v), Some(LogicalType::Decimal(decimal_type))) => Ok(Self::Decimal {
+                unscaled: get_stat!(v).into(),
+                precision: decimal_type.precision,
+                scale: decimal_type.scale,
+            }),
             (Statistics::Int64(v), _) => Ok(Self::Int64(get_stat!(v))),
             (Statistics::Float(v), _) => Ok(Self::Float32(get_stat!(v))),
             (Statistics::Double(v), _) => Ok(Self::Float64(get_stat!(v))),
@@ -389,13 +377,23 @@ impl StatsScalar {
                 }
                 .unwrap_or_default();
 
-                if val.len() > 16 {
+                let val = if val.len() <= 16 {
+                    i128::from_be_bytes(sign_extend_be(val))
+                } else {
                     return Err(DeltaWriterError::StatsParsingFailed {
                         debug_value: format!("{val:?}"),
-                        logical_type: Some(LogicalType::Decimal(decimal_type.clone())),
+                        logical_type: Some(LogicalType::Decimal(DecimalType {
+                            scale: decimal_type.scale,
+                            precision: decimal_type.precision,
+                        })),
                     });
-                }
-                Self::decimal(i128::from_be_bytes(sign_extend_be(val)), decimal_type)
+                };
+
+                Ok(Self::Decimal {
+                    unscaled: val,
+                    precision: decimal_type.precision,
+                    scale: decimal_type.scale,
+                })
             }
             (Statistics::FixedLenByteArray(v), Some(LogicalType::Uuid)) => {
                 let val = if use_min {
@@ -424,23 +422,6 @@ impl StatsScalar {
             }),
         }
     }
-
-    /// Only decimal types that Delta can represent get statistics.
-    fn decimal(unscaled: i128, decimal_type: &DecimalType) -> Result<Self, DeltaWriterError> {
-        let precision = u8::try_from(decimal_type.precision);
-        let scale = u8::try_from(decimal_type.scale);
-        match (precision, scale) {
-            (Ok(precision), Ok(scale))
-                if delta_kernel::schema::DecimalType::try_new(precision, scale).is_ok() =>
-            {
-                Ok(Self::Decimal { unscaled, scale })
-            }
-            _ => Err(DeltaWriterError::StatsParsingFailed {
-                debug_value: unscaled.to_string(),
-                logical_type: Some(LogicalType::Decimal(decimal_type.clone())),
-            }),
-        }
-    }
 }
 
 /// Performs big endian sign extension
@@ -457,7 +438,8 @@ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
 }
 
 impl StatsScalar {
-    fn into_json(self) -> Result<Box<RawValue>, serde_json::Error> {
+    /// Returns `None` when a decimal bound can't be written, see [`decimal_bound`].
+    fn into_json(self, use_min: bool) -> Option<serde_json::Value> {
         let value = match self {
             StatsScalar::Boolean(v) => serde_json::Value::Bool(v),
             StatsScalar::Int32(v) => serde_json::Value::from(v),
@@ -484,12 +466,11 @@ impl StatsScalar {
                 };
                 serde_json::Value::from(v.format(format).to_string())
             }
-            StatsScalar::Decimal { unscaled, scale: 0 } => {
-                return RawValue::from_string(unscaled.to_string());
-            }
-            StatsScalar::Decimal { unscaled, scale } => {
-                return RawValue::from_string(serialize_scaled_decimal(unscaled, scale));
-            }
+            StatsScalar::Decimal {
+                unscaled,
+                precision,
+                scale,
+            } => return decimal_bound(unscaled, precision, scale, use_min),
             StatsScalar::String(v) => serde_json::Value::from(v),
             StatsScalar::Bytes(v) => {
                 let escaped_bytes = v
@@ -501,7 +482,75 @@ impl StatsScalar {
             }
             StatsScalar::Uuid(v) => serde_json::Value::from(v.hyphenated().to_string()),
         };
-        serde_json::value::to_raw_value(&value)
+        Some(value)
+    }
+}
+
+/// Writes a decimal min (`use_min`) or max as a JSON number that is <= or >= the decimal.
+///
+/// Decimal stats are JSON numbers, which `serde_json` can only hold as `f64`. The nearest `f64`
+/// can be written on the wrong side of the decimal and make readers skip a file that has
+/// matching rows, so then the next `f64` outward is used instead. Returns `None` when the bound
+/// would fall outside the decimal type, since readers can't parse it there and a missing bound
+/// is always safe.
+fn decimal_bound(
+    unscaled: i128,
+    precision: i32,
+    scale: i32,
+    use_min: bool,
+) -> Option<serde_json::Value> {
+    if scale == 0
+        && let Some(exact) = serde_json::Number::from_i128(unscaled)
+    {
+        return Some(exact.into());
+    }
+    let nearest: f64 = format!("{unscaled}e{}", -scale).parse().ok()?;
+    if !nearest.is_finite() {
+        return None;
+    }
+    let (outward, wrong_side) = if use_min {
+        (nearest.next_down(), Ordering::Greater)
+    } else {
+        (nearest.next_up(), Ordering::Less)
+    };
+    let largest = 10_i128
+        .checked_pow(u32::try_from(precision).ok()?)
+        .map(|p| p - 1);
+    let type_limit = largest.map(|l| if use_min { -l } else { l });
+    [nearest, outward]
+        .into_iter()
+        .map(serde_json::Value::from)
+        .find(|json| {
+            split_json_number(&json.to_string()).is_some_and(|(digits, exponent)| {
+                compare_scaled(digits, exponent, unscaled, -scale) != wrong_side
+                    && type_limit.is_none_or(|limit| {
+                        compare_scaled(digits, exponent, limit, -scale) != wrong_side.reverse()
+                    })
+            })
+        })
+}
+
+/// Splits JSON number text into digits and a power of ten, e.g. `-1.25e-7` into `(-125, -9)`.
+fn split_json_number(text: &str) -> Option<(i128, i32)> {
+    let (mantissa, exponent) = text.split_once(['e', 'E']).unwrap_or((text, "0"));
+    let (integer, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = format!("{integer}{fraction}").parse().ok()?;
+    let exponent = exponent.parse::<i32>().ok()? - i32::try_from(fraction.len()).ok()?;
+    Some((digits, exponent))
+}
+
+/// Compares `a * 10^a_exponent` with `b * 10^b_exponent` exactly.
+fn compare_scaled(a: i128, a_exponent: i32, b: i128, b_exponent: i32) -> Ordering {
+    let shift = |value: i128, by: i32| {
+        10_i128
+            .checked_pow(by.unsigned_abs())
+            .and_then(|p| value.checked_mul(p))
+    };
+    // A shift that overflows makes that side larger in magnitude than any i128, so its sign wins
+    if a_exponent >= b_exponent {
+        shift(a, a_exponent - b_exponent).map_or(a.cmp(&0), |a| a.cmp(&b))
+    } else {
+        shift(b, b_exponent - a_exponent).map_or(0.cmp(&b), |b| a.cmp(&b))
     }
 }
 
@@ -565,8 +614,8 @@ fn apply_min_max_for_column(
     statistics: AggregatedStats,
     column_descr: Arc<ColumnDescriptor>,
     column_path_parts: &[String],
-    min_values: &mut HashMap<String, ColumnValueJson>,
-    max_values: &mut HashMap<String, ColumnValueJson>,
+    min_values: &mut HashMap<String, ColumnValueStat>,
+    max_values: &mut HashMap<String, ColumnValueStat>,
     null_counts: &mut HashMap<String, ColumnCountStat>,
 ) -> Result<(), DeltaWriterError> {
     // Repeated leaf null counts describe nested values only.
@@ -579,14 +628,12 @@ fn apply_min_max_for_column(
         (1, _) => {
             let key = column_descr.name().to_string();
 
-            if let Some(min) = statistics.min {
-                let min = ColumnValueJson::Value(min.into_json()?);
-                min_values.insert(key.clone(), min);
+            if let Some(min) = statistics.min.and_then(|min| min.into_json(true)) {
+                min_values.insert(key.clone(), ColumnValueStat::Value(min));
             }
 
-            if let Some(max) = statistics.max {
-                let max = ColumnValueJson::Value(max.into_json()?);
-                max_values.insert(key.clone(), max);
+            if let Some(max) = statistics.max.and_then(|max| max.into_json(false)) {
+                max_values.insert(key.clone(), ColumnValueStat::Value(max));
             }
 
             null_counts.insert(key, ColumnCountStat::Value(statistics.null_count as i64));
@@ -597,18 +644,18 @@ fn apply_min_max_for_column(
         (_, Some(key)) => {
             let child_min_values = min_values
                 .entry(key.to_owned())
-                .or_insert_with(|| ColumnValueJson::Column(HashMap::new()));
+                .or_insert_with(|| ColumnValueStat::Column(HashMap::new()));
             let child_max_values = max_values
                 .entry(key.to_owned())
-                .or_insert_with(|| ColumnValueJson::Column(HashMap::new()));
+                .or_insert_with(|| ColumnValueStat::Column(HashMap::new()));
             let child_null_counts = null_counts
                 .entry(key.to_owned())
                 .or_insert_with(|| ColumnCountStat::Column(HashMap::new()));
 
             match (child_min_values, child_max_values, child_null_counts) {
                 (
-                    ColumnValueJson::Column(mins),
-                    ColumnValueJson::Column(maxes),
+                    ColumnValueStat::Column(mins),
+                    ColumnValueStat::Column(maxes),
                     ColumnCountStat::Column(null_counts),
                 ) => {
                     let remaining_parts: Vec<String> = column_path_parts
@@ -707,6 +754,30 @@ mod tests {
                 Value::from(1),
             ),
             (
+                simple_parquet_stat!(Statistics::Int32, 1234),
+                Some(LogicalType::Decimal(DecimalType {
+                    scale: 3,
+                    precision: 4,
+                })),
+                Value::from(1.234),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int32, 1234),
+                Some(LogicalType::Decimal(DecimalType {
+                    scale: -1,
+                    precision: 4,
+                })),
+                Value::from(12340.0),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int32, 1234),
+                Some(LogicalType::Decimal(DecimalType {
+                    scale: 0,
+                    precision: 4,
+                })),
+                Value::from(1234),
+            ),
+            (
                 simple_parquet_stat!(Statistics::Int32, 10561),
                 Some(LogicalType::Date),
                 Value::from("1998-12-01"),
@@ -801,6 +872,30 @@ mod tests {
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1234),
+                Some(LogicalType::Decimal(DecimalType {
+                    scale: 3,
+                    precision: 4,
+                })),
+                Value::from(1.234),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1234),
+                Some(LogicalType::Decimal(DecimalType {
+                    scale: -1,
+                    precision: 4,
+                })),
+                Value::from(12340.0),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1234),
+                Some(LogicalType::Decimal(DecimalType {
+                    scale: 0,
+                    precision: 4,
+                })),
+                Value::from(1234),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1234),
                 None,
                 Value::from(1234),
             ),
@@ -813,6 +908,52 @@ mod tests {
                 simple_parquet_stat!(Statistics::ByteArray, ByteArray::from(b"\x00\\".to_vec())),
                 None,
                 Value::from("\\x00\\\\"),
+            ),
+            (
+                simple_parquet_stat!(
+                    Statistics::FixedLenByteArray,
+                    FixedLenByteArray::from(1243124142314423i128.to_be_bytes().to_vec())
+                ),
+                Some(LogicalType::Decimal(DecimalType {
+                    scale: 3,
+                    precision: 16,
+                })),
+                Value::from(1243124142314.423),
+            ),
+            (
+                simple_parquet_stat!(
+                    Statistics::FixedLenByteArray,
+                    FixedLenByteArray::from(vec![0, 39, 16])
+                ),
+                Some(LogicalType::Decimal(DecimalType {
+                    scale: 3,
+                    precision: 5,
+                })),
+                Value::from(10.0),
+            ),
+            (
+                simple_parquet_stat!(
+                    Statistics::FixedLenByteArray,
+                    FixedLenByteArray::from(1234i128.to_be_bytes().to_vec())
+                ),
+                Some(LogicalType::Decimal(DecimalType {
+                    scale: 0,
+                    precision: 4,
+                })),
+                Value::from(1234),
+            ),
+            (
+                simple_parquet_stat!(
+                    Statistics::FixedLenByteArray,
+                    FixedLenByteArray::from(vec![
+                        75, 59, 76, 168, 90, 134, 196, 122, 9, 138, 34, 63, 255, 255, 255, 255
+                    ])
+                ),
+                Some(LogicalType::Decimal(DecimalType {
+                    scale: 6,
+                    precision: 38,
+                })),
+                Value::from(9.999999999999999e31),
             ),
             (
                 simple_parquet_stat!(
@@ -831,8 +972,8 @@ mod tests {
         ];
 
         for (stats, logical_type, expected) in cases {
-            let actual: Value =
-                serde_json::from_str(&stat_json(stats, logical_type.as_ref(), true)).unwrap();
+            let scalar = StatsScalar::try_from_stats(stats, logical_type.as_ref(), true).unwrap();
+            let actual = scalar.into_json(true).unwrap();
             assert_eq!(&actual, expected);
         }
     }
@@ -882,9 +1023,9 @@ mod tests {
             precision: 18,
         });
 
-        let min: i64 = stat_json(&stats, Some(&logical_type), true)
-            .parse()
-            .unwrap();
+        let scalar = StatsScalar::try_from_stats(&stats, Some(&logical_type), true).unwrap();
+        let min_value = scalar.into_json(true).unwrap();
+        let min = min_value.as_i64().unwrap();
 
         assert!(
             min <= 999999999999999999,
@@ -911,163 +1052,128 @@ mod tests {
         ] {
             let stats = simple_parquet_stat!(Statistics::Int64, value);
             for use_min in [true, false] {
+                let scalar =
+                    StatsScalar::try_from_stats(&stats, Some(&logical_type), use_min).unwrap();
                 assert_eq!(
-                    stat_json(&stats, Some(&logical_type), use_min),
-                    value.to_string(),
+                    scalar.into_json(use_min).unwrap(),
+                    serde_json::Value::from(value),
                     "value={value}, use_min={use_min}"
                 );
             }
         }
     }
 
-    fn decimal_type(precision: i32, scale: i32) -> LogicalType {
-        LogicalType::Decimal(DecimalType { scale, precision })
+    #[test]
+    fn test_int64_decimal_nonzero_scale_stats() {
+        for (scale, expected) in [(3, json!(1.234)), (-1, json!(12340.0))] {
+            let logical_type = LogicalType::Decimal(DecimalType {
+                scale,
+                precision: 4,
+            });
+            let stats = simple_parquet_stat!(Statistics::Int64, 1234);
+            for use_min in [true, false] {
+                let scalar =
+                    StatsScalar::try_from_stats(&stats, Some(&logical_type), use_min).unwrap();
+                assert_eq!(scalar.into_json(use_min).unwrap(), expected);
+            }
+        }
     }
 
-    fn fixed_len_decimal_stat(unscaled: i128) -> Statistics {
-        simple_parquet_stat!(
+    fn parse_decimal_stat(stat: &str, precision: u8, scale: i8) -> i128 {
+        arrow_cast::parse::parse_decimal::<arrow::datatypes::Decimal128Type>(stat, precision, scale)
+            .unwrap()
+    }
+
+    fn decimal_stat(unscaled: i128, precision: u8, scale: i8, use_min: bool) -> Option<Value> {
+        let stats = simple_parquet_stat!(
             Statistics::FixedLenByteArray,
             FixedLenByteArray::from(unscaled.to_be_bytes().to_vec())
-        )
+        );
+        let logical_type = LogicalType::Decimal(DecimalType {
+            scale: scale.into(),
+            precision: precision.into(),
+        });
+        StatsScalar::try_from_stats(&stats, Some(&logical_type), use_min)
+            .unwrap()
+            .into_json(use_min)
     }
 
     #[test]
-    fn test_decimal_stats_are_exact() {
-        let cases = [
-            (
-                simple_parquet_stat!(Statistics::Int32, 1234),
-                decimal_type(4, 3),
-                "1.234",
-            ),
-            (
-                simple_parquet_stat!(Statistics::Int32, 1234),
-                decimal_type(4, 0),
-                "1234",
-            ),
-            (
-                simple_parquet_stat!(Statistics::Int32, -150),
-                decimal_type(9, 2),
-                "-1.50",
-            ),
-            (
-                simple_parquet_stat!(Statistics::Int64, 123_456_789_012_345_678),
-                decimal_type(18, 6),
-                "123456789012.345678",
-            ),
-            (
-                simple_parquet_stat!(Statistics::Int64, -999_999_999_999_999_999),
-                decimal_type(18, 6),
-                "-999999999999.999999",
-            ),
-            (
-                simple_parquet_stat!(Statistics::Int64, 9_007_199_254_740_993),
-                decimal_type(18, 0),
-                "9007199254740993",
-            ),
-            (
-                fixed_len_decimal_stat(1_123_456_789_012_345_678),
-                decimal_type(38, 18),
-                "1.123456789012345678",
-            ),
-            (
-                fixed_len_decimal_stat(-1),
-                decimal_type(38, 18),
-                "-0.000000000000000001",
-            ),
-            (
-                fixed_len_decimal_stat(10_i128.pow(19)),
-                decimal_type(38, 0),
-                "10000000000000000000",
-            ),
-            (
-                fixed_len_decimal_stat(-(10_i128.pow(19))),
-                decimal_type(38, 0),
-                "-10000000000000000000",
-            ),
-            (
-                fixed_len_decimal_stat(10_i128.pow(38) - 1),
-                decimal_type(38, 6),
-                "99999999999999999999999999999999.999999",
-            ),
-            (
-                fixed_len_decimal_stat(1 - 10_i128.pow(38)),
-                decimal_type(38, 6),
-                "-99999999999999999999999999999999.999999",
-            ),
-            (
-                simple_parquet_stat!(
-                    Statistics::FixedLenByteArray,
-                    FixedLenByteArray::from(vec![0, 39, 16])
-                ),
-                decimal_type(5, 3),
-                "10.000",
-            ),
-            (
-                simple_parquet_stat!(
-                    Statistics::FixedLenByteArray,
-                    FixedLenByteArray::from(vec![255])
-                ),
-                decimal_type(2, 1),
-                "-0.1",
-            ),
+    fn test_decimal_stats_contain_value() {
+        let cases: [(i128, u8, i8); 13] = [
+            (1_123_456_789_012_345_678, 38, 18),
+            (-1_123_456_789_012_345_678, 38, 18),
+            (1_123_456_789_012_345_560, 38, 18),
+            (-1_123_456_789_012_345_560, 38, 18),
+            (2_500_000_000_000_000_001, 38, 18),
+            (123_456_789_012_345_678, 18, 6),
+            (-999_999_999_999_999_999, 18, 6),
+            (99_999_999_999_999_999, 38, 0),
+            (10_i128.pow(19), 38, 0),
+            (-(10_i128.pow(19)) - 1, 38, 0),
+            (1, 38, 18),
+            (10_i128.pow(38) - 1, 38, 6),
+            (1 - 10_i128.pow(38), 38, 6),
         ];
-
-        for (stats, logical_type, expected) in &cases {
-            for use_min in [true, false] {
-                assert_eq!(
-                    stat_json(stats, Some(logical_type), use_min),
-                    *expected,
-                    "{logical_type:?}, use_min={use_min}"
+        for (unscaled, precision, scale) in cases {
+            let min = decimal_stat(unscaled, precision, scale, true);
+            let max = decimal_stat(unscaled, precision, scale, false);
+            assert!(
+                min.is_some() || max.is_some(),
+                "{unscaled} as decimal({precision},{scale}) has no stats"
+            );
+            if let Some(min) = min {
+                assert!(
+                    parse_decimal_stat(&min.to_string(), precision, scale) <= unscaled,
+                    "min {min} is above {unscaled} as decimal({precision},{scale})"
+                );
+            }
+            if let Some(max) = max {
+                assert!(
+                    parse_decimal_stat(&max.to_string(), precision, scale) >= unscaled,
+                    "max {max} is below {unscaled} as decimal({precision},{scale})"
                 );
             }
         }
     }
 
     #[test]
-    fn test_decimal_stats_skip_types_delta_cannot_represent() {
-        for (unscaled, logical_type) in [(1234, decimal_type(4, -1)), (1234, decimal_type(4, 5))] {
-            let stats = simple_parquet_stat!(Statistics::Int32, unscaled);
-            assert!(
-                StatsScalar::try_from_stats(&stats, Some(&logical_type), true).is_err(),
-                "{unscaled} as {logical_type:?}"
-            );
+    fn test_decimal_stats_keep_values_that_serialize_exactly() {
+        for (unscaled, precision, scale, expected) in [
+            (1, 1, 1, json!(0.1)),
+            (-1, 1, 1, json!(-0.1)),
+            (1050, 4, 2, json!(10.5)),
+            (29, 2, 2, json!(0.29)),
+            (1_000_000_000_000_000_000, 38, 18, json!(1.0)),
+            (123_456_789_012_345, 38, 3, json!(123456789012.345)),
+        ] {
+            for use_min in [true, false] {
+                assert_eq!(
+                    decimal_stat(unscaled, precision, scale, use_min),
+                    Some(expected.clone()),
+                    "{unscaled} as decimal({precision},{scale}), use_min={use_min}"
+                );
+            }
         }
     }
 
-    #[tokio::test]
-    async fn test_decimal128_add_stats_are_exact() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let schema = json!({
-            "type": "struct",
-            "fields": [
-                { "name": "amount", "type": "decimal(38,18)", "nullable": true, "metadata": {} }
-            ]
-        });
-        create_temp_table_with_schema(temp_dir.path(), &schema);
-        let table_uri = Url::from_directory_path(temp_dir.path()).unwrap();
-        let table = load_table(&table_uri, HashMap::new()).await.unwrap();
-        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
-        let values = arrow_array::Decimal128Array::from(vec![
-            1_123_456_789_012_345_678,
-            -2_500_000_000_000_000_000,
-        ])
-        .with_precision_and_scale(38, 18)
-        .unwrap();
-        let batch =
-            arrow_array::RecordBatch::try_new(writer.arrow_schema(), vec![Arc::new(values)])
-                .unwrap();
-        writer.write(batch).await.unwrap();
-        let adds = writer.flush().await.unwrap();
-        assert_eq!(adds.len(), 1);
-        assert_eq!(
-            adds[0].stats.as_deref(),
-            Some(concat!(
-                r#"{"numRecords":2,"#,
-                r#""minValues":{"amount":-2.500000000000000000},"#,
-                r#""maxValues":{"amount":1.123456789012345678},"#,
-                r#""nullCount":{"amount":0}}"#
-            ))
-        );
+    #[test]
+    fn test_decimal_stats_omit_bounds_outside_the_type() {
+        let largest = 10_i128.pow(38) - 1;
+        for (unscaled, scale, use_min) in [
+            (largest, 18, false),
+            (-largest, 18, true),
+            (largest, 6, false),
+            (-largest, 6, true),
+            (largest, 0, false),
+            (-largest, 0, true),
+        ] {
+            assert_eq!(
+                decimal_stat(unscaled, 38, scale, use_min),
+                None,
+                "{unscaled} as decimal(38,{scale}), use_min={use_min}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1112,6 +1218,53 @@ mod tests {
             stats.max_values["amount"].as_value().unwrap().as_i64(),
             Some(999_999_999_999_999_999)
         );
+    }
+
+    #[tokio::test]
+    async fn test_decimal128_add_stats_contain_values() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let schema = json!({
+            "type": "struct",
+            "fields": [
+                { "name": "amount", "type": "decimal(38,18)", "nullable": true, "metadata": {} }
+            ]
+        });
+        create_temp_table_with_schema(temp_dir.path(), &schema);
+        let table_uri = Url::from_directory_path(temp_dir.path()).unwrap();
+        let table = load_table(&table_uri, HashMap::new()).await.unwrap();
+        let mut writer = RecordBatchWriter::for_table(&table)
+            .unwrap()
+            .with_writer_properties(
+                WriterProperties::builder()
+                    .set_max_row_group_row_count(Some(1))
+                    .build(),
+            );
+        let min = 1_123_456_789_012_345_678;
+        let max = 2_500_000_000_000_000_001;
+        let values = arrow_array::Decimal128Array::from(vec![
+            2_000_000_000_000_000_000,
+            min,
+            max,
+            1_500_000_000_000_000_000,
+        ])
+        .with_precision_and_scale(38, 18)
+        .unwrap();
+        let batch =
+            arrow_array::RecordBatch::try_new(writer.arrow_schema(), vec![Arc::new(values)])
+                .unwrap();
+        writer.write(batch).await.unwrap();
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 1);
+        // serde_json parses floats lossily by default, so read the stats as written
+        let stats = adds[0].stats.as_deref().unwrap();
+        let stat_text = |key: &str| {
+            let start = stats.find(&format!(r#""{key}":{{"amount":"#)).unwrap() + key.len() + 13;
+            &stats[start..start + stats[start..].find('}').unwrap()]
+        };
+        let min_stat = parse_decimal_stat(stat_text("minValues"), 38, 18);
+        let max_stat = parse_decimal_stat(stat_text("maxValues"), 38, 18);
+        assert!(min_stat <= min, "minValues {min_stat} is above {min}");
+        assert!(max_stat >= max, "maxValues {max_stat} is below {max}");
     }
 
     #[tokio::test]
@@ -1413,15 +1566,6 @@ mod tests {
                 "nested.{key} missing from min_values"
             );
         }
-    }
-
-    fn stat_json(stats: &Statistics, logical_type: Option<&LogicalType>, use_min: bool) -> String {
-        StatsScalar::try_from_stats(stats, logical_type, use_min)
-            .unwrap()
-            .into_json()
-            .unwrap()
-            .get()
-            .to_owned()
     }
 
     async fn load_table(

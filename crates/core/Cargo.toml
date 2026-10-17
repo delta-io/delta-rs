@@ -52,7 +52,7 @@ deltalake-kernel-executor = { version = "2.0", path = "../kernel-executor", opti
 
 # serde
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true, features = ["raw_value"] }
+serde_json = { workspace = true }
 
 # "stdlib"
 bytes = { workspace = true }
