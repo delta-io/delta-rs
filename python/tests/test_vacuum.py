@@ -59,7 +59,7 @@ def test_vacuum_zero_duration(
     new_files = set(dt.file_uris())
     assert new_files.isdisjoint(original_files)
 
-    file_paths = {f.split(os.path.sep)[-1] for f in original_files}
+    file_paths = {pathlib.Path(f).name for f in original_files}
 
     tombstones = set(dt.vacuum(retention_hours=0, enforce_retention_duration=False))
     assert tombstones == file_paths
@@ -70,7 +70,7 @@ def test_vacuum_zero_duration(
     assert tombstones == file_paths
 
     parquet_files = {f for f in os.listdir(table_path) if f.endswith("parquet")}
-    assert parquet_files == {f.split(os.path.sep)[-1] for f in new_files}
+    assert parquet_files == {pathlib.Path(f).name for f in new_files}
 
 
 def test_vacuum_transaction_log(tmp_path: pathlib.Path, sample_table: Table):
@@ -89,7 +89,7 @@ def test_vacuum_transaction_log(tmp_path: pathlib.Path, sample_table: Table):
 
     dt = DeltaTable(tmp_path)
 
-    history = dt.history(2)
+    history = list(dt.history(2))
 
     expected_start_parameters = {
         "retentionCheckEnabled": "false",
@@ -215,7 +215,7 @@ def test_vacuum_lite_mode_no_list_operation(
         )
     )
 
-    expected_tombstones = {f.split(os.path.sep)[-1] for f in original_files}
+    expected_tombstones = {pathlib.Path(f).name for f in original_files}
     assert lite_tombstones == expected_tombstones, (
         "Lite mode should return exactly the log-referenced expired tombstones"
     )
@@ -278,7 +278,7 @@ def test_vacuum_lite_mode_no_list_operation_partitioned(
     )
 
     expected_tombstones = {
-        os.path.join(*f.split(os.path.sep)[-2:]) for f in original_files
+        pathlib.Path(f).relative_to(tmp_path).as_posix() for f in original_files
     }
     assert lite_tombstones == expected_tombstones, (
         "Lite mode should return exactly the log-referenced expired tombstones"

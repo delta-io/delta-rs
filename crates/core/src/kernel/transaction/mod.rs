@@ -515,11 +515,10 @@ impl CommitData {
                 let mut action: Value = serde_json::from_str(line)
                     .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
 
-                if let Some(commit_info) = action.get_mut("commitInfo") {
-                    if let Some(Value::Object(metrics)) = commit_info.get_mut("operationMetrics") {
-                        metrics
-                            .insert("num_retries".to_string(), Value::Number(num_retries.into()));
-                    }
+                if let Some(commit_info) = action.get_mut("commitInfo")
+                    && let Some(Value::Object(metrics)) = commit_info.get_mut("operationMetrics")
+                {
+                    metrics.insert("num_retries".to_string(), Value::Number(num_retries.into()));
                 }
                 // Serialize just this updated line
                 let updated_line = serde_json::to_string(&action)
@@ -703,7 +702,7 @@ pub struct PreCommit<'a> {
     post_commit_hook: Option<PostCommitHookProperties>,
 }
 
-impl<'a> std::future::IntoFuture for PreCommit<'a> {
+impl<'a> IntoFuture for PreCommit<'a> {
     type Output = DeltaResult<FinalizedCommit>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
@@ -758,7 +757,7 @@ impl<'a> PreCommit<'a> {
     }
 }
 
-/// Represents a inflight commit
+/// Represents an inflight commit
 pub struct PreparedCommit<'a> {
     commit_or_bytes: CommitOrBytes,
     committer: Arc<dyn Committer>,
@@ -776,7 +775,7 @@ impl PreparedCommit<'_> {
     }
 }
 
-impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
+impl<'a> IntoFuture for PreparedCommit<'a> {
     type Output = DeltaResult<PostCommit>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 

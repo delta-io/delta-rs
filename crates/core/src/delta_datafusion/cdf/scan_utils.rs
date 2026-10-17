@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::DeltaResult;
 use crate::delta_datafusion::cdf::{CHANGE_TYPE_COL, CdcDataSpec, FileAction, ResolvedPair};
 use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
-use crate::kernel::StorageType;
-use crate::{DeltaResult, DeltaTableError};
 use arrow_array::{Array, BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::ScalarValue;
@@ -17,7 +16,7 @@ use datafusion::logical_expr::ColumnarValue;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use delta_kernel::Engine;
-use delta_kernel::actions::deletion_vector::{DeletionVectorDescriptor, DeletionVectorStorageType};
+use delta_kernel::actions::deletion_vector::DeletionVectorDescriptor;
 use object_store::path::Path;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, RowSelection, RowSelector};
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData};
@@ -104,6 +103,7 @@ pub fn create_spec_partition_values<F: FileAction>(
     spec_partition_values
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn extend_groups_with_pairs(
     schema: SchemaRef,
     pairs: Vec<ResolvedPair>,
@@ -135,7 +135,7 @@ pub async fn extend_groups_with_pairs(
             &pair,
             &table_partition_values,
             Arc::clone(&cache),
-            &metrics,
+            metrics,
         )
         .await?;
         push_pair_selection(
@@ -145,7 +145,7 @@ pub async fn extend_groups_with_pairs(
             &pair,
             &table_partition_values,
             Arc::clone(&cache),
-            &metrics,
+            metrics,
         )
         .await?;
     }
@@ -313,33 +313,13 @@ pub fn prune_specs_by_partition<F: FileAction>(
     Ok(pruned)
 }
 
-impl TryInto<DeletionVectorDescriptor> for crate::kernel::DeletionVectorDescriptor {
-    type Error = DeltaTableError;
-
-    fn try_into(self) -> DeltaResult<DeletionVectorDescriptor> {
-        let storage_type = match self.storage_type {
-            StorageType::UuidRelativePath => DeletionVectorStorageType::PersistedRelative,
-            StorageType::Inline => DeletionVectorStorageType::Inline,
-            StorageType::AbsolutePath => DeletionVectorStorageType::PersistedAbsolute,
-        };
-
-        Ok(DeletionVectorDescriptor::try_new(
-            storage_type,
-            self.path_or_inline_dv,
-            self.offset,
-            self.size_in_bytes,
-            self.cardinality,
-        )?)
-    }
-}
-
 /// Parquet access plans can take row selectors as part of their construction. We take a treemap and
 /// given the indexes create row selectors for the marked rows.
 /// This requires:
 /// 1. Marking the rows up until the index as kept or omitted depending on the action
 /// 2. Marking the row itself for the opposite
 /// 3. Marking the tail end rows up until the row group end as kept or omitted depending on the action
-/// This then builds the final access plan for the individual row group.
+///    This then builds the final access plan for the individual row group.
 fn row_group_access(
     marked: &roaring::RoaringTreemap,
     rg_start: u64,

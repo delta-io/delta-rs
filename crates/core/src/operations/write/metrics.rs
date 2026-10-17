@@ -8,7 +8,6 @@ use datafusion::physical_plan::{ExecutionPlan, metrics::MetricBuilder};
 use datafusion::{
     catalog::Session,
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
-    prelude::Expr,
 };
 
 use crate::delta_datafusion::{logical::MetricObserver, physical::MetricObserverExec};

@@ -4,7 +4,6 @@ use chrono::Duration;
 use deltalake_core::DeltaTable;
 use deltalake_core::kernel::StructType;
 use deltalake_core::operations::vacuum::Clock;
-use deltalake_core::protocol::SaveMode;
 use deltalake_test::clock::TestClock;
 use deltalake_test::*;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt as _, path::Path};

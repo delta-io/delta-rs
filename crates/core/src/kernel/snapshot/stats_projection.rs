@@ -233,10 +233,8 @@ impl StatsProjection {
 
         let columns = requested_columns
             .iter()
-            .filter_map(|column| {
-                stats_schema_contains_data_column(stats_schema.as_ref(), column)
-                    .then(|| column.clone())
-            })
+            .filter(|column| stats_schema_contains_data_column(stats_schema.as_ref(), column))
+            .cloned()
             .collect::<BTreeSet<_>>();
 
         if columns.is_empty() {
@@ -318,6 +316,19 @@ impl StatsProjection {
                     .first()
                     .is_some_and(|name| name.as_str() == physical_name)
             }),
+        }
+    }
+
+    /// Whether this projection emits column statistics for any physical column.
+    ///
+    /// When it does not (no predicate to prune on), per-file column stats are all `Absent`,
+    /// so callers can skip allocating them (#4522).
+    #[cfg(feature = "datafusion")]
+    pub(crate) fn emits_any_column_stats(&self) -> bool {
+        match self {
+            Self::None | Self::NumRecordsOnly => false,
+            Self::Full => true,
+            Self::PredicateColumns(columns) => !columns.is_empty(),
         }
     }
 }

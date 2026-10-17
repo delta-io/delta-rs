@@ -98,7 +98,7 @@ def test_add_constraint(tmp_path, sample_table: Table, sql_string: str):
 
     dt.alter.add_constraint({"check_price": sql_string})
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "ADD CONSTRAINT"
     assert dt.version() == 1
     assert dt.metadata().configuration == {
@@ -133,7 +133,7 @@ def test_add_multiple_constraint(tmp_path, sample_table: Table):
 
     dt.alter.add_constraint({"check_price": '"high price" >= 0', "min_price": '"high price" < 5'})
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "ADD CONSTRAINT"
     assert dt.version() == 1
     assert dt.metadata().configuration == {

@@ -99,7 +99,7 @@ async fn test_update_predicate_left_in_data() -> DeltaResult<()> {
         .with_predicate(col("value").eq(lit(10)))
         .await?;
 
-    use parquet::arrow::async_reader::ParquetObjectReader;
+    use crate::logstore::parquet_reader::ParquetObjectReader;
     use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 
     for pq in table.get_files_by_partitions(&[]).await? {

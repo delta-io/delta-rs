@@ -26,7 +26,7 @@ def test_add_constraint(tmp_path: pathlib.Path, sample_table: Table):
 
     dt.alter.add_constraint({"check_price": "price >= 0"})
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "ADD CONSTRAINT"
     assert dt.version() == 1
     assert dt.metadata().configuration == {
@@ -69,7 +69,7 @@ def test_add_constraint_roundtrip_metadata(tmp_path: pathlib.Path, sample_table:
         {"check_price2": "price >= 0"}, commit_properties=commit_properties
     )
 
-    assert dt.history(1)[0]["userName"] == "John Doe"
+    assert next(dt.history(1))["userName"] == "John Doe"
 
 
 def test_drop_constraint(tmp_path: pathlib.Path, sample_table: Table):
@@ -80,7 +80,7 @@ def test_drop_constraint(tmp_path: pathlib.Path, sample_table: Table):
     dt.alter.add_constraint({"check_price": "price >= 0"})
     assert dt.protocol().min_writer_version == 3
     dt.alter.drop_constraint(name="check_price")
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "DROP CONSTRAINT"
     assert dt.version() == 2
     assert dt.metadata().configuration == {}
@@ -126,7 +126,7 @@ def test_drop_constraint_roundtrip_metadata(
     commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     dt.alter.drop_constraint("check_price2", commit_properties=commit_properties)
 
-    assert dt.history(1)[0]["userName"] == "John Doe"
+    assert next(dt.history(1))["userName"] == "John Doe"
 
 
 @pytest.mark.parametrize("min_writer_version", ["2", "3", "4", "5", "6", "7"])
@@ -324,7 +324,7 @@ def test_convert_checkConstraints_to_feature_after_version_upgrade(
 
     dt.alter.add_constraint({"check_price": "price >= 0"})
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "ADD CONSTRAINT"
     assert dt.version() == 1
     assert dt.metadata().configuration == {
@@ -489,7 +489,7 @@ def test_add_feature_variations(existing_table: DeltaTable, feature):
         feature=feature,
         allow_protocol_versions_increase=False,
     )
-    last_action = existing_table.history(1)[0]
+    last_action = next(existing_table.history(1))
     assert last_action["operation"] == "ADD FEATURE"
     assert existing_table.version() == 1
 
@@ -570,7 +570,7 @@ def test_drop_column_not_null(tmp_path: pathlib.Path):
     assert fields_by_name["id"].nullable is True
     # Other columns are left untouched.
     assert fields_by_name["value"].nullable is True
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "CHANGE COLUMN"
 
 
@@ -582,7 +582,7 @@ def test_drop_column_not_null_roundtrip_metadata(tmp_path: pathlib.Path):
     commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     dt.alter.drop_column_not_null("id", commit_properties=commit_properties)
 
-    assert dt.history(1)[0]["userName"] == "John Doe"
+    assert next(dt.history(1))["userName"] == "John Doe"
 
 
 def test_drop_column_not_null_unknown_column(tmp_path: pathlib.Path):
@@ -633,7 +633,7 @@ def test_set_table_name(tmp_path: pathlib.Path, sample_table: Table):
 
     assert dt.version() == 1
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "UPDATE TABLE METADATA"
 
 
@@ -651,7 +651,7 @@ def test_set_table_description(tmp_path: pathlib.Path, sample_table: Table):
 
     assert dt.version() == 1
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "UPDATE TABLE METADATA"
 
 

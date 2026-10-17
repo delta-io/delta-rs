@@ -36,7 +36,7 @@ def test_restore_with_version(
     old_version = dt.version()
     commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     dt.restore(1, commit_properties=commit_properties)
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "RESTORE"
     assert last_action["userName"] == "John Doe"
     assert dt.version() == old_version + 1
@@ -63,7 +63,7 @@ def test_restore_with_datetime_str(
     dt = DeltaTable(table_path)
     old_version = dt.version()
     dt.restore("2020-05-01T00:47:31-07:00")
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "RESTORE"
     assert dt.version() == old_version + 1
 
@@ -92,7 +92,7 @@ def test_restore_with_datetime(
         "2023-04-26T21:23:32+08:00", "%Y-%m-%dT%H:%M:%S%z"
     )
     dt.restore(date)
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "RESTORE"
     assert dt.version() == old_version + 1
 
@@ -114,7 +114,7 @@ def test_restore_with_post_commithook_properties(
             cleanup_expired_logs=False,
         ),
     )
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "RESTORE"
     assert dt.version() == old_version + 1
 
@@ -162,7 +162,7 @@ def test_restore_with_naive_datetime(
     old_version = dt.version()
     dt.restore(datetime.datetime(2020, 1, 1, 12))
 
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
     assert last_action["operation"] == "RESTORE"
     assert dt.version() == old_version + 1
     # 12:00 read as UTC lands on version 1, which holds two appends.
