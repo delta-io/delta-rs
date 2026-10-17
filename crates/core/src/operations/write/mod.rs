@@ -2076,6 +2076,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_replace_where_does_not_narrow_fractional_literals() {
+        let schema = get_arrow_schema(&None);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "C"])),
+                Arc::new(arrow::array::Int32Array::from(vec![0, 20, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec!["2021-02-02"; 4])),
+            ],
+        )
+        .unwrap();
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .await
+            .unwrap();
+
+        let batch_add = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["E"])),
+                Arc::new(arrow::array::Int32Array::from(vec![5])),
+                Arc::new(arrow::array::StringArray::from(vec!["2023-01-01"])),
+            ],
+        )
+        .unwrap();
+        let table = table
+            .write(vec![batch_add])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where("value < 10.5")
+            .await
+            .unwrap();
+
+        let expected = [
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| B  | 20    | 2021-02-02 |",
+            "| C  | 100   | 2021-02-02 |",
+            "| E  | 5     | 2023-01-01 |",
+            "+----+-------+------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &get_data(&table).await);
+    }
+
+    #[tokio::test]
     async fn test_replace_where_fail_not_matching_predicate() {
         let schema = get_arrow_schema(&None);
         let batch = RecordBatch::try_new(
