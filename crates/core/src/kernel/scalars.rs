@@ -65,7 +65,7 @@ pub trait ScalarExt: Sized {
 }
 
 /// Formats an unscaled decimal value with a positive scale, e.g. `-105` with scale 2 as `-1.05`.
-pub(crate) fn serialize_scaled_decimal(value: i128, scale: u8) -> String {
+fn serialize_scaled_decimal(value: i128, scale: u8) -> String {
     let scalar_multiple = 10_u128.pow(scale as u32);
     let abs = value.unsigned_abs();
     let sign = if value < 0 { "-" } else { "" };
