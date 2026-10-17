@@ -29,6 +29,24 @@ pub use snapshot::*;
 pub(crate) static ARROW_HANDLER: LazyLock<Arc<ArrowEvaluationHandler>> =
     LazyLock::new(|| Arc::new(ArrowEvaluationHandler {}));
 
+/// Runs a blocking closure on Tokio's blocking pool while keeping the caller's
+/// `tracing` context.
+///
+/// `tokio::task::spawn_blocking` runs the closure on a different OS thread. That
+/// thread does not inherit the caller's scoped [`tracing::Dispatch`] or current
+/// [`tracing::Span`], so events emitted inside the closure are routed to the global
+/// dispatcher and spans lose their parent. This helper captures both at the call
+/// site and re-installs them on the blocking thread for the duration of `f`.
+///
+/// Use it for blocking work called from an async path that should appear under the
+/// caller's span, such as log segment listing or snapshot construction (see the
+/// history of #3894, which introduced it and moved those call sites over). Use
+/// `tokio::task::spawn_blocking` directly when the work emits no tracing or should not
+/// be attributed to the caller.
+///
+/// This is not for futures; use `tokio::spawn` for async work. It changes only the
+/// tracing context: scheduling, cancellation, and panic propagation match
+/// `spawn_blocking`, and the returned [`JoinHandle`] behaves the same way.
 pub(crate) fn spawn_blocking_with_span<F, R>(f: F) -> JoinHandle<R>
 where
     F: FnOnce() -> R + Send + 'static,
