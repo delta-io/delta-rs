@@ -10,7 +10,7 @@ def test_repair_with_dry_run(tmp_path, sample_table):
     os.remove(dt.file_uris()[0])
 
     metrics = dt.repair(dry_run=True)
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert len(metrics["files_removed"]) == 1
     assert metrics["dry_run"] is True
@@ -25,7 +25,7 @@ def test_repair_wo_dry_run(tmp_path, sample_table):
 
     commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     metrics = dt.repair(dry_run=False, commit_properties=commit_properties)
-    last_action = dt.history(1)[0]
+    last_action = next(dt.history(1))
 
     assert len(metrics["files_removed"]) == 1
     assert metrics["dry_run"] is False

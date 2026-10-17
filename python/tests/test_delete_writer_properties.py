@@ -58,7 +58,7 @@ def test_delete_respects_writer_properties_issue_4579(tmp_path: pathlib.Path):
     )
 
     # Verify the delete operation succeeded
-    last_action = table.history(1)[0]
+    last_action = next(table.history(1))
     assert last_action["operation"] == "DELETE"
     assert table.version() == initial_version + 1
 
@@ -145,7 +145,7 @@ def test_delete_with_fallback_compression_issue_4579(tmp_path: pathlib.Path):
     table.delete(predicate="id > 5")
 
     # Verify the delete operation succeeded
-    last_action = table.history(1)[0]
+    last_action = next(table.history(1))
     assert last_action["operation"] == "DELETE"
     assert table.version() == initial_version + 1
 
@@ -153,6 +153,15 @@ def test_delete_with_fallback_compression_issue_4579(tmp_path: pathlib.Path):
     df = table.to_pandas()
     assert len(df) == 5
     assert all(df["id"] <= 5)
+
+    # Rewritten files use the delta-rs SNAPPY default, like write/merge/update
+    import pyarrow.parquet as pq
+
+    for file_uri in table.file_uris():
+        metadata = pq.read_metadata(file_uri)
+        assert metadata.created_by.startswith("delta-rs")
+        for column in metadata.row_group(0).to_dict()["columns"]:
+            assert column["compression"] == "SNAPPY"
 
     print(
         "✓ Fallback compression test passed - delete works without custom writer_properties"

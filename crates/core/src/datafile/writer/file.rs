@@ -145,12 +145,15 @@ pub(super) enum FileArrowWriter {
 
 impl FileArrowWriter {
     fn try_new(writer: ParquetObjectWriter, config: &PartitionWriterConfig) -> ParquetResult<Self> {
-        let options = &config.arrow_options;
+        let options = config.writer_properties.arrow_options();
         if options.enable_parallel_encoding() {
             ParallelArrowWriter::try_new(
                 writer,
                 config.file_schema.clone(),
-                config.writer_properties.clone(),
+                config
+                    .writer_properties
+                    .parquet_properties_or_default()
+                    .clone(),
                 Some(options.clone()),
             )
             .map(Self::Parallel)
@@ -158,7 +161,12 @@ impl FileArrowWriter {
             AsyncArrowWriter::try_new_with_options(
                 writer,
                 config.file_schema.clone(),
-                options.to_parquet_options(config.writer_properties.clone()),
+                options.to_parquet_options(
+                    config
+                        .writer_properties
+                        .parquet_properties_or_default()
+                        .clone(),
+                ),
             )
             .map(Self::Serial)
         }

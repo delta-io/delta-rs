@@ -1470,6 +1470,14 @@ mod tests {
 
         let actual = drain_recorded_ops(&mut operations).await;
 
+        // Parquet metadata reads (the footer probe, the footer fetch, and the
+        // metadata_size_hint prefetch) are always anchored at the end of the
+        // file, while column chunk reads never reach the trailing footer and
+        // magic bytes. Exclude tail-anchored reads so the assertions below only
+        // consider column data reads: with a metadata_size_hint larger than
+        // the file (e.g. datafusion's 512KiB default against this tiny test
+        // file) the prefetch spans the whole file, including the unselected
+        // column chunk, without that chunk being read as data.
         let data_ranges = actual
             .iter()
             .flat_map(|operation| match operation {
@@ -1477,6 +1485,7 @@ mod tests {
                 ObjectStoreOperation::GetRanges(PathKind::Data, ranges) => ranges.clone(),
                 _ => Vec::new(),
             })
+            .filter(|range| range.end < file_meta.size)
             .collect::<Vec<_>>();
 
         let overlaps = |left: &Range<u64>, right: &Range<u64>| {
