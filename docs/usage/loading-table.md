@@ -306,3 +306,48 @@ or
 | Environment Variable | Description |
 |---------------------|-------------|
 | `UNITY_ALLOW_HTTP_URL` | Allow HTTP URLs (e.g., http://localhost:8080) for testing |
+
+### Catalog-managed commits (read path)
+
+Unity Catalog supports [catalog-managed commits](https://docs.databricks.com/aws/en/tables/features/catalog-commits),
+where the catalog — not the filesystem — is the source of truth for the table's
+commit history. Writers stage commits with the catalog, which later *ratifies*
+them; the filesystem may therefore contain commits the catalog has not yet
+published. When a table is catalog-managed, readers must take the commit history
+from the catalog rather than listing `_delta_log/` on the filesystem, so reads
+reflect only catalog-ratified commits.
+
+delta-rs supports the **read path** of catalog-managed commits as an opt-in.
+Enable it by passing `catalog_managed=true` in `storage_options` while opening
+the table by its `uc://<catalog>.<schema>.<table>` URI:
+
+=== "Python"
+
+    ```python
+    import os
+    from deltalake import DeltaTable
+
+    os.environ["DATABRICKS_WORKSPACE_URL"] = "https://adb-1234567890.XX.azuredatabricks.net"
+    os.environ["DATABRICKS_ACCESS_TOKEN"] = "<unity-catalog-access-token-here>"
+
+    dt = DeltaTable(
+        "uc://main.sales.orders",
+        storage_options={"catalog_managed": "true"},
+    )
+    print(dt.version())  # the latest catalog-ratified version
+    ```
+
+When enabled, delta-rs asks Unity Catalog for the table's staged commits and
+highest ratified version, caps log replay at that ratified version (ignoring
+unpublished commits on the filesystem), and vends short-lived storage
+credentials for reading the underlying files. A Unity Catalog **access token**
+is required (`DATABRICKS_ACCESS_TOKEN` / `UNITY_ACCESS_TOKEN`); OAuth and
+service-principal credentials do not currently support the catalog-managed read
+path.
+
+!!! note
+    Catalog-managed mode is opt-in and **read-only** for now: catalog-managed
+    *writes* (routing new commits through the catalog) are not yet supported.
+    It may become automatic in a future release. See
+    [delta-io/delta-rs#4549](https://github.com/delta-io/delta-rs/issues/4549)
+    for the tracking issue.
