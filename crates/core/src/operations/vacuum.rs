@@ -388,7 +388,7 @@ impl VacuumBuilder {
         let mut file_count = 0;
 
         let tombstone_retention_timestamp = now_millis - retention_period.num_milliseconds();
-        let (expired_tombstones, tombstone_path_sets) =
+        let (expired_files, tombstone_path_sets) =
             collect_tombstones(snapshot, tombstone_retention_timestamp, &self.log_store).await?;
         let valid_files = collect_active_paths(snapshot, self.log_store.as_ref()).await?;
 
@@ -398,14 +398,13 @@ impl VacuumBuilder {
         let mut file_sizes = vec![];
 
         // VacuumMode::Lite file set
-        // Expired tombstones are deleted unless the file is still in use or kept for time travel
-        for tombs in expired_tombstones.iter() {
-            let path = tombstone_object_store_path(tombs);
+        // Files of expired tombstones are deleted unless still in use or kept for time travel
+        for (path, size) in expired_files {
             if !tombstone_path_sets.retained_paths.contains(&path)
                 && ok_to_delete(&path, &valid_files, &keep_files, partition_columns)?
             {
                 files_to_delete.push(path);
-                file_sizes.push(tombs.size().unwrap_or(0));
+                file_sizes.push(size);
             }
         }
 
@@ -960,34 +959,37 @@ fn list_orphans_under_prefix(
         })
 }
 
+/// Returns the data and deletion vector files of expired tombstones, each listed once with its
+/// size, and the path sets used to protect files that unexpired tombstones still reference.
 async fn collect_tombstones(
     snapshot: &Snapshot,
     tombstone_retention_timestamp: i64,
     store: &dyn LogStore,
-) -> DeltaResult<(Vec<TombstoneView>, TombstonePathSets)> {
+) -> DeltaResult<(Vec<(Path, i64)>, TombstonePathSets)> {
     let table_root = snapshot.table_configuration().table_root();
     snapshot
         .active_tombstones(store)
         .try_fold(
             (Vec::new(), TombstonePathSets::default()),
-            |(mut expired_tombstones, mut tombstone_path_sets), tombstone| {
+            |(mut expired_files, mut tombstone_path_sets), tombstone| {
                 let is_expired = is_tombstone_expired(&tombstone, tombstone_retention_timestamp);
-                let path = tombstone_object_store_path(&tombstone);
-                let is_new_path = tombstone_path_sets.record(path, is_expired);
-                if is_expired {
-                    if is_new_path {
-                        expired_tombstones.push(tombstone);
+                let dv = tombstone.deletion_vector_descriptor();
+                let dv_size = dv.as_ref().map_or(0, |dv| i64::from(dv.size_in_bytes));
+                let dv_path = match deletion_vector_path(dv, table_root) {
+                    Ok(dv_path) => dv_path,
+                    Err(err) => return ready(Err(err)),
+                };
+                let data_file = (
+                    tombstone_object_store_path(&tombstone),
+                    tombstone.size().unwrap_or(0),
+                );
+                for (path, size) in std::iter::once(data_file).chain(dv_path.map(|p| (p, dv_size)))
+                {
+                    if tombstone_path_sets.record(path.clone(), is_expired) && is_expired {
+                        expired_files.push((path, size));
                     }
-                    return ready(Ok((expired_tombstones, tombstone_path_sets)));
                 }
-                ready(
-                    deletion_vector_path(tombstone.deletion_vector_descriptor(), table_root).map(
-                        |dv_path| {
-                            tombstone_path_sets.retained_paths.extend(dv_path);
-                            (expired_tombstones, tombstone_path_sets)
-                        },
-                    ),
-                )
+                ready(Ok((expired_files, tombstone_path_sets)))
             },
         )
         .await
@@ -1059,10 +1061,10 @@ mod tests {
         )
     }
 
-    fn tombstone_paths(mut tombstones: Vec<TombstoneView>) -> Vec<String> {
-        let mut paths = tombstones
-            .drain(..)
-            .map(|tombstone| tombstone.path().to_string())
+    fn tombstone_paths(files: Vec<(object_store::path::Path, i64)>) -> Vec<String> {
+        let mut paths = files
+            .into_iter()
+            .map(|(path, _)| path.to_string())
             .collect::<Vec<_>>();
         paths.sort();
         paths
@@ -1528,13 +1530,16 @@ mod tests {
 
         let (table, _) = table.delete().await?;
         let (table, result) = table.vacuum().with_mode(VacuumMode::Lite).await?;
+        assert_eq!(result.files_deleted, vec![expired_dv_file.to_string()]);
+        let (table, result) = table.vacuum().with_mode(VacuumMode::Full).await?;
         assert!(
-            result.files_deleted.is_empty(),
-            "lite vacuum deleted files of an unexpired tombstone: {:?}",
+            !result
+                .files_deleted
+                .iter()
+                .any(|path| path.ends_with(data_file) || path.ends_with(dv_file)),
+            "full vacuum deleted files of an unexpired tombstone: {:?}",
             result.files_deleted
         );
-        let (table, result) = table.vacuum().with_mode(VacuumMode::Full).await?;
-        assert_eq!(result.files_deleted, vec![expired_dv_file.to_string()]);
         let time_travel = crate::open_table_with_version(table_url, version_before_delete).await?;
         assert_eq!(read_ids(&time_travel).await?, ids_before_delete);
 
@@ -1561,6 +1566,42 @@ mod tests {
             "files of an expired tombstone should be vacuumed once: {:?}",
             result.files_deleted
         );
+        Ok(())
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn test_lite_vacuum_deletes_deletion_vectors_of_expired_tombstones() -> DeltaResult<()> {
+        let data_file = "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet";
+        let dv_file = "deletion_vector_a2084964-69d4-4e1e-95f5-9bbd6571d5c3.bin";
+        let older_dv_file = "deletion_vector_8e4ca8be-7615-43cf-bc06-5d131148683f.bin";
+        let temp_dir = tempfile::tempdir().unwrap();
+        fs_extra::dir::copy(
+            "../test/tests/data/table_with_deletion_logs",
+            temp_dir.path(),
+            &Default::default(),
+        )
+        .unwrap();
+        let table_dir = temp_dir.path().join("table_with_deletion_logs");
+        let table_url = Url::from_directory_path(table_dir.canonicalize().unwrap()).unwrap();
+
+        // The data file had older_dv_file at version 3 and dv_file from version 4 on
+        let (table, _) = open_table(table_url).await?.delete().await?;
+        let after_retention = (SystemTime::now() + StdDuration::from_secs(30 * 24 * 60 * 60))
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let (_table, result) = table
+            .vacuum()
+            .with_mode(VacuumMode::Lite)
+            .with_clock(Arc::new(MockClock::new(after_retention)))
+            .await?;
+
+        let mut files_deleted = result.files_deleted;
+        files_deleted.sort();
+        assert_eq!(files_deleted, vec![older_dv_file, dv_file, data_file]);
+        assert!(!table_dir.join(older_dv_file).exists());
+        assert!(!table_dir.join(dv_file).exists());
         Ok(())
     }
 
