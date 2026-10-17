@@ -716,7 +716,7 @@ mod tests {
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
     };
     use crate::{DeltaResult, DeltaTable, TableProperty};
-    use arrow::array::Int32Array;
+    use arrow::array::{Decimal128Array, Int32Array};
     use arrow::datatypes::TimestampMicrosecondType;
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -1183,6 +1183,42 @@ mod tests {
 
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[rstest]
+    #[case::min_with_scale_18(18, 1_123_456_789_012_345_678, 2_500_000_000_000_000_000)]
+    #[case::max_above_i64_with_scale_0(0, 10_000_000_000_000_000_000, 1)]
+    #[tokio::test]
+    async fn test_delete_exact_decimal_match(
+        #[case] scale: i8,
+        #[case] target: i128,
+        #[case] other: i128,
+    ) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("amount", DataType::Decimal128(38, scale), false),
+        ]));
+        let amounts = Decimal128Array::from(vec![target, other])
+            .with_precision_and_scale(38, scale)
+            .unwrap();
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(vec![1, 2])), Arc::new(amounts)],
+        )
+        .unwrap();
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .await
+            .unwrap();
+
+        let (_, metrics) = table
+            .delete()
+            .with_predicate(col("amount").eq(lit(ScalarValue::Decimal128(Some(target), 38, scale))))
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.num_deleted_rows, Some(1));
+        assert_eq!(metrics.num_copied_rows, 1);
     }
 
     #[tokio::test]
