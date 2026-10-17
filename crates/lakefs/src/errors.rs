@@ -2,7 +2,7 @@
 
 use deltalake_core::DeltaTableError;
 use deltalake_core::kernel::transaction::TransactionError;
-use reqwest::Error;
+use reqwest_middleware::Error;
 
 #[derive(thiserror::Error, Debug)]
 pub enum LakeFSConfigError {
@@ -21,8 +21,8 @@ pub enum LakeFSConfigError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum LakeFSOperationError {
-    /// Failed to send http request to LakeFS
-    #[error("Failed to send request to LakeFS: {source}")]
+    /// Failed to send http request to LakeFS. `:#` shows the cause, not only the retry count.
+    #[error("Failed to send request to LakeFS: {source:#}")]
     HttpRequestFailed { source: Error },
 
     /// Missing authentication in LakeFS
@@ -37,6 +37,25 @@ pub enum LakeFSOperationError {
     #[error("LakeFS merge failed. Reason: {0}")]
     MergeFailed(String),
 
+    /// The destination branch of a merge has uncommitted changes.
+    ///
+    /// LakeFS refuses to merge into a dirty branch and no API flag bypasses that check. Commit or
+    /// revert the staged changes on the branch and retry the operation.
+    #[error(
+        "LakeFS refused to merge into branch `{branch}` because the branch has uncommitted changes. Commit or revert the staged changes on `{branch}` and retry. Reason: {reason}"
+    )]
+    DirtyBranch { branch: String, reason: String },
+
+    /// A file-only merge (checkpoints, log cleanup, vacuum) conflicted with the destination branch.
+    #[error(
+        "LakeFS merge of `{source_branch}` into `{target_branch}` conflicted. Reason: {reason}"
+    )]
+    MergeConflict {
+        source_branch: String,
+        target_branch: String,
+        reason: String,
+    },
+
     /// LakeFS create branch has failed
     #[error("LakeFS create branch failed. Reason: {0}")]
     CreateBranchFailed(String),
@@ -45,9 +64,9 @@ pub enum LakeFSOperationError {
     #[error("LakeFS delete branch failed. Reason: {0}")]
     DeleteBranchFailed(String),
 
-    /// LakeFS delete branch has failed
-    #[error("Transaction ID ({0}) not found. Something went wrong.")]
-    TransactionIdNotFound(String),
+    /// The diff request between two refs failed
+    #[error("LakeFS diff failed. Reason: {0}")]
+    DiffFailed(String),
 }
 
 impl From<LakeFSOperationError> for TransactionError {

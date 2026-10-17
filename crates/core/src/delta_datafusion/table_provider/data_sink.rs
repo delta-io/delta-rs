@@ -13,17 +13,15 @@ use datafusion::{
 use datafusion_datasource::sink::DataSink;
 use futures::{StreamExt as _, TryStreamExt as _};
 use itertools::Itertools as _;
-use uuid::Uuid;
 
 use crate::{
     cast_record_batch,
-    datafile::writer::WriterConfig,
+    datafile::{DeltaWriterProperties, writer::WriterConfig},
     delta_datafusion::{ColumnMappingState, DataFusionMixins as _},
     kernel::{Action, EagerSnapshot, transaction::CommitBuilder},
-    logstore::LogStoreRef,
-    operations::write::{WriterStatsConfig, execution::write_streams},
+    logstore::{LogStoreRef, with_operation},
+    operations::write::execution::write_streams,
     protocol::{DeltaOperation, SaveMode},
-    table::config::TablePropertiesExt as _,
 };
 
 /// DataSink implementation for delta lake
@@ -101,18 +99,33 @@ impl DataSink for DeltaDataSink {
 
     /// Write the data to the delta table
     /// This is used for insert into operation
+    ///
+    /// The whole insert runs inside one operation scope, so that on an isolating backend the
+    /// data files and the commit land on the same isolated write target.
     async fn write_all(
         &self,
         data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
     ) -> datafusion::common::Result<u64> {
-        let target_schema = self.snapshot.input_schema();
-        let table_props = self.snapshot.table_configuration().table_properties();
+        with_operation(&self.log_store, |log_store| async move {
+            self.write_all_with(log_store, data).await
+        })
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+}
 
-        let operation_id = Uuid::new_v4();
+impl DeltaDataSink {
+    async fn write_all_with(
+        &self,
+        log_store: LogStoreRef,
+        data: SendableRecordBatchStream,
+    ) -> crate::DeltaResult<u64> {
+        let target_schema = self.snapshot.input_schema();
+
         let stream = self.create_converted_stream(data, target_schema.clone());
         let logical_partition_columns = self.snapshot.metadata().partition_columns();
-        let object_store = self.log_store.object_store(Some(operation_id));
+        let object_store = log_store.object_store();
         let total_rows_metric = MetricBuilder::new(&self.metrics).counter("total_rows", 0);
         let stream = {
             let metric = total_rows_metric.clone();
@@ -128,7 +141,8 @@ impl DataSink for DeltaDataSink {
         };
         let column_mapping =
             ColumnMappingState::from_table_config(self.snapshot.table_configuration());
-        let stats_config = WriterStatsConfig::from_config(self.snapshot.table_configuration());
+        let props = DeltaWriterProperties::default()
+            .apply_table_defaults(self.snapshot.table_configuration());
         let (stream, table_schema, physical_partition_columns, random_prefix_length) =
             match &column_mapping {
                 None => (
@@ -139,9 +153,8 @@ impl DataSink for DeltaDataSink {
                 ),
                 Some(state) => {
                     let physical_schema = state.physical_schema(&self.snapshot.read_schema());
-                    let physical_partition_columns = state
-                        .physical_partition_columns(logical_partition_columns)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let physical_partition_columns =
+                        state.physical_partition_columns(logical_partition_columns)?;
                     let prefix_length = state.random_prefix_length();
                     let state = state.clone();
                     let stream: SendableRecordBatchStream =
@@ -159,20 +172,10 @@ impl DataSink for DeltaDataSink {
                     )
                 }
             };
-        let config = WriterConfig::new(
-            table_schema,
-            physical_partition_columns,
-            None,
-            Some(table_props.target_file_size()),
-            None,
-            stats_config.num_indexed_cols,
-            stats_config.stats_columns,
-        )
-        .with_random_prefix_length(random_prefix_length);
+        let config = WriterConfig::new(table_schema, physical_partition_columns, props)
+            .with_random_prefix_length(random_prefix_length);
 
-        let (adds, write_metrics) = write_streams(vec![stream], object_store, config)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let (adds, write_metrics) = write_streams(vec![stream], object_store, config).await?;
         let total_rows = write_metrics.rows_written;
 
         let mut actions = adds.into_iter().map(Action::Add).collect_vec();
@@ -180,11 +183,10 @@ impl DataSink for DeltaDataSink {
         if self.save_mode == SaveMode::Overwrite {
             actions.extend(
                 self.snapshot
-                    .file_views(&self.log_store, None)
+                    .file_views(&log_store, None)
                     .map_ok(|f| Action::Remove(f.remove_action(true)))
                     .try_collect::<Vec<_>>()
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
+                    .await?,
             );
         };
 
@@ -200,10 +202,8 @@ impl DataSink for DeltaDataSink {
 
         CommitBuilder::default()
             .with_actions(actions)
-            .with_operation_id(operation_id)
-            .build(Some(&self.snapshot), self.log_store.clone(), operation)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            .build(Some(&self.snapshot), log_store, operation)
+            .await?;
 
         Ok(total_rows)
     }

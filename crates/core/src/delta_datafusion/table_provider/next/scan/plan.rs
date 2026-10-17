@@ -224,6 +224,9 @@ impl ProjectedScanContract {
 pub(crate) struct KernelScanPlan {
     /// Wrapped kernel scan to produce logical file stream
     pub(crate) scan: Arc<Scan>,
+    /// The snapshot that `scan` reads. An eager snapshot holds its file list in memory, so
+    /// file skipping that is decided during execution reads no log files.
+    pub(crate) snapshot: Snapshot,
     /// Query scoped contract shared across planning and execution.
     pub(crate) contract: ProjectedScanContract,
     /// Physical schema used for Parquet reads and predicate evaluation.
@@ -317,6 +320,7 @@ impl KernelScanPlan {
             build_parquet_predicate_schema(&parquet_read_schema, &contract.file_id_field);
         Ok(Self {
             scan,
+            snapshot: snapshot.clone(),
             contract,
             parquet_read_schema,
             parquet_predicate_schema,
@@ -516,7 +520,7 @@ pub(crate) fn supports_filters_pushdown(
 /// can be converted into a PhysicalExpr and passed
 /// to the parquet scan. The returned predcate is apready translated
 /// to use physical column names if column mapping is enabled.
-fn process_filters(
+pub(super) fn process_filters(
     filters: &[Expr],
     config: &TableConfiguration,
     scan_config: &DeltaScanConfig,

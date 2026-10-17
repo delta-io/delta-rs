@@ -21,6 +21,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::DataFrame;
 use futures::{Stream, StreamExt};
+use roaring::RoaringTreemap;
 
 use crate::DeltaTableError;
 use crate::delta_datafusion::get_path_column;
@@ -145,12 +146,15 @@ impl DisplayAs for MergeValidationExec {
     }
 }
 
+/// Match state of the target rows of one file, as sets of row ordinals.
 #[derive(Default)]
-struct TargetMatchState {
-    matched_action_count: i32,
-    unconditional_delete_count: i32,
-    emitted_winner: bool,
-    buffered_noop: Option<RecordBatch>,
+struct FileMatches {
+    /// Rows that a source row matched with a clause that changes the target row
+    action: RoaringTreemap,
+    /// Rows that a source row matched with an unconditional delete clause
+    unconditional_delete: RoaringTreemap,
+    /// Rows with a buffered match without an action, in case no other match is passed on
+    buffered_noop: RoaringTreemap,
 }
 
 struct MergeValidationStream {
@@ -160,7 +164,9 @@ struct MergeValidationStream {
     row_ordinal_column: Arc<String>,
     file_id_by_path: HashMap<String, usize>,
     file_paths: Vec<String>,
-    target_row_state: HashMap<(usize, u64), TargetMatchState>,
+    /// Match state of the target rows, by file id
+    target_row_state: Vec<FileMatches>,
+    buffered_noops: HashMap<(usize, u64), RecordBatch>,
     buffered_noop_order: Vec<(usize, u64)>,
     pending_output: VecDeque<RecordBatch>,
 }
@@ -179,7 +185,8 @@ impl MergeValidationStream {
             row_ordinal_column,
             file_id_by_path: HashMap::new(),
             file_paths: Vec::new(),
-            target_row_state: HashMap::new(),
+            target_row_state: Vec::new(),
+            buffered_noops: HashMap::new(),
             buffered_noop_order: Vec::new(),
             pending_output: VecDeque::new(),
         }
@@ -193,6 +200,7 @@ impl MergeValidationStream {
             let file_path = file_path.to_string();
             self.file_id_by_path.insert(file_path.clone(), file_id);
             self.file_paths.push(file_path);
+            self.target_row_state.push(FileMatches::default());
             file_id
         }
     }
@@ -266,38 +274,50 @@ impl MergeValidationStream {
             };
 
             keep_mask[row] = false;
-            let row_ordinal = row_ordinal_array.value(row);
-            let key = (file_id, row_ordinal);
-            let state = self.target_row_state.entry(key).or_default();
+            let ordinal = row_ordinal_array.value(row);
+            let key = (file_id, ordinal);
 
-            if cardinality_class == MatchParticipationClass::MatchedAction as i32 {
-                state.matched_action_count += 1;
-            } else if cardinality_class
-                == MatchParticipationClass::MatchedUnconditionalDelete as i32
-            {
-                state.unconditional_delete_count += 1;
-            }
+            let matches = &mut self.target_row_state[file_id];
 
-            if state.matched_action_count > 1
-                || (state.matched_action_count > 0 && state.unconditional_delete_count > 0)
-            {
+            // A match without a duplicate error is the first match with a clause that
+            // changes the target row, when its ordinal is new in its set.
+            let (is_duplicate, is_first_winner) = match cardinality_class {
+                c if c == MatchParticipationClass::MatchedAction as i32 => {
+                    let is_new = matches.action.insert(ordinal);
+                    (
+                        !is_new || matches.unconditional_delete.contains(ordinal),
+                        true,
+                    )
+                }
+                c if c == MatchParticipationClass::MatchedUnconditionalDelete as i32 => (
+                    matches.action.contains(ordinal),
+                    matches.unconditional_delete.insert(ordinal),
+                ),
+                _ => (false, false),
+            };
+
+            if is_duplicate {
                 let file_path = self.file_paths[file_id].as_str();
                 return Err(DataFusionError::External(Box::new(
                     DeltaTableError::Generic(format!(
                         "MERGE matched a target row with multiple source rows that satisfy duplicate relevant WHEN MATCHED clauses (file: {}, row ordinal in file: {})",
-                        file_path, row_ordinal
+                        file_path, ordinal
                     )),
                 )));
             }
 
             if cardinality_class == MatchParticipationClass::MatchedNoop as i32 {
-                if !state.emitted_winner && state.buffered_noop.is_none() {
-                    state.buffered_noop = Some(take_row(batch, row)?);
+                if !matches.action.contains(ordinal)
+                    && !matches.unconditional_delete.contains(ordinal)
+                    && matches.buffered_noop.insert(ordinal)
+                {
+                    self.buffered_noops.insert(key, take_row(batch, row)?);
                     self.buffered_noop_order.push(key);
                 }
-            } else if !state.emitted_winner {
-                state.emitted_winner = true;
-                state.buffered_noop = None;
+            } else if is_first_winner {
+                if matches.buffered_noop.remove(ordinal) {
+                    self.buffered_noops.remove(&key);
+                }
                 keep_mask[row] = true;
             }
         }
@@ -315,11 +335,9 @@ impl MergeValidationStream {
     }
 
     fn queue_buffered_noops(&mut self) {
+        // A buffered match is removed when another match of its target row is passed on.
         for key in self.buffered_noop_order.drain(..) {
-            if let Some(state) = self.target_row_state.get_mut(&key)
-                && !state.emitted_winner
-                && let Some(batch) = state.buffered_noop.take()
-            {
+            if let Some(batch) = self.buffered_noops.remove(&key) {
                 self.pending_output.push_back(batch);
             }
         }
@@ -689,9 +707,10 @@ mod tests {
 
         s.validate_batch(&b).expect("ignore rows pass validation");
 
-        assert_eq!(
-            s.target_row_state.len(),
-            0,
+        assert!(
+            s.target_row_state.iter().all(|m| m.action.is_empty()
+                && m.unconditional_delete.is_empty()
+                && m.buffered_noop.is_empty()),
             "ignore rows are irrelevant to duplicate validation state"
         );
     }

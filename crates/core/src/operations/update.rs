@@ -41,18 +41,16 @@ use datafusion::{
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use tracing::log::*;
-use uuid::Uuid;
 
-use super::{
-    CustomExecuteHandler, Operation,
-    write::configs::WriteExecOptions,
-    write::execution::{write_execution_plan, write_execution_plan_cdc},
-};
+use super::write::execution::{write_execution_plan, write_execution_plan_cdc};
+use crate::datafile::DeltaWriterProperties;
+use crate::datafile::writer::ArrowWriterOptions;
 use crate::delta_datafusion::{
     DeltaScanConfig, Expression, scan_files_where_matches, update_datafusion_session,
 };
 use crate::kernel::resolve_snapshot;
 use crate::logstore::LogStoreRef;
+use crate::logstore::with_operation;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -69,7 +67,6 @@ use crate::{
         Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot,
         transaction::{CommitBuilder, CommitProperties, PROTOCOL},
     },
-    table::config::TablePropertiesExt,
 };
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated
@@ -96,14 +93,13 @@ pub struct UpdateBuilder {
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
     session_fallback_policy: SessionFallbackPolicy,
-    /// Properties passed to underlying parquet writer for when files are rewritten
-    writer_properties: Option<WriterProperties>,
+    /// How rewritten data files are encoded
+    writer_properties: DeltaWriterProperties,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
     safe_cast: bool,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
 #[derive(Default, Serialize, Debug)]
@@ -123,15 +119,6 @@ pub struct UpdateMetrics {
     pub scan_time_ms: u64,
 }
 
-impl super::Operation for UpdateBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
-}
-
 impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
@@ -142,10 +129,9 @@ impl UpdateBuilder {
             log_store,
             session: None,
             session_fallback_policy: SessionFallbackPolicy::default(),
-            writer_properties: None,
+            writer_properties: DeltaWriterProperties::default(),
             commit_properties: CommitProperties::default(),
             safe_cast: false,
-            custom_execute_handler: None,
         }
     }
 
@@ -195,7 +181,27 @@ impl UpdateBuilder {
 
     /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
+        self.writer_properties = self
+            .writer_properties
+            .with_parquet_properties(writer_properties);
+        self
+    }
+
+    /// Arrow writer options passed to the parquet writer for when files are rewritten
+    pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
+        self.writer_properties = self.writer_properties.with_arrow_options(arrow_options);
+        self
+    }
+
+    /// How the rewritten data files are encoded. Fields set on `writer_properties`
+    /// replace what the builder holds so far, unset fields keep it, so this composes
+    /// with the other setters in any order. An unset target file size or stats
+    /// config falls back to the table's.
+    pub fn with_delta_writer_properties(
+        mut self,
+        writer_properties: DeltaWriterProperties,
+    ) -> Self {
+        self.writer_properties = self.writer_properties.merge(writer_properties);
         self
     }
 
@@ -210,12 +216,6 @@ impl UpdateBuilder {
     /// Test123     ->      null
     pub fn with_safe_cast(mut self, safe_cast: bool) -> Self {
         self.safe_cast = safe_cast;
-        self
-    }
-
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
         self
     }
 }
@@ -280,8 +280,7 @@ async fn execute(
     log_store: LogStoreRef,
     snapshot: &EagerSnapshot,
     session: &dyn Session,
-    writer_properties: Option<WriterProperties>,
-    operation_id: Uuid,
+    writer_properties: DeltaWriterProperties,
     safe_cast: bool,
 ) -> DeltaResult<(Vec<Action>, UpdateMetrics)> {
     let eager_snapshot = snapshot;
@@ -378,12 +377,10 @@ async fn execute(
         snapshot.table_configuration(),
         session,
         physical_plan.clone(),
-        log_store.object_store(Some(operation_id)).clone(),
-        WriteExecOptions {
-            target_file_size: Some(snapshot.table_properties().target_file_size()),
-            write_batch_size: None,
-            writer_properties: writer_properties.clone(),
-        },
+        log_store.object_store(),
+        writer_properties
+            .clone()
+            .apply_table_defaults(snapshot.table_configuration()),
     )
     .await?;
 
@@ -434,12 +431,8 @@ async fn execute(
                     snapshot.table_configuration(),
                     session,
                     cdc_exec,
-                    log_store.object_store(Some(operation_id)),
-                    WriteExecOptions {
-                        target_file_size: Some(snapshot.table_properties().target_file_size()),
-                        write_batch_size: None,
-                        writer_properties,
-                    },
+                    log_store.object_store(),
+                    writer_properties.apply_table_defaults(snapshot.table_configuration()),
                 )
                 .await?;
                 actions.extend(cdc_actions);
@@ -458,15 +451,12 @@ impl std::future::IntoFuture for UpdateBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
             let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
-
-            let operation_id = this.get_operation_id();
-            this.pre_execute(operation_id).await?;
 
             let (state, _) = resolve_session_state(
                 this.session.as_deref(),
@@ -478,7 +468,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                     cdc: false,
                 },
             )?;
-            update_datafusion_session(&state, &this.log_store, Some(operation_id))?;
+            update_datafusion_session(&state, &this.log_store)?;
             state.ensure_log_store_registered(this.log_store.as_ref())?;
 
             if this.updates.is_empty() {
@@ -488,65 +478,59 @@ impl std::future::IntoFuture for UpdateBuilder {
                 ));
             }
 
-            let predicate = this
-                .predicate
-                .map(|p| {
-                    let scan_config = DeltaScanConfig::new_from_session(&state);
-                    let predicate_schema = scan_config
-                        .table_schema(snapshot.table_configuration())?
-                        .to_dfschema_ref()?;
-                    p.resolve(&state, predicate_schema)
-                })
-                .transpose()?;
+            let parent = this.log_store.clone();
+            let (state, metrics) = with_operation(&parent, |log_store| async move {
+                let predicate = this
+                    .predicate
+                    .map(|p| {
+                        let scan_config = DeltaScanConfig::new_from_session(&state);
+                        let predicate_schema = scan_config
+                            .table_schema(snapshot.table_configuration())?
+                            .to_dfschema_ref()?;
+                        p.resolve(&state, predicate_schema)
+                    })
+                    .transpose()?;
 
-            let predicate = predicate.unwrap_or(lit(true));
-            let operation = DeltaOperation::Update {
-                predicate: Some(fmt_expr_to_sql(&predicate)?),
-            };
+                let predicate = predicate.unwrap_or(lit(true));
+                let operation = DeltaOperation::Update {
+                    predicate: Some(fmt_expr_to_sql(&predicate)?),
+                };
 
-            let (actions, metrics) = execute(
-                predicate,
-                this.updates,
-                this.log_store.clone(),
-                &snapshot,
-                &state,
-                this.writer_properties,
-                operation_id,
-                this.safe_cast,
-            )
+                let (actions, metrics) = execute(
+                    predicate,
+                    this.updates,
+                    log_store.clone(),
+                    &snapshot,
+                    &state,
+                    this.writer_properties,
+                    this.safe_cast,
+                )
+                .await?;
+
+                // if no files were re-written, we can skip the commit.
+                if actions.is_empty() {
+                    return Ok((DeltaTableState::new(snapshot), metrics));
+                }
+
+                let mut props = this.commit_properties;
+                props
+                    .app_metadata
+                    .insert("readVersion".to_owned(), snapshot.version().into());
+                props.app_metadata.insert(
+                    "operationMetrics".to_owned(),
+                    serde_json::to_value(&metrics)?,
+                );
+
+                let commit = CommitBuilder::from(props)
+                    .with_actions(actions)
+                    .build(Some(&snapshot), log_store, operation)
+                    .await?;
+
+                Ok((commit.snapshot(), metrics))
+            })
             .await?;
 
-            // if no files were re-written, we can skip the commit.
-            if actions.is_empty() {
-                return Ok((
-                    DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot)),
-                    metrics,
-                ));
-            }
-
-            let mut props = this.commit_properties;
-            props
-                .app_metadata
-                .insert("readVersion".to_owned(), snapshot.version().into());
-            props.app_metadata.insert(
-                "operationMetrics".to_owned(),
-                serde_json::to_value(&metrics)?,
-            );
-
-            let handle = this.custom_execute_handler.take();
-            let snapshot = CommitBuilder::from(props)
-                .with_actions(actions)
-                .with_operation_id(operation_id)
-                .with_post_commit_hook_handler(handle)
-                .build(Some(&snapshot), this.log_store.clone(), operation)
-                .await?
-                .snapshot()
-                .snapshot;
-
-            Ok((
-                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot)),
-                metrics,
-            ))
+            Ok((DeltaTable::new_with_state(parent, state), metrics))
         })
     }
 }

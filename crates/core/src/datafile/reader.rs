@@ -19,7 +19,9 @@ use delta_kernel::table_features::ColumnMappingMode;
 use futures::stream::{StreamExt as _, TryStreamExt as _};
 use object_store::ObjectStore;
 use object_store::path::Path;
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
+use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
+
+use crate::logstore::parquet_reader::ParquetObjectReader;
 
 use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -141,7 +143,7 @@ impl ParquetTableReader {
             files.push((view.object_store_path(), size));
         }
 
-        let store = log_store.object_store(None);
+        let store = log_store.object_store();
         Ok(Self {
             file_reader: ParquetFileReader::new(store),
             files: files.into(),

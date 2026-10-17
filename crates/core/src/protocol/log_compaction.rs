@@ -5,23 +5,24 @@ use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use object_store::ObjectStoreExt as _;
 use object_store::path::Path;
 
-use uuid::Uuid;
-
 use crate::kernel::{Snapshot, spawn_blocking_with_span};
-use crate::logstore::LogStore;
+use crate::logstore::{LogStore, with_operation};
 use crate::protocol::to_rb;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 use arrow_json::LineDelimitedWriter;
 
+/// Write the compacted commit for `start_version..=end_version`.
+///
+/// The compacted file is written table-relative through `log_store.object_store()`, so inside an
+/// operation scope it lands on the isolated write target and is published with the scope.
 #[tracing::instrument(skip(log_store, snapshot), fields(operation = "log_compaction", start_version = start_version, end_version = end_version, table_uri = %log_store.root_url()))]
 pub(crate) async fn compact_logs_for(
     start_version: u64,
     end_version: u64,
     log_store: &dyn LogStore,
-    operation_id: Option<Uuid>,
     snapshot: &Snapshot,
 ) -> DeltaResult<()> {
-    let engine = log_store.engine(operation_id);
+    let engine = log_store.engine();
 
     let task_engine = engine.clone();
 
@@ -44,14 +45,23 @@ pub(crate) async fn compact_logs_for(
 
     let mut lc_writer = inner_snapshot.log_compaction_writer(start_version, end_version)?;
 
+    // The kernel resolves the compaction path against the table root it was built for. Only the
+    // file name is used here, so that the file is written relative to the write target.
     let lc_url = lc_writer.compaction_path();
-    let lc_path = Path::from_url_path(lc_url.path())?;
+    let file_name = lc_url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
+            DeltaTableError::Generic(format!("Invalid log compaction path: {lc_url}"))
+        })?;
+    let lc_path = Path::from_iter([log_store.log_path().as_ref(), file_name]);
 
     let mut lc_data = lc_writer.compaction_data(engine.as_ref())?;
 
-    let root_store = log_store.root_object_store(operation_id);
+    let store = log_store.object_store();
 
-    let mut upload = root_store.put_multipart(&lc_path).await?;
+    let mut upload = store.put_multipart(&lc_path).await?;
     let mut buffer = Vec::with_capacity(8 * 1024 * 1024);
 
     loop {
@@ -89,21 +99,17 @@ pub(crate) async fn compact_logs_for(
 }
 
 /// Creates a log compaction file for a specified version range
+///
+/// The compaction runs inside its own operation scope, so on an isolating backend such as LakeFS
+/// the compacted file lands on a transaction branch that is merged when the file is complete.
 pub async fn compact_logs(
     table: &DeltaTable,
     start_version: u64,
     end_version: u64,
-    operation_id: Option<Uuid>,
 ) -> DeltaResult<()> {
-    let snapshot = table.snapshot()?.snapshot().snapshot();
-    let log_store = table.log_store();
-    compact_logs_for(
-        start_version,
-        end_version,
-        log_store.as_ref(),
-        operation_id,
-        snapshot,
-    )
-    .await?;
-    Ok(())
+    let snapshot = table.snapshot()?.snapshot().snapshot().clone();
+    with_operation(&table.log_store(), |log_store| async move {
+        compact_logs_for(start_version, end_version, log_store.as_ref(), &snapshot).await
+    })
+    .await
 }

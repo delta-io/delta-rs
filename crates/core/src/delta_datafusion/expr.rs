@@ -25,6 +25,7 @@ use std::marker::PhantomData;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use arrow_array::types::{Decimal128Type, DecimalType};
 use arrow_array::{Array, GenericListArray};
 use arrow_schema::{DataType, Field, Schema};
 use chrono::{DateTime, NaiveDate};
@@ -705,7 +706,13 @@ impl fmt::Display for ScalarValueFormat<'_> {
             ScalarValue::UInt32(e) => format_option!(f, e)?,
             ScalarValue::UInt64(e) => format_option!(f, e)?,
             ScalarValue::Decimal128(e, precision, scale) => match e {
-                Some(e) => write!(f, "'{e}'::decimal({precision}, {scale})",)?,
+                // `e` is the unscaled value; render it with the scale applied so the
+                // literal keeps its magnitude when the string is parsed again.
+                Some(e) => write!(
+                    f,
+                    "'{}'::decimal({precision}, {scale})",
+                    Decimal128Type::format_decimal(*e, *precision, *scale)
+                )?,
                 None => write!(f, "NULL")?,
             },
             ScalarValue::Date32(e) => match e {
@@ -1359,15 +1366,30 @@ mod test {
                     ))
                 )),
             },
+            // Decimal literals carry an unscaled value; the SQL text must apply the scale.
             ParseTest {
-                expr: col("_decimal").eq(lit(ScalarValue::Decimal128(Some(1),2,2))),
-                expected: "_decimal = '1'::decimal(2, 2)".to_string(),
-                override_expected_expr: Some(col("_decimal").eq(
-                    Expr::Cast(Cast::new(
-                        Box::from(lit("1")),
-                        arrow_schema::DataType::Decimal128(2, 2)
-                    ))
-                )),
+                expr: col("_decimal").eq(lit(ScalarValue::Decimal128(Some(1), 2, 2))),
+                expected: "_decimal = '0.01'::decimal(2, 2)".to_string(),
+                override_expected_expr: Some(col("_decimal").eq(Expr::Cast(Cast::new(
+                    Box::from(lit("0.01")),
+                    arrow_schema::DataType::Decimal128(2, 2)
+                )))),
+            },
+            ParseTest {
+                expr: col("money").gt(lit(ScalarValue::Decimal128(Some(1050), 12, 2))),
+                expected: "money > '10.50'::decimal(12, 2)".to_string(),
+                override_expected_expr: Some(col("money").gt(Expr::Cast(Cast::new(
+                    Box::from(lit("10.50")),
+                    arrow_schema::DataType::Decimal128(12, 2)
+                )))),
+            },
+            ParseTest {
+                expr: col("money").lt(lit(ScalarValue::Decimal128(Some(-105), 12, 2))),
+                expected: "money < '-1.05'::decimal(12, 2)".to_string(),
+                override_expected_expr: Some(col("money").lt(Expr::Cast(Cast::new(
+                    Box::from(lit("-1.05")),
+                    arrow_schema::DataType::Decimal128(12, 2)
+                )))),
             },
         ];
 

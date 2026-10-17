@@ -312,6 +312,8 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     reader_features.insert(TableFeature::VariantType);
     reader_features.insert(TableFeature::VariantTypePreview);
     reader_features.insert(TableFeature::V2Checkpoint);
+    reader_features.insert(TableFeature::CatalogManaged);
+    reader_features.insert(TableFeature::VacuumProtocolCheck);
     #[cfg(feature = "nanosecond-timestamps")]
     reader_features.insert(TableFeature::TimestampNanos);
     #[cfg(feature = "datafusion")]
@@ -337,6 +339,12 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     }
     writer_features.insert(TableFeature::DeletionVectors);
     // writer_features.insert(TableFeature::IdentityColumns);
+    // `checkpointProtection` is a writer-only feature which constrains checkpoint
+    // creation and metadata cleanup, neither of which this crate performs when
+    // writing. delta-rs only ever appends data, so it can safely claim support
+    // (see https://github.com/delta-io/delta-rs/issues/4462). There is no named
+    // kernel variant yet, so use the Unknown representation.
+    writer_features.insert(TableFeature::Unknown("checkpointProtection".to_owned()));
 
     ProtocolChecker::new(reader_features, writer_features)
 });

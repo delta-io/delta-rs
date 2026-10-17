@@ -77,7 +77,7 @@ async fn read_write_test_onelake(context: &IntegrationContext, path: &Path) -> T
         .unwrap()
         .with_allow_http(true)
         .build_storage()?
-        .object_store(None);
+        .object_store();
 
     let expected = Bytes::from_static(b"test world from delta-rs on friday");
 

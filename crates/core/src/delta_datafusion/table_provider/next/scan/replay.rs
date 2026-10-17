@@ -78,7 +78,7 @@ pin_project! {
 
         file_selection: Option<&'a HashSet<String>>,
 
-        pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>, Option<u64>)>,
+        pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>, Option<u64>, i64)>,
 
         #[pin]
         stream: S,
@@ -95,7 +95,7 @@ impl<'a, S> ScanFileStream<'a, S> {
     ) -> Self {
         Self {
             metrics: ReplayStats::new(),
-            dv_stream: ReceiverStreamBuilder::<(Url, Option<Vec<bool>>, Option<u64>)>::new(100),
+            dv_stream: ReceiverStreamBuilder::new(100),
             engine,
             table_root: scan.table_root().clone(),
             kernel_scan: scan.inner().clone(),
@@ -161,12 +161,21 @@ where
                                 .num_records()
                                 .map(|count| count as u64)
                         });
+                        let cardinality = LogicalFileView::new(scan_files.clone(), index)
+                            .deletion_vector_descriptor()
+                            .map(|descriptor| descriptor.cardinality);
+                        let Some(cardinality) = cardinality else {
+                            return Poll::Ready(Some(Err(DeltaTableError::generic(format!(
+                                "DV file {} has no descriptor in scan metadata",
+                                super::super::redact_url_for_error(&file_url)
+                            )))));
+                        };
                         let table_root = this.table_root.clone();
                         let tx = this.dv_stream.tx();
 
                         let load_dv = move || {
                             let dv = dv_info.get_selection_vector(engine.as_ref(), &table_root)?;
-                            let _ = tx.blocking_send(Ok((file_url, dv, num_records)));
+                            let _ = tx.blocking_send(Ok((file_url, dv, num_records, cardinality)));
                             Ok(())
                         };
                         this.dv_stream.spawn_blocking(load_dv);
@@ -196,13 +205,26 @@ where
                     &stats_projection,
                 );
 
+                // Unknown stats for files with no parsed entry. Match the column shape of
+                // `extract_file_statistics`: empty when no column stats are emitted (#4522).
+                let unknown_stats = || {
+                    if stats_projection.emits_any_column_stats() {
+                        Statistics::new_unknown(&physical_arrow)
+                    } else {
+                        Statistics {
+                            num_rows: Precision::Absent,
+                            total_byte_size: Precision::Absent,
+                            column_statistics: Vec::new(),
+                        }
+                    }
+                };
                 Poll::Ready(Some(Ok(ctx
                     .files
                     .into_iter()
                     .map(|ctx| {
                         let (stats, partitions) = file_statistics
                             .remove(&ctx.file_url)
-                            .unwrap_or_else(|| (Statistics::new_unknown(&physical_arrow), None));
+                            .unwrap_or_else(|| (unknown_stats(), None));
                         ScanFileContext::new(ctx, stats, partitions)
                     })
                     .collect_vec())))
@@ -250,56 +272,65 @@ fn extract_file_statistics(
             let max_values = extract_struct(view.max_values());
             let min_values = extract_struct(view.min_values());
 
-            let column_statistics = scan
-                .physical_schema()
-                .fields()
-                .map(|f| {
-                    let should_extract_stats =
-                        stats_projection.emits_top_level_column_stats(f.name());
+            // No predicate to prune on (#4522): every column entry would be `Absent`, so skip
+            // the full-width vector. num_rows/total_byte_size below are still kept.
+            let column_statistics = if !stats_projection.emits_any_column_stats() {
+                Vec::new()
+            } else {
+                scan.physical_schema()
+                    .fields()
+                    .map(|f| {
+                        let should_extract_stats =
+                            stats_projection.emits_top_level_column_stats(f.name());
 
-                    if !should_extract_stats {
-                        // Return unknown statistics for non-predicate columns
-                        return ColumnStatistics {
-                            null_count: Precision::Absent,
-                            max_value: Precision::Absent,
-                            min_value: Precision::Absent,
+                        if !should_extract_stats {
+                            // Return unknown statistics for non-predicate columns
+                            return ColumnStatistics {
+                                null_count: Precision::Absent,
+                                max_value: Precision::Absent,
+                                min_value: Precision::Absent,
+                                sum_value: Precision::Absent,
+                                distinct_count: Precision::Absent,
+                                byte_size: Precision::Absent,
+                            };
+                        }
+
+                        // Extract statistics for predicate columns
+                        let null_count = if let Some(field_index) =
+                            null_counts.as_ref().and_then(|v| v.index_of(f.name()))
+                        {
+                            null_counts
+                                .as_ref()
+                                .map(|v| match v.values()[field_index] {
+                                    Scalar::Integer(int_val) => Precision::Exact(int_val as usize),
+                                    Scalar::Long(long_val) => Precision::Exact(long_val as usize),
+                                    _ => Precision::Absent,
+                                })
+                                .unwrap_or_default()
+                        } else {
+                            Precision::Absent
+                        };
+
+                        let max_value = physical_precision(
+                            extract_precision(&max_values, f.name()),
+                            scan_config,
+                        );
+                        let min_value = physical_precision(
+                            extract_precision(&min_values, f.name()),
+                            scan_config,
+                        );
+
+                        ColumnStatistics {
+                            null_count,
+                            max_value,
+                            min_value,
                             sum_value: Precision::Absent,
                             distinct_count: Precision::Absent,
                             byte_size: Precision::Absent,
-                        };
-                    }
-
-                    // Extract statistics for predicate columns
-                    let null_count = if let Some(field_index) =
-                        null_counts.as_ref().and_then(|v| v.index_of(f.name()))
-                    {
-                        null_counts
-                            .as_ref()
-                            .map(|v| match v.values()[field_index] {
-                                Scalar::Integer(int_val) => Precision::Exact(int_val as usize),
-                                Scalar::Long(long_val) => Precision::Exact(long_val as usize),
-                                _ => Precision::Absent,
-                            })
-                            .unwrap_or_default()
-                    } else {
-                        Precision::Absent
-                    };
-
-                    let max_value =
-                        physical_precision(extract_precision(&max_values, f.name()), scan_config);
-                    let min_value =
-                        physical_precision(extract_precision(&min_values, f.name()), scan_config);
-
-                    ColumnStatistics {
-                        null_count,
-                        max_value,
-                        min_value,
-                        sum_value: Precision::Absent,
-                        distinct_count: Precision::Absent,
-                        byte_size: Precision::Absent,
-                    }
-                })
-                .collect_vec();
+                        }
+                    })
+                    .collect_vec()
+            };
 
             Some((
                 parse_path(scan.snapshot().table_root(), view.path_raw()).ok()?,
@@ -375,6 +406,8 @@ pub(crate) struct ScanFileContext {
     ///
     /// The query engine may choose to use these statistics to further optimize the scan.
     pub stats: Statistics,
+    /// Physical row count from the Delta log, if present.
+    pub num_records: Option<u64>,
     /// Partition values for the file.
     pub partitions: Option<StructData>,
 }
@@ -387,6 +420,7 @@ impl ScanFileContext {
             size: inner.size,
             transform: inner.transform,
             stats,
+            num_records: inner.num_records,
             partitions,
         }
     }

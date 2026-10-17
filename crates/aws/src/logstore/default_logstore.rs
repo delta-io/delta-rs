@@ -4,12 +4,9 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use deltalake_core::logstore::*;
-use deltalake_core::{
-    DeltaResult, kernel::Version, kernel::transaction::TransactionError, logstore::ObjectStoreRef,
-};
-use object_store::{Error as ObjectStoreError, ObjectStore};
+use deltalake_core::{DeltaResult, kernel::Version, logstore::ObjectStoreRef};
+use object_store::ObjectStore;
 use url::Url;
-use uuid::Uuid;
 
 /// Return the [S3LogStore] implementation with the provided configuration options
 pub fn default_s3_logstore(
@@ -26,6 +23,9 @@ pub fn default_s3_logstore(
 }
 
 /// Default [`LogStore`] implementation
+///
+/// Commits are written as a temporary file first and moved into place with a
+/// rename-if-not-exists, which the S3 object store provides through its locking client.
 #[derive(Debug, Clone)]
 pub struct S3LogStore {
     prefixed_store: ObjectStoreRef,
@@ -63,64 +63,27 @@ impl LogStore for S3LogStore {
     }
 
     async fn read_commit_entry(&self, version: Version) -> DeltaResult<Option<Bytes>> {
-        read_commit_entry(self.object_store(None).as_ref(), version).await
-    }
-
-    /// Tries to commit a prepared commit file. Returns [`TransactionError`]
-    /// if the given `version` already exists. The caller should handle the retry logic itself.
-    /// This is low-level transaction API. If user does not want to maintain the commit loop then
-    /// the `DeltaTransaction.commit` is desired to be used as it handles `try_commit_transaction`
-    /// with retry logic.
-    async fn write_commit_entry(
-        &self,
-        version: Version,
-        commit_or_bytes: CommitOrBytes,
-        _operation_id: Uuid,
-    ) -> Result<(), TransactionError> {
-        match commit_or_bytes {
-            CommitOrBytes::TmpCommit(tmp_commit) => {
-                Ok(
-                    write_commit_entry(self.object_store(None).as_ref(), version, &tmp_commit)
-                        .await?,
-                )
-            }
-            _ => unreachable!(), // S3 Log Store should never receive bytes
-        }
-        .map_err(|err| -> TransactionError {
-            match err {
-                ObjectStoreError::AlreadyExists { .. } => {
-                    TransactionError::VersionAlreadyExists(version)
-                }
-                _ => TransactionError::from(err),
-            }
-        })?;
-        Ok(())
-    }
-
-    async fn abort_commit_entry(
-        &self,
-        version: Version,
-        commit_or_bytes: CommitOrBytes,
-        _operation_id: Uuid,
-    ) -> Result<(), TransactionError> {
-        match &commit_or_bytes {
-            CommitOrBytes::TmpCommit(tmp_commit) => {
-                abort_commit_entry(self.object_store(None).as_ref(), version, tmp_commit).await
-            }
-            _ => unreachable!(), // S3 Log Store should never receive bytes
-        }
+        read_commit_entry(self.prefixed_store.as_ref(), version).await
     }
 
     async fn get_latest_version(&self, current_version: Version) -> DeltaResult<Version> {
         get_latest_version(self, current_version).await
     }
 
-    fn object_store(&self, _operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
+    fn object_store(&self) -> Arc<dyn ObjectStore> {
         self.prefixed_store.clone()
     }
 
-    fn root_object_store(&self, _operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
+    fn root_object_store(&self) -> Arc<dyn ObjectStore> {
         self.root_store.clone()
+    }
+
+    /// Commits move a temporary commit file into place with rename-if-not-exists.
+    fn committer(&self) -> Arc<dyn Committer> {
+        Arc::new(FileSystemCommitter::new(
+            self.prefixed_store.clone(),
+            CommitStrategy::TmpCommit,
+        ))
     }
 
     fn config(&self) -> &LogStoreConfig {

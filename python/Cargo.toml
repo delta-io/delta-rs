@@ -43,12 +43,11 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 env_logger = "0"
 thiserror = { workspace = true }
-uuid = { workspace = true, features = ["serde", "v4"] }
 parking_lot = "0.12"
 
 # runtime
 futures = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 
 deltalake-mount = { path = "../crates/mount" }
 
@@ -93,7 +92,7 @@ features = ["extension-module", "abi3", "abi3-py311"]
 
 [dependencies.deltalake]
 path = "../crates/deltalake"
-version = "1"
+version = "2"
 features = [
     "azure",
     "datafusion",
@@ -125,7 +124,7 @@ features = [
 # Keep SFTP enabled for Linux and macOS Python wheels.
 [target.'cfg(not(windows))'.dependencies.deltalake]
 path = "../crates/deltalake"
-version = "1"
+version = "2"
 features = ["opendal-sftp"]
 
 [features]

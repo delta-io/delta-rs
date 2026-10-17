@@ -55,11 +55,12 @@ use futures::future::BoxFuture;
 use futures::{StreamExt as _, TryStreamExt, stream};
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
-use uuid::Uuid;
 
-use super::Operation;
 use super::cdc::should_write_cdc;
 use crate::DeltaTable;
+use crate::datafile::DeltaWriterProperties;
+use crate::datafile::properties::session_parquet_properties;
+use crate::datafile::writer::ArrowWriterOptions;
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::DeltaSessionExt;
 use crate::delta_datafusion::SessionFallbackPolicy;
@@ -79,12 +80,11 @@ use crate::kernel::{
     Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, LogicalFileView, Snapshot,
     resolve_snapshot,
 };
+use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef};
-use crate::operations::CustomExecuteHandler;
 use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::execution::write_exec_plan;
 use crate::protocol::DeltaOperation;
-use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
@@ -104,11 +104,10 @@ pub struct DeleteBuilder {
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
     session_fallback_policy: SessionFallbackPolicy,
-    /// Properties passed to underlying parquet writer for when files are rewritten
-    writer_properties: Option<WriterProperties>,
+    /// How rewritten data files are encoded
+    writer_properties: DeltaWriterProperties,
     /// Commit properties and configuration
     commit_properties: CommitProperties,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
 impl std::fmt::Debug for DeleteBuilder {
@@ -215,15 +214,6 @@ async fn collect_full_file_deletes(
     })
 }
 
-impl super::Operation for DeleteBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
-}
-
 impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
@@ -234,8 +224,7 @@ impl DeleteBuilder {
             session: None,
             session_fallback_policy: SessionFallbackPolicy::default(),
             commit_properties: CommitProperties::default(),
-            writer_properties: None,
-            custom_execute_handler: None,
+            writer_properties: DeltaWriterProperties::default(),
         }
     }
 
@@ -275,13 +264,27 @@ impl DeleteBuilder {
 
     /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
+        self.writer_properties = self
+            .writer_properties
+            .with_parquet_properties(writer_properties);
         self
     }
 
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
+    /// Arrow writer options passed to the parquet writer for when files are rewritten
+    pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
+        self.writer_properties = self.writer_properties.with_arrow_options(arrow_options);
+        self
+    }
+
+    /// How the rewritten data files are encoded. Fields set on `writer_properties`
+    /// replace what the builder holds so far, unset fields keep it, so this composes
+    /// with the other setters in any order. An unset target file size or stats
+    /// config falls back to the table's.
+    pub fn with_delta_writer_properties(
+        mut self,
+        writer_properties: DeltaWriterProperties,
+    ) -> Self {
+        self.writer_properties = self.writer_properties.merge(writer_properties);
         self
     }
 }
@@ -291,87 +294,87 @@ impl std::future::IntoFuture for DeleteBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
             let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 
-            let operation_id = this.get_operation_id();
-            this.pre_execute(operation_id).await?;
+            let parent = this.log_store.clone();
+            let (state, metrics) = with_operation(&parent, |log_store| async move {
+                let (session, _) = resolve_session_state(
+                    this.session.as_deref(),
+                    this.session_fallback_policy,
+                    || create_session().state(),
+                    SessionResolveContext {
+                        operation: "delete",
+                        table_uri: Some(log_store.root_url()),
+                        cdc: false,
+                    },
+                )?;
+                // Register the parent store: the caller's session outlives this scope, and a
+                // scoped store refuses every call once the scope is closed.
+                update_datafusion_session(&session, &this.log_store)?;
+                session.ensure_log_store_registered(this.log_store.as_ref())?;
 
-            let (session, _) = resolve_session_state(
-                this.session.as_deref(),
-                this.session_fallback_policy,
-                || create_session().state(),
-                SessionResolveContext {
-                    operation: "delete",
-                    table_uri: Some(this.log_store.root_url()),
-                    cdc: false,
-                },
-            )?;
-            update_datafusion_session(&session, &this.log_store, Some(operation_id))?;
-            session.ensure_log_store_registered(this.log_store.as_ref())?;
+                let predicate = this
+                    .predicate
+                    .map(|p| {
+                        let scan_config = DeltaScanConfig::new_from_session(&session);
+                        let predicate_schema = scan_config
+                            .table_schema(snapshot.table_configuration())?
+                            .to_dfschema_ref()?;
+                        p.resolve(&session, predicate_schema)
+                    })
+                    .transpose()?;
 
-            let predicate = this
-                .predicate
-                .map(|p| {
-                    let scan_config = DeltaScanConfig::new_from_session(&session);
-                    let predicate_schema = scan_config
-                        .table_schema(snapshot.table_configuration())?
-                        .to_dfschema_ref()?;
-                    p.resolve(&session, predicate_schema)
-                })
-                .transpose()?;
+                let operation = DeltaOperation::Delete {
+                    predicate: predicate.as_ref().map(fmt_expr_to_sql).transpose()?,
+                };
 
-            let operation = DeltaOperation::Delete {
-                predicate: predicate.as_ref().map(fmt_expr_to_sql).transpose()?,
-            };
-
-            let (actions, metrics) = execute(
-                predicate,
-                this.log_store.clone(),
-                snapshot.clone(),
-                &session,
-                operation_id,
-                this.writer_properties.clone(),
-            )
-            .await?;
-
-            // Do not make a commit when there are zero updates to the state
-            if actions.is_empty() {
-                return Ok((
-                    DeltaTable::new_with_state(this.log_store, DeltaTableState { snapshot }),
-                    metrics,
-                ));
-            }
-
-            let mut props = this.commit_properties;
-            props
-                .app_metadata
-                .insert("readVersion".to_owned(), snapshot.version().into());
-            props.app_metadata.insert(
-                "operationMetrics".to_owned(),
-                serde_json::to_value(&metrics)?,
-            );
-
-            let handle = this.custom_execute_handler.take();
-            let commit = CommitBuilder::from(props)
-                .with_actions(actions)
-                .with_operation_id(operation_id)
-                .with_post_commit_hook_handler(handle.clone())
-                .build(Some(&snapshot), this.log_store.clone(), operation)
+                // A caller-supplied session's parquet options configure the rewrite;
+                // delta-rs's own session falls through to the delta-rs default.
+                let writer_properties = if this.session.is_some() {
+                    this.writer_properties
+                        .clone()
+                        .apply_parquet_default(|| session_parquet_properties(&session))?
+                } else {
+                    this.writer_properties.clone()
+                };
+                let (actions, metrics) = execute(
+                    predicate,
+                    log_store.clone(),
+                    snapshot.clone(),
+                    &session,
+                    writer_properties,
+                )
                 .await?;
 
-            if let Some(handler) = handle {
-                handler.post_execute(&this.log_store, operation_id).await?;
-            }
+                // Do not make a commit when there are zero updates to the state
+                if actions.is_empty() {
+                    return Ok((DeltaTableState { snapshot }, metrics));
+                }
 
-            Ok((
-                DeltaTable::new_with_state(this.log_store, commit.snapshot()),
-                metrics,
-            ))
+                let mut props = this.commit_properties;
+                props
+                    .app_metadata
+                    .insert("readVersion".to_owned(), snapshot.version().into());
+                props.app_metadata.insert(
+                    "operationMetrics".to_owned(),
+                    serde_json::to_value(&metrics)?,
+                );
+
+                let commit = CommitBuilder::from(props)
+                    .with_actions(actions)
+                    .build(Some(&snapshot), log_store, operation)
+                    .await?;
+
+                Ok((commit.snapshot(), metrics))
+            })
+            .await?;
+
+            Ok((DeltaTable::new_with_state(parent, state), metrics))
         })
     }
 }
@@ -427,8 +430,7 @@ async fn execute(
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
     session: &dyn Session,
-    operation_id: Uuid,
-    writer_properties: Option<WriterProperties>,
+    writer_properties: DeltaWriterProperties,
 ) -> DeltaResult<(Vec<Action>, DeleteMetrics)> {
     let eager_snapshot = snapshot;
     let snapshot = eager_snapshot.snapshot();
@@ -620,16 +622,13 @@ async fn execute(
     };
 
     let exec = session.create_physical_plan(&write_plan).await?;
-    let target_file_size = Some(snapshot.table_properties().target_file_size());
     let (mut actions, _) = write_exec_plan(
         session,
         log_store.as_ref(),
         snapshot.table_configuration(),
         exec.clone(),
-        Some(operation_id),
-        target_file_size,
         write_cdc,
-        writer_properties.clone(),
+        writer_properties.apply_table_defaults(snapshot.table_configuration()),
     )
     .await?;
 
@@ -930,6 +929,74 @@ mod tests {
         assert_eq!(metrics.num_removed_files, 0);
         assert_eq!(metrics.num_deleted_rows, Some(0));
         assert_eq!(metrics.num_copied_rows, 0);
+    }
+
+    /// Delete `value = 1` from a one-file table and return each rewritten file's
+    /// path and parquet footer.
+    async fn delete_and_read_footers(
+        session: Option<Arc<dyn Session>>,
+    ) -> Vec<(
+        object_store::path::Path,
+        parquet::file::metadata::ParquetMetaData,
+    )> {
+        use crate::logstore::parquet_reader::ParquetObjectReader;
+        use parquet::arrow::ParquetRecordBatchStreamBuilder;
+
+        let table = setup_table(None).await;
+        let table = write_batch(table, get_record_batch(None, false)).await;
+        let mut delete = table.delete().with_predicate(col("value").eq(lit(1)));
+        if let Some(session) = session {
+            delete = delete.with_session_state(session);
+        }
+        let (table, metrics) = delete.await.unwrap();
+        assert_eq!(metrics.num_added_files, 1);
+
+        let store = table.log_store().object_store();
+        let mut footers = vec![];
+        for add in table.snapshot().unwrap().log_data() {
+            let path = add.object_store_path();
+            let reader = ParquetObjectReader::new(store.clone(), path.clone());
+            let builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
+            footers.push((path, builder.metadata().as_ref().clone()));
+        }
+        footers
+    }
+
+    #[tokio::test]
+    async fn test_delete_rewrites_with_delta_rs_parquet_defaults() {
+        use parquet::basic::Compression;
+
+        for (path, metadata) in delete_and_read_footers(None).await {
+            assert!(path.as_ref().ends_with(".snappy.parquet"), "{path}");
+            let created_by = metadata.file_metadata().created_by().unwrap();
+            assert!(created_by.starts_with("delta-rs"), "{created_by}");
+            for column in metadata.row_group(0).columns() {
+                assert_eq!(column.compression(), Compression::SNAPPY);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_rewrites_with_caller_session_parquet_options() {
+        use parquet::basic::{Compression, GzipLevel};
+
+        let mut state = create_session().state();
+        state
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .compression = Some("gzip(6)".into());
+
+        for (path, metadata) in delete_and_read_footers(Some(Arc::new(state))).await {
+            assert!(path.as_ref().ends_with(".gz.parquet"), "{path}");
+            for column in metadata.row_group(0).columns() {
+                assert_eq!(
+                    column.compression(),
+                    Compression::GZIP(GzipLevel::try_new(6).unwrap())
+                );
+            }
+        }
     }
 
     #[tokio::test]

@@ -680,6 +680,7 @@ def test_null_conversion_no_field_name():
 
     list_field = converted.field("list_field")
     assert DataType.is_list(list_field.type)
+    assert list_field.type.value_type == DataType.string()
 
 
 @pytest.mark.pandas
@@ -720,5 +721,43 @@ def test_null_conversion_with_struct_types():
     struct_field = converted.field("struct_field")
     assert DataType.is_struct(struct_field.type)
     inner_fields = struct_field.type.fields
-    assert DataType.is_null(inner_fields[0].type)
+    assert inner_fields[0].type == DataType.string()
     assert inner_fields[1].type == DataType.int32()
+
+
+def test_null_conversion_nested_name_collision():
+    source_schema = Schema([Field("s", DataType.struct([Field("s", DataType.null())]))])
+    existing_schema = Schema(
+        [Field("s", DataType.struct([Field("s", DataType.int64())]))]
+    )
+
+    converted = _convert_arro3_schema_to_delta(source_schema, existing_schema)
+
+    assert converted.field("s").type.fields[0].type == DataType.int64()
+
+
+def test_null_conversion_nested_name_collision_no_match():
+    """No matching nested field: stay null instead of reusing the top-level field."""
+    source_schema = Schema([Field("s", DataType.struct([Field("s", DataType.null())]))])
+    existing_schema = Schema([Field("s", DataType.int64())])
+
+    converted = _convert_arro3_schema_to_delta(source_schema, existing_schema)
+
+    assert DataType.is_null(converted.field("s").type.fields[0].type)
+
+
+@pytest.mark.pyarrow
+def test_nested_null_append_to_existing_table(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    struct_type = pa.struct([pa.field("s", pa.int64())])
+    write_deltalake(tmp_path, pa.table({"s": pa.array([{"s": 1}], type=struct_type)}))
+
+    nulls = pa.table(
+        {"s": pa.array([{"s": None}], type=pa.struct([pa.field("s", pa.null())]))}
+    )
+    write_deltalake(tmp_path, nulls, mode="append")
+
+    dt = DeltaTable(tmp_path)
+    assert dt.schema().to_arrow().field("s").type == struct_type
+    assert dt.to_pyarrow_table().num_rows == 2

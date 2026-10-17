@@ -1,6 +1,7 @@
 import json
 import multiprocessing
 import os
+import shutil
 import time
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import date, datetime, timezone
@@ -8,6 +9,7 @@ from pathlib import Path
 from threading import Barrier, Thread
 from typing import Any
 from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import pytest
 from arro3.core import Array, DataType, Table
@@ -55,6 +57,42 @@ def test_read_table_with_edge_timestamps():
     assert len(list(dataset.get_fragments(predicate))) == 1
 
 
+def _query_edge_timestamps(dt: DeltaTable) -> dict[str, list[Any]]:
+    result = (
+        QueryBuilder()
+        .register("t", dt)
+        .execute('select "BIG_DATE", "SOME_VALUE" from t order by "SOME_VALUE"')
+        .read_all()
+    )
+    return {
+        "BIG_DATE": result["BIG_DATE"].to_pylist(),
+        "SOME_VALUE": result["SOME_VALUE"].to_pylist(),
+    }
+
+
+EDGE_TIMESTAMPS = {
+    "BIG_DATE": [
+        datetime(9999, 12, 31, tzinfo=timezone.utc),
+        datetime(9999, 12, 30, tzinfo=timezone.utc),
+    ],
+    "SOME_VALUE": [1, 2],
+}
+
+
+def test_query_builder_reads_int96_timestamps_outside_nanosecond_range():
+    dt = DeltaTable("../crates/test/tests/data/table_with_edge_timestamps")
+    assert _query_edge_timestamps(dt) == EDGE_TIMESTAMPS
+
+
+def test_compact_preserves_int96_timestamps_outside_nanosecond_range(tmp_path: Path):
+    table_path = tmp_path / "table_with_edge_timestamps"
+    shutil.copytree("../crates/test/tests/data/table_with_edge_timestamps", table_path)
+    dt = DeltaTable(table_path)
+
+    assert dt.optimize.compact()["numFilesAdded"] == 1
+    assert _query_edge_timestamps(dt) == EDGE_TIMESTAMPS
+
+
 def test_read_simple_table_to_dict():
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
@@ -67,6 +105,18 @@ def test_table_count():
     table_path = "../crates/test/tests/data/COVID-19_NYT"
     dt = DeltaTable(table_path)
     assert dt.count() == 1111930
+
+
+@pytest.mark.parametrize(
+    "table_name",
+    ["table-with-dv-small", "table_with_deletion_logs", "table-without-dv-small"],
+)
+def test_table_count_matches_rows_read(table_name: str):
+    dt = DeltaTable(f"../crates/test/tests/data/{table_name}")
+    rows_read = (
+        QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
+    )
+    assert dt.count() == rows_read.num_rows
 
 
 class _SerializableException(BaseException):
@@ -104,6 +154,10 @@ def test_read_simple_in_threads_and_processes(
     executor_class, multiprocessing_start_method, expect_panic
 ):
     if multiprocessing_start_method is not None:
+        if multiprocessing_start_method not in multiprocessing.get_all_start_methods():
+            pytest.skip(
+                f"Multiprocessing start method {multiprocessing_start_method!r} is not available"
+            )
         multiprocessing.set_start_method(multiprocessing_start_method, force=True)
     if expect_panic:
         with pytest.raises(
@@ -505,7 +559,7 @@ def test_read_table_with_cdc():
 def test_history_partitioned_table_metadata():
     table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
-    history = dt.history()
+    history = list(dt.history())
     commit_info = history[0]
 
     assert len(history) == 1
@@ -590,8 +644,8 @@ def test_get_add_actions_on_empty_table(tmp_path: Path):
 
 
 def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
-    table_path = urlparse(dt.table_uri).path
-    absolute_paths = [os.path.join(table_path, path) for path in expected_paths]
+    table_path = Path(url2pathname(urlparse(dt.table_uri).path))
+    absolute_paths = [(table_path / path).as_posix() for path in expected_paths]
     assert dt.file_uris(partition_filters) == absolute_paths
 
 

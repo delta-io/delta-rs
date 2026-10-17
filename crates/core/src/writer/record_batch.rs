@@ -8,7 +8,7 @@
 use std::{collections::HashMap, num::NonZeroU64, sync::Arc};
 
 use arrow_array::{ArrayRef, RecordBatch, new_null_array};
-use arrow_schema::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{DataType, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
@@ -20,6 +20,8 @@ use tracing::log::*;
 use super::window::{SinkFactory, WriteWindow};
 use super::{DeltaWriter, DeltaWriterError, WriteMode, ensure_legacy_writer_supports_table};
 use crate::DeltaTable;
+use crate::datafile::writer::ArrowWriterOptions;
+use crate::datafile::{DeltaWriterProperties, WriterStatsConfig};
 use crate::errors::DeltaTableError;
 use crate::kernel::schema::cast::{cast_record_batch, normalize_for_delta};
 use crate::kernel::schema::merge_arrow_schema;
@@ -216,10 +218,9 @@ impl RecordBatchWriter {
         let factory = SinkFactory {
             storage,
             partition_columns,
-            writer_properties,
-            target_file_size: None,
-            num_indexed_cols,
-            stats_columns,
+            props: DeltaWriterProperties::default()
+                .with_parquet_properties(writer_properties)
+                .with_stats_config(WriterStatsConfig::new(num_indexed_cols, stats_columns)),
         };
         Self {
             window: WriteWindow::new(factory, arrow_schema_ref),
@@ -271,6 +272,12 @@ impl RecordBatchWriter {
         self
     }
 
+    /// Sets the arrow writer options for the underlying arrow writer.
+    pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
+        self.window.set_arrow_options(arrow_options);
+        self
+    }
+
     /// Write a record batch that belongs entirely to the partition identified by
     /// `partition_values`, streaming it into the partition's open file.
     ///
@@ -284,7 +291,7 @@ impl RecordBatchWriter {
     /// A later [`flush_and_commit`](super::DeltaWriter::flush_and_commit) commits
     /// the evolved metadata along with the data; on the [`flush`](super::DeltaWriter::flush)
     /// + manual-commit path, committing the evolved metadata is the caller's
-    /// responsibility.
+    ///   responsibility.
     ///
     /// Validation errors fail only this call and leave the flush window untouched.
     pub async fn write_partition(
@@ -438,6 +445,35 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
     }
 }
 
+/// Compares two data types while ignoring field nullability at every nesting
+/// level. Schema merging only ever relaxes nullability (newly-added fields are
+/// forced nullable), so a column matching under this comparison can be cast to
+/// the merged field type without changing any data.
+fn datatype_eq_ignoring_nullability(a: &DataType, b: &DataType) -> bool {
+    use DataType::*;
+    match (a, b) {
+        (Struct(a_fields), Struct(b_fields)) => {
+            a_fields.len() == b_fields.len()
+                && a_fields.iter().zip(b_fields.iter()).all(|(x, y)| {
+                    x.name() == y.name()
+                        && datatype_eq_ignoring_nullability(x.data_type(), y.data_type())
+                })
+        }
+        (List(a_item), List(b_item)) | (LargeList(a_item), LargeList(b_item)) => {
+            datatype_eq_ignoring_nullability(a_item.data_type(), b_item.data_type())
+        }
+        (FixedSizeList(a_item, a_size), FixedSizeList(b_item, b_size)) => {
+            a_size == b_size
+                && datatype_eq_ignoring_nullability(a_item.data_type(), b_item.data_type())
+        }
+        (Map(a_field, a_sorted), Map(b_field, b_sorted)) => {
+            a_sorted == b_sorted
+                && datatype_eq_ignoring_nullability(a_field.data_type(), b_field.data_type())
+        }
+        _ => a == b,
+    }
+}
+
 /// MergeSchema phase 1: merge the batch schema into `schema`, conform the batch
 /// to the merged schema, and report the widened schema when it actually grew.
 fn merge_and_conform(
@@ -489,6 +525,25 @@ fn conform_to_schema(
                     return Err(non_nullable_violation_error(field.name(), column));
                 }
                 cols.push(column.clone())
+            }
+            // Present column whose type matches up to nullability — e.g. schema
+            // merging marked a newly-added (possibly nested) field nullable
+            // while the incoming batch still declares it non-nullable. Cast to
+            // the target field type (a data no-op) so the write conforms instead
+            // of failing with SchemaMismatch.
+            Some(column)
+                if datatype_eq_ignoring_nullability(column.data_type(), field.data_type()) =>
+            {
+                let casted = arrow_cast::cast(column, field.data_type()).map_err(|_| {
+                    DeltaWriterError::SchemaMismatch {
+                        record_batch_schema: batch.schema(),
+                        expected_schema: schema.clone(),
+                    }
+                })?;
+                if !field.is_nullable() && casted.null_count() > 0 {
+                    return Err(non_nullable_violation_error(field.name(), &casted));
+                }
+                cols.push(casted)
             }
             // Present but the type differs — e.g. a later MergeSchema write widened
             // this column's type while this batch was buffered under the old type.
@@ -548,7 +603,6 @@ mod tests {
     use delta_kernel::schema::StructType;
 
     use crate::DeltaResult;
-    use crate::kernel::PartitionsExt;
     use crate::operations::create::CreateBuilder;
     use crate::writer::test_utils::*;
 
@@ -613,6 +667,104 @@ mod tests {
             matches!(err, DeltaWriterError::SchemaMismatch { .. }),
             "expected SchemaMismatch, got: {err:?}"
         );
+    }
+
+    /// Regression test for delta-io/delta-rs#4810 on the `RecordBatchWriter`
+    /// (`WriteMode::MergeSchema`) path: a newly-added struct child that the
+    /// batch declares non-nullable is merged as nullable, and the batch must
+    /// conform to that merged schema instead of failing with SchemaMismatch.
+    #[test]
+    fn test_merge_and_conform_casts_new_nested_field_nullability() {
+        use arrow_array::{Int64Array, StringArray, StructArray};
+        use arrow_schema::{DataType, Field, Fields};
+
+        // Table schema: struct s { a: int64 non-nullable }
+        let table_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new(
+                "s",
+                DataType::Struct(vec![Field::new("a", DataType::Int64, false)].into()),
+                true,
+            ),
+        ]));
+        // Batch adds a new non-nullable child b to struct s.
+        let batch_struct_fields: Fields = vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Utf8, false),
+        ]
+        .into();
+        let s_array = StructArray::new(
+            batch_struct_fields.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["x"])) as ArrayRef,
+            ],
+            None,
+        );
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("s", DataType::Struct(batch_struct_fields), true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+                Arc::new(s_array) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let (conformed, widened) = merge_and_conform(&batch, &table_schema).unwrap();
+        let widened = widened.expect("merging a new nested field must widen the schema");
+        // The merged schema marks the new nested child nullable ...
+        let DataType::Struct(children) = widened.field_with_name("s").unwrap().data_type() else {
+            panic!("expected struct field s");
+        };
+        assert!(
+            children
+                .iter()
+                .find(|f| f.name() == "b")
+                .expect("merged struct should contain new field b")
+                .is_nullable(),
+            "newly merged nested columns must be nullable"
+        );
+        // ... and the conformed batch matches the merged schema exactly.
+        assert_eq!(conformed.schema(), widened);
+    }
+
+    /// A newly-added top-level non-nullable column must also conform after the
+    /// merge marks it nullable.
+    #[test]
+    fn test_merge_and_conform_casts_new_top_level_field_nullability() {
+        use arrow_array::{Int64Array, StringArray};
+        use arrow_schema::{DataType, Field};
+
+        let table_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("country_code", DataType::Utf8, false),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["GB"])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let (conformed, widened) = merge_and_conform(&batch, &table_schema).unwrap();
+        let widened = widened.expect("merging a new column must widen the schema");
+        assert!(
+            widened
+                .field_with_name("country_code")
+                .unwrap()
+                .is_nullable(),
+            "newly merged columns must be nullable"
+        );
+        assert_eq!(conformed.schema(), widened);
     }
 
     #[tokio::test]

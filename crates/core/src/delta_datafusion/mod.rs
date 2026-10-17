@@ -72,6 +72,7 @@ pub use cdf::scan::DeltaCdfTableProvider;
 pub(crate) use column_mapping::ColumnMappingState;
 pub(crate) use data_validation::{DataValidationExec, constraints_to_exprs, validation_predicates};
 pub(crate) use find_files::*;
+pub(crate) use table_provider::next::RuntimeFileFilter;
 pub(crate) use table_provider::next::normalize_path_as_file_id;
 pub use table_provider::{
     DeltaScanConfig, DeltaScanConfigBuilder, TableProviderBuilder, next::DeltaScanExec,
@@ -632,18 +633,14 @@ mod tests {
     };
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
-    use arrow::datatypes::{Field, Schema};
+    use arrow::datatypes::Field;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::prelude::SessionConfig;
-    use datafusion_proto::physical_plan::AsExecutionPlan;
-    use datafusion_proto::protobuf;
     use delta_kernel::schema::ArrayType;
     use futures::{StreamExt, TryStreamExt};
     use object_store::ObjectStoreExt as _;
     use serde_json::json;
     use std::ops::Range;
-    use url::Url;
 
     use super::*;
     use crate::delta_datafusion::table_provider::next::{FileSelection, MissingSelectedFilePolicy};
@@ -1016,7 +1013,7 @@ mod tests {
         let ctx = SessionContext::new();
         ctx.runtime_env().register_object_store(
             table.log_store().root_url(),
-            table.log_store().object_store(None),
+            table.log_store().object_store(),
         );
         ctx.register_table("test", provider).unwrap();
 
@@ -1430,7 +1427,7 @@ mod tests {
         assert_eq!(1, files.len());
         let object_store = table.object_store();
         let file_meta = object_store.head(&files[0]).await.unwrap();
-        let file_reader = parquet::arrow::async_reader::ParquetObjectReader::new(
+        let file_reader = crate::logstore::parquet_reader::ParquetObjectReader::new(
             object_store,
             file_meta.location.clone(),
         )
@@ -1449,6 +1446,14 @@ mod tests {
 
         let actual = drain_recorded_ops(&mut operations).await;
 
+        // Parquet metadata reads (the footer probe, the footer fetch, and the
+        // metadata_size_hint prefetch) are always anchored at the end of the
+        // file, while column chunk reads never reach the trailing footer and
+        // magic bytes. Exclude tail-anchored reads so the assertions below only
+        // consider column data reads: with a metadata_size_hint larger than
+        // the file (e.g. datafusion's 512KiB default against this tiny test
+        // file) the prefetch spans the whole file, including the unselected
+        // column chunk, without that chunk being read as data.
         let data_ranges = actual
             .iter()
             .flat_map(|operation| match operation {
@@ -1456,6 +1461,7 @@ mod tests {
                 ObjectStoreOperation::GetRanges(PathKind::Data, ranges) => ranges.clone(),
                 _ => Vec::new(),
             })
+            .filter(|range| range.end < file_meta.size)
             .collect::<Vec<_>>();
 
         let overlaps = |left: &Range<u64>, right: &Range<u64>| {

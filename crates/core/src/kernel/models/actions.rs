@@ -204,8 +204,6 @@ pub(crate) fn contains_variant<'a>(mut fields: impl Iterator<Item = &'a StructFi
 pub(crate) trait ProtocolExt {
     fn reader_features_set(&self) -> Option<HashSet<TableFeature>>;
     fn writer_features_set(&self) -> Option<HashSet<TableFeature>>;
-    fn append_reader_features(self, reader_features: &[TableFeature]) -> Protocol;
-    fn append_writer_features(self, writer_features: &[TableFeature]) -> Protocol;
     fn move_table_properties_into_features(
         self,
         configuration: &HashMap<String, String>,
@@ -227,18 +225,6 @@ impl ProtocolExt for Protocol {
     fn writer_features_set(&self) -> Option<HashSet<TableFeature>> {
         self.writer_features()
             .map(|features| features.iter().cloned().collect())
-    }
-
-    fn append_reader_features(self, reader_features: &[TableFeature]) -> Protocol {
-        let mut inner = ProtocolInner::from_kernel(&self);
-        inner = inner.append_reader_features(reader_features.iter().cloned());
-        inner.as_kernel()
-    }
-
-    fn append_writer_features(self, writer_features: &[TableFeature]) -> Protocol {
-        let mut inner = ProtocolInner::from_kernel(&self);
-        inner = inner.append_writer_features(writer_features.iter().cloned());
-        inner.as_kernel()
     }
 
     fn move_table_properties_into_features(
@@ -544,22 +530,22 @@ impl ProtocolInner {
         }
 
         // Check columnMappingMode and bump protocol or add reader/writerFeatures
-        if let Some(mode) = parsed_properties.get(&TableProperty::ColumnMappingMode) {
-            if mode.as_str() != "none" {
-                if self.min_reader_version >= 3 {
-                    self.reader_features
-                        .get_or_insert_with(HashSet::new)
-                        .insert(TableFeature::ColumnMapping);
-                } else {
-                    self.min_reader_version = self.min_reader_version.max(2);
-                }
-                if self.min_writer_version >= 7 {
-                    self.writer_features
-                        .get_or_insert_with(HashSet::new)
-                        .insert(TableFeature::ColumnMapping);
-                } else {
-                    self.min_writer_version = self.min_writer_version.max(5);
-                }
+        if let Some(mode) = parsed_properties.get(&TableProperty::ColumnMappingMode)
+            && mode.as_str() != "none"
+        {
+            if self.min_reader_version >= 3 {
+                self.reader_features
+                    .get_or_insert_with(HashSet::new)
+                    .insert(TableFeature::ColumnMapping);
+            } else {
+                self.min_reader_version = self.min_reader_version.max(2);
+            }
+            if self.min_writer_version >= 7 {
+                self.writer_features
+                    .get_or_insert_with(HashSet::new)
+                    .insert(TableFeature::ColumnMapping);
+            } else {
+                self.min_writer_version = self.min_writer_version.max(5);
             }
         }
 
@@ -636,16 +622,10 @@ impl ProtocolInner {
                 self.min_reader_version = 2;
             }
         }
-        // Ensure that any minReaderVersion of 3 or greater is getting the reader features it needs
-        if self.min_reader_version >= 3
-            && let Some(features) = reader_features_for_version(self.min_reader_version)
-        {
-            self = self.append_reader_features(features);
-            // When upgrading to minReaderVersion 3, and minWriterFeature is 7, it must contain the
-            // Variant feature too
-            if self.min_writer_version >= 7 {
-                self = self.append_writer_features(&[TableFeature::VariantType]);
-            }
+        // minReaderVersion 3 needs a readerFeatures list, but it lists only the features the table
+        // uses, so it can be empty
+        if self.min_reader_version >= 3 && self.reader_features.is_none() {
+            self.reader_features = Some(HashSet::new());
         }
         Ok(self)
     }
@@ -814,65 +794,56 @@ impl fmt::Display for TableFeatures {
     }
 }
 
-impl TryFrom<&TableFeatures> for TableFeature {
-    type Error = std::convert::Infallible;
-
-    fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
-        TableFeature::try_from(value.as_ref())
+impl From<&TableFeatures> for TableFeature {
+    fn from(value: &TableFeatures) -> Self {
+        TableFeature::from(value.as_ref())
     }
 }
 
 impl TableFeatures {
     /// Convert table feature to respective reader or/and write feature
     pub fn to_reader_writer_features(&self) -> (Option<TableFeature>, Option<TableFeature>) {
-        let feature = TableFeature::try_from(self).ok();
+        let feature = TableFeature::from(self);
+        // Classify features based on their type
+        // Writer-only features
         match feature {
-            Some(feature) => {
-                // Classify features based on their type
-                // Writer-only features
-                match feature {
-                    TableFeature::AppendOnly
-                    | TableFeature::Invariants
-                    | TableFeature::CheckConstraints
-                    | TableFeature::ChangeDataFeed
-                    | TableFeature::GeneratedColumns
-                    | TableFeature::IdentityColumns
-                    | TableFeature::InCommitTimestamp
-                    | TableFeature::RowTracking
-                    | TableFeature::DomainMetadata
-                    | TableFeature::IcebergCompatV1
-                    | TableFeature::IcebergCompatV2
-                    | TableFeature::ClusteredTable
-                    | TableFeature::MaterializePartitionColumns => (None, Some(feature)),
+            TableFeature::AppendOnly
+            | TableFeature::Invariants
+            | TableFeature::CheckConstraints
+            | TableFeature::ChangeDataFeed
+            | TableFeature::GeneratedColumns
+            | TableFeature::IdentityColumns
+            | TableFeature::InCommitTimestamp
+            | TableFeature::RowTracking
+            | TableFeature::DomainMetadata
+            | TableFeature::IcebergCompatV1
+            | TableFeature::IcebergCompatV2
+            | TableFeature::ClusteredTable
+            | TableFeature::MaterializePartitionColumns => (None, Some(feature)),
 
-                    // ReaderWriter features
-                    TableFeature::CatalogManaged
-                    | TableFeature::CatalogOwnedPreview
-                    | TableFeature::ColumnMapping
-                    | TableFeature::DeletionVectors
-                    | TableFeature::TimestampWithoutTimezone
-                    | TableFeature::TypeWidening
-                    | TableFeature::TypeWideningPreview
-                    | TableFeature::V2Checkpoint
-                    | TableFeature::VacuumProtocolCheck
-                    | TableFeature::VariantType
-                    | TableFeature::VariantTypePreview
-                    | TableFeature::VariantShreddingPreview => {
-                        (Some(feature.clone()), Some(feature))
-                    }
+            // ReaderWriter features
+            TableFeature::CatalogManaged
+            | TableFeature::CatalogOwnedPreview
+            | TableFeature::ColumnMapping
+            | TableFeature::DeletionVectors
+            | TableFeature::TimestampWithoutTimezone
+            | TableFeature::TypeWidening
+            | TableFeature::TypeWideningPreview
+            | TableFeature::V2Checkpoint
+            | TableFeature::VacuumProtocolCheck
+            | TableFeature::VariantType
+            | TableFeature::VariantTypePreview
+            | TableFeature::VariantShreddingPreview => (Some(feature.clone()), Some(feature)),
 
-                    // Optional ReaderWriter features
-                    #[cfg(feature = "nanosecond-timestamps")]
-                    TableFeature::TimestampNanos => (Some(feature.clone()), Some(feature)),
+            // Optional ReaderWriter features
+            #[cfg(feature = "nanosecond-timestamps")]
+            TableFeature::TimestampNanos => (Some(feature.clone()), Some(feature)),
 
-                    // Unknown features
-                    TableFeature::Unknown(_) => (None, None),
-                    others => {
-                        panic!("This table has unsupported table features: {others:?}");
-                    }
-                }
+            // Unknown features
+            TableFeature::Unknown(_) => (None, None),
+            others => {
+                panic!("This table has unsupported table features: {others:?}");
             }
-            None => (None, None),
         }
     }
 }
@@ -956,6 +927,30 @@ pub struct DeletionVectorDescriptor {
 
     /// Number of rows the given DV logically removes from the file.
     pub cardinality: i64,
+}
+
+impl TryFrom<DeletionVectorDescriptor>
+    for delta_kernel::actions::deletion_vector::DeletionVectorDescriptor
+{
+    type Error = delta_kernel::Error;
+
+    fn try_from(dv: DeletionVectorDescriptor) -> Result<Self, Self::Error> {
+        use delta_kernel::actions::deletion_vector::DeletionVectorStorageType;
+
+        let storage_type = match dv.storage_type {
+            StorageType::UuidRelativePath => DeletionVectorStorageType::PersistedRelative,
+            StorageType::Inline => DeletionVectorStorageType::Inline,
+            StorageType::AbsolutePath => DeletionVectorStorageType::PersistedAbsolute,
+        };
+
+        Self::try_new(
+            storage_type,
+            dv.path_or_inline_dv,
+            dv.offset,
+            dv.size_in_bytes,
+            dv.cardinality,
+        )
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -1358,24 +1353,6 @@ pub(crate) fn writer_features_for_version(
     }
 }
 
-/// Determine required reader features for a given reader version
-pub(crate) fn reader_features_for_version(
-    reader_version: i32,
-) -> Option<Vec<delta_kernel::table_features::TableFeature>> {
-    let mut features = vec![];
-
-    if reader_version >= 3 {
-        // For reader version 3+, include common reader features
-        features.push(delta_kernel::table_features::TableFeature::VariantType);
-    }
-    if !features.is_empty() {
-        return Some(features);
-    }
-
-    // No special reader features needed for older versions
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1551,6 +1528,49 @@ mod tests {
             "writerFeatures should contain ColumnMapping, got: {:?}",
             protocol.writer_features()
         );
+    }
+
+    #[test]
+    fn test_apply_properties_does_not_add_unused_variant_type() {
+        // Reader v3 / writer v7 alone must not declare variantType: readers without Variant
+        // support refuse any table that lists it (#4835). Variant columns enable it from the schema.
+        let timestamp_ntz: Protocol = serde_json::from_value(serde_json::json!({
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": ["timestampNtz"],
+            "writerFeatures": ["timestampNtz"],
+        }))
+        .unwrap();
+        let legacy: Protocol = serde_json::from_value(serde_json::json!({
+            "minReaderVersion": 1,
+            "minWriterVersion": 2,
+        }))
+        .unwrap();
+        let cases = [
+            (timestamp_ntz, HashMap::new()),
+            (
+                legacy,
+                HashMap::from([
+                    ("delta.minReaderVersion".to_string(), "3".to_string()),
+                    ("delta.minWriterVersion".to_string(), "7".to_string()),
+                ]),
+            ),
+        ];
+
+        for (protocol, config) in cases {
+            let protocol = protocol
+                .apply_properties_to_protocol(&config, true)
+                .unwrap();
+
+            assert_eq!(protocol.min_reader_version(), 3);
+            assert_eq!(protocol.min_writer_version(), 7);
+            for features in [protocol.reader_features(), protocol.writer_features()] {
+                assert!(
+                    !features.is_some_and(|f| f.contains(&TableFeature::VariantType)),
+                    "variantType should not be added without a variant column, got: {features:?}"
+                );
+            }
+        }
     }
 
     #[test]

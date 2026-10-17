@@ -25,7 +25,7 @@ use arrow_array::{
     ArrayRef, DictionaryArray, RecordBatch, StringArray, StringViewArray, UInt16Array,
 };
 use arrow_cast::{CastOptions, cast_with_options};
-use arrow_schema::{DataType, FieldRef, Schema, SchemaBuilder, SchemaRef};
+use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaBuilder, SchemaRef};
 use chrono::{TimeZone as _, Utc};
 use dashmap::DashMap;
 use datafusion::{
@@ -34,21 +34,28 @@ use datafusion::{
         ColumnStatistics, HashMap, Result, Statistics, ToDFSchema, internal_datafusion_err,
         plan_err, stats::Precision,
     },
-    datasource::physical_plan::{ParquetSource, parquet::CachedParquetFileReaderFactory},
+    datasource::physical_plan::{
+        ParquetSource,
+        parquet::{CachedParquetFileReaderFactory, metadata::DFParquetMetadata},
+    },
     error::DataFusionError,
-    execution::object_store::ObjectStoreUrl,
-    physical_expr::Partitioning,
+    execution::{
+        cache::{cache_manager::FileMetadataCache, default_cache::DefaultCache},
+        object_store::ObjectStoreUrl,
+    },
+    physical_expr::{Partitioning, conjunction, expressions::Column},
     physical_plan::{
-        ExecutionPlan,
+        ExecutionPlan, PhysicalExpr,
+        coalesce_partitions::CoalescePartitionsExec,
         empty::EmptyExec,
-        metrics::{ExecutionPlanMetricsSet, MetricBuilder},
+        metrics::{ExecutionPlanMetricsSet, Gauge, MetricBuilder},
         union::UnionExec,
     },
     prelude::Expr,
 };
 use datafusion_datasource::{
-    PartitionedFile, TableSchema, compute_all_files_statistics, file_groups::FileGroup,
-    file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
+    PartitionedFile, TableSchema, compute_all_files_statistics, file::FileSource,
+    file_groups::FileGroup, file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
 };
 use datafusion_physical_expr_adapter::{
     BatchAdapter, BatchAdapterFactory, PhysicalExprAdapterFactory,
@@ -57,9 +64,11 @@ use delta_kernel::{
     Engine, Expression, engine::arrow_data::ArrowEngineData, expressions::StructData,
     scan::ScanMetadata, table_features::TableFeature,
 };
-use futures::{Stream, TryStreamExt as _, future::ready};
+use futures::{Stream, StreamExt as _, TryStreamExt as _, future::ready};
 use itertools::Itertools as _;
 use object_store::{ObjectMeta, path::Path};
+use parquet::arrow::RowNumber;
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData};
 use tracing::debug;
 use url::Url;
 
@@ -69,6 +78,8 @@ use self::exec_meta::DeltaScanMetaExec;
 use self::expr_adapter::{DeltaPhysicalExprAdapterFactory, relax_schema_nested_nullability};
 pub(crate) use self::plan::{KernelScanPlan, ProjectedScanContract, supports_filters_pushdown};
 use self::replay::{ScanFileContext, ScanFileStream};
+pub(crate) use self::runtime_filter::RuntimeFileFilter;
+use self::runtime_filter::RuntimeScanFilePruner;
 use super::{FileSelection, ResolvedFileSelection};
 use crate::{
     DeltaTableError,
@@ -86,15 +97,17 @@ mod exec_meta;
 mod expr_adapter;
 mod plan;
 mod replay;
+mod runtime_filter;
 
 type ScanMetadataStream = Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTableError>> + Send>>;
 type PublicFileIdMap = HashMap<String, String>;
 type PhysicalFileIdentityMap = HashMap<String, PhysicalFileIdentity>;
+const PHYSICAL_POSITION_COLUMN: &str = "__delta_rs_physical_position";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PhysicalFileIdentity {
     object_store_url: ObjectStoreUrl,
-    location: Path,
+    object_meta: ObjectMeta,
 }
 
 struct ReplayedScanFiles {
@@ -103,8 +116,11 @@ struct ReplayedScanFiles {
     dvs: HashMap<String, Vec<bool>>,
     public_file_ids: PublicFileIdMap,
     metrics: ExecutionPlanMetricsSet,
+    /// The `count_files_scanned` metric in `metrics`
+    files_scanned: Gauge,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn execution_plan(
     config: &DeltaScanConfig,
     session: &dyn Session,
@@ -113,6 +129,7 @@ pub(super) async fn execution_plan(
     engine: Arc<dyn Engine>,
     limit: Option<usize>,
     file_selection: Option<&ResolvedFileSelection>,
+    runtime_filter: Option<&RuntimeFileFilter>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(selection) = file_selection
         && selection.active_file_ids.is_empty()
@@ -122,7 +139,14 @@ pub(super) async fn execution_plan(
         )));
     }
 
-    let replayed = replay_files(engine, &scan_plan, config.clone(), stream, file_selection).await?;
+    let replayed = replay_files(
+        Arc::clone(&engine),
+        &scan_plan,
+        config.clone(),
+        stream,
+        file_selection,
+    )
+    .await?;
 
     let file_id_field = scan_plan.contract.file_id_field.clone();
     if scan_plan.is_metadata_only() && !scan_plan.contract.retain_row_index {
@@ -169,7 +193,23 @@ pub(super) async fn execution_plan(
         }
     }
 
-    get_data_scan_plan(session, scan_plan, replayed, limit).await
+    let file_pruner = runtime_filter.map(|filter| {
+        Arc::new(RuntimeScanFilePruner::new(
+            Arc::clone(filter),
+            scan_plan.snapshot.clone(),
+            config.clone(),
+            engine,
+            &replayed.files,
+            replayed.files_scanned.clone(),
+            // The file id is the partition column after the Parquet file columns
+            Column::new(
+                scan_plan.contract.file_id_field.name(),
+                scan_plan.parquet_read_schema.fields().len(),
+            ),
+        ))
+    });
+
+    get_data_scan_plan(session, scan_plan, replayed, limit, file_pruner).await
 }
 
 /// Load deletion-vector keep masks for the selected files.
@@ -196,9 +236,10 @@ pub(super) async fn replay_deletion_vectors(
     let dv_stream = stream.dv_stream.build();
     // A DV task must return a keep mask.
     let dvs: DashMap<_, _> = dv_stream
-        .and_then(|(url, dv, num_records)| {
+        .and_then(|(url, dv, num_records, cardinality)| {
             ready(match dv {
-                Some(keep_mask) => normalize_dv_keep_mask_for_api(keep_mask, num_records, &url)
+                Some(keep_mask) => validate_dv_mask(&keep_mask, num_records, cardinality, &url)
+                    .and_then(|()| normalize_dv_keep_mask_for_api(keep_mask, num_records, &url))
                     .map(|mask| (url.to_string(), mask))
                     .map_err(DeltaTableError::from),
                 None => Err(DeltaTableError::generic(
@@ -268,11 +309,27 @@ async fn resolve_input_file_ids_on_blocking_pool(
 
 async fn collect_selected_active_file_ids(
     table_root: &Url,
-    mut stream: ScanMetadataStream,
+    stream: ScanMetadataStream,
     missing_file_ids: &mut HashSet<String>,
 ) -> Result<HashSet<String>> {
     let mut selected_active_file_ids = HashSet::new();
+    for_each_selected_file(table_root, stream, |file_url| {
+        let file_id = file_url.to_string();
+        if missing_file_ids.remove(&file_id) {
+            selected_active_file_ids.insert(file_id);
+        }
+        !missing_file_ids.is_empty()
+    })
+    .await?;
+    Ok(selected_active_file_ids)
+}
 
+/// Call `f` with the URL of each file that a kernel scan selects, until `f` returns `false`.
+async fn for_each_selected_file(
+    table_root: &Url,
+    mut stream: ScanMetadataStream,
+    mut f: impl FnMut(Url) -> bool,
+) -> Result<()> {
     while let Some(scan_data) = stream.try_next().await? {
         let (data, mut selection_vector) = scan_data.scan_files.into_parts();
         let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)
@@ -287,18 +344,13 @@ async fn collect_selected_active_file_ids(
                     table_root,
                     LogicalFileView::new(batch.clone(), idx).path_raw(),
                 )?;
-                let file_id = file_url.to_string();
-                if missing_file_ids.remove(&file_id) {
-                    selected_active_file_ids.insert(file_id);
-                    if missing_file_ids.is_empty() {
-                        return Ok(selected_active_file_ids);
-                    }
+                if !f(file_url) {
+                    return Ok(());
                 }
             }
         }
     }
-
-    Ok(selected_active_file_ids)
+    Ok(())
 }
 
 async fn replay_files(
@@ -342,15 +394,24 @@ async fn replay_files(
 
     let dv_stream = stream.dv_stream.build();
     let dvs_by_url: HashMap<_, _> = dv_stream
-        .try_filter_map(|(url, dv, _)| ready(Ok(dv.map(|dv| (url.to_string(), dv)))))
+        .try_filter_map(|(url, dv, num_records, cardinality)| {
+            ready(match dv {
+                Some(mask) => validate_dv_mask(&mask, num_records, cardinality, &url)
+                    .map(|()| Some((url.to_string(), mask)))
+                    .map_err(DeltaTableError::from),
+                None => Err(DeltaTableError::generic(
+                    "Invariant violation: DV task returned no selection vector",
+                )),
+            })
+        })
         .try_collect()
         .await?;
     let dvs = remap_deletion_vectors_to_internal_file_ids(&files, dvs_by_url)?;
 
     let metrics = ExecutionPlanMetricsSet::new();
-    MetricBuilder::new(&metrics)
-        .global_counter("count_files_scanned")
-        .add(stream.metrics.num_scanned);
+    // A gauge, because a runtime filter can skip planned files.
+    let files_scanned = MetricBuilder::new(&metrics).global_gauge("count_files_scanned");
+    files_scanned.add(stream.metrics.num_scanned);
 
     Ok(ReplayedScanFiles {
         files,
@@ -358,7 +419,32 @@ async fn replay_files(
         dvs,
         public_file_ids,
         metrics,
+        files_scanned,
     })
+}
+
+fn validate_dv_mask(
+    mask: &[bool],
+    num_records: Option<u64>,
+    cardinality: i64,
+    file_url: &Url,
+) -> Result<()> {
+    let deleted = u64::try_from(cardinality).map_err(|_| {
+        DataFusionError::Plan(format!(
+            "Negative deletion vector cardinality for file: {}",
+            super::redact_url_for_error(file_url)
+        ))
+    })?;
+    let actual = mask.iter().filter(|keep| !**keep).count() as u64;
+    if deleted != actual
+        || num_records.is_some_and(|count| deleted > count || mask.len() as u64 > count)
+    {
+        return plan_err!(
+            "Deletion vector cardinality or mask exceeds physical row count for file: {}",
+            super::redact_url_for_error(file_url)
+        );
+    }
+    Ok(())
 }
 
 /// Pad a DV keep mask to `numRecords` for `deletion_vectors()`.
@@ -366,8 +452,7 @@ async fn replay_files(
 /// Kernel stops the mask at the highest deleted row. Fill trailing entries with `true`.
 /// Return an error when `numRecords` is missing or shorter than the mask.
 ///
-/// Scan execution normalizes each batch in `exec::consume_dv_mask` and
-/// `exec_meta::apply_selection_vector`.
+/// Scan execution uses physical positions without padding.
 fn normalize_dv_keep_mask_for_api(
     mut mask: Vec<bool>,
     num_records: Option<u64>,
@@ -397,11 +482,69 @@ fn normalize_dv_keep_mask_for_api(
     Ok(mask)
 }
 
+fn validate_dv_parquet_metadata(
+    metadata: &ParquetMetaData,
+    log_count: Option<u64>,
+    mask_len: usize,
+    id: &str,
+    file_id_name: &str,
+) -> Result<u64> {
+    let count = u64::try_from(metadata.file_metadata().num_rows()).map_err(|_| {
+        DataFusionError::Plan(format!("negative Parquet row count for file id '{id}'"))
+    })?;
+    if count > i64::MAX as u64 || log_count.is_some_and(|n| n != count) {
+        return plan_err!("Parquet and Delta physical row counts disagree for file id '{id}'");
+    }
+    let mut total = 0_u64;
+    for (group_index, group) in metadata.row_groups().iter().enumerate() {
+        let Ok(expected) = i16::try_from(group_index) else {
+            return plan_err!(
+                "Parquet row-group index {group_index} exceeds i16 for file id '{id}'"
+            );
+        };
+        if group.ordinal() != Some(expected) {
+            return plan_err!(
+                "Parquet row-group ordinal is missing or inconsistent for file id '{id}'"
+            );
+        }
+        let rows = u64::try_from(group.num_rows()).map_err(|_| {
+            DataFusionError::Plan(format!(
+                "negative Parquet row-group count for file id '{id}'"
+            ))
+        })?;
+        total = total.checked_add(rows).ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "Parquet row-group count overflow for file id '{id}'"
+            ))
+        })?;
+    }
+    if total != count {
+        return plan_err!("Parquet row groups disagree with footer count for file id '{id}'");
+    }
+    if metadata
+        .file_metadata()
+        .schema_descr()
+        .root_schema()
+        .get_fields()
+        .iter()
+        .any(|field| field.name() == PHYSICAL_POSITION_COLUMN || field.name() == file_id_name)
+    {
+        return plan_err!(
+            "Parquet field collides with an internal DV scan column for file id '{id}'"
+        );
+    }
+    if mask_len as u64 > count {
+        return plan_err!("Deletion vector mask exceeds Parquet row count for file id '{id}'");
+    }
+    Ok(count)
+}
+
 async fn get_data_scan_plan(
     session: &dyn Session,
     scan_plan: KernelScanPlan,
     replayed: ReplayedScanFiles,
     limit: Option<usize>,
+    file_pruner: Option<Arc<RuntimeScanFilePruner>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let ReplayedScanFiles {
         files,
@@ -409,31 +552,11 @@ async fn get_data_scan_plan(
         dvs,
         public_file_ids,
         metrics,
+        ..
     } = replayed;
     let has_deletion_vectors = !dvs.is_empty();
     let mut partition_stats = HashMap::new();
-
-    let dv_state = if has_deletion_vectors {
-        let physical_file_identities = files
-            .iter()
-            .enumerate()
-            .map(|(file_index, file)| {
-                Ok((
-                    compact_internal_file_id(file_index),
-                    PhysicalFileIdentity {
-                        object_store_url: file.file_url.as_object_store_url(),
-                        location: Path::from_url_path(file.file_url.path())?,
-                    },
-                ))
-            })
-            .try_collect::<_, PhysicalFileIdentityMap, DataFusionError>()?;
-        DvExecutionState::Sequential {
-            selection_vectors: Arc::new(dvs),
-            physical_file_identities: Arc::new(physical_file_identities),
-        }
-    } else {
-        DvExecutionState::NotPresent
-    };
+    let log_counts: Vec<_> = files.iter().map(|file| file.num_records).collect();
 
     // Convert files into DataFusion `PartitionedFile`s grouped by object store.
     // Create one `DataSourceExec` plan for each store.
@@ -458,23 +581,132 @@ async fn get_data_scan_plan(
         // NOTE: `PartitionedFile::with_statistics` appends exact stats for partition columns based
         // on `partition_values`, so partition values must be set first.
         partitioned_file.partition_values = vec![file_value.clone()];
-        partitioned_file = partitioned_file.with_statistics(Arc::new(f.stats));
+        if f.stats.column_statistics.is_empty() {
+            // No predicate to prune on (#4522): keep only num_rows/total_byte_size, no
+            // per-file column vector. Assign directly so `with_statistics` doesn't add a
+            // partition-column entry; table-level column stats are rebuilt below.
+            partitioned_file.statistics = Some(Arc::new(f.stats));
+        } else {
+            partitioned_file = partitioned_file.with_statistics(Arc::new(f.stats));
+        }
         Ok::<_, DataFusionError>((f.file_url.as_object_store_url(), partitioned_file))
     };
 
-    // Group the files by their object store url. Since datafusion assumes that all files in a
-    // DataSourceExec are stored in the same object store, we need to create one plan per store
     let partitioned_files = files
         .into_iter()
         .enumerate()
         .map(to_partitioned_file)
         .try_collect::<_, Vec<_>, _>()?;
 
+    let mut dv_metadata_caches: HashMap<ObjectStoreUrl, Arc<FileMetadataCache>> = HashMap::new();
+    let mut uses_dv_cache = vec![false; partitioned_files.len()];
+
+    let dv_state = if has_deletion_vectors {
+        let file_id_name = scan_plan.contract.file_id_field.name();
+        if file_id_name == PHYSICAL_POSITION_COLUMN
+            || scan_plan
+                .parquet_read_schema
+                .field_with_name(PHYSICAL_POSITION_COLUMN)
+                .is_ok()
+        {
+            return plan_err!("physical position column conflicts with the scan schema");
+        }
+        let mut masks = dvs;
+        let mut entries = HashMap::new();
+        let mut identities = PhysicalFileIdentityMap::new();
+        let mut footer_tasks = Vec::new();
+        for (index, (store_url, file)) in partitioned_files.iter().enumerate() {
+            let id = compact_internal_file_id(index);
+            let mask = masks.remove(&id);
+            if let Some(mask) = mask {
+                uses_dv_cache[index] = true;
+                dv_metadata_caches
+                    .entry(store_url.clone())
+                    .or_insert_with(|| Arc::new(DefaultCache::new(usize::MAX)));
+                footer_tasks.push((
+                    id.clone(),
+                    store_url.clone(),
+                    file.object_meta.clone(),
+                    log_counts[index],
+                    mask,
+                ));
+            } else {
+                entries.insert(
+                    id.clone(),
+                    exec::DeletionVectorEntry {
+                        keep_mask: None,
+                        row_count: None,
+                    },
+                );
+            }
+            identities.insert(
+                id,
+                PhysicalFileIdentity {
+                    object_store_url: store_url.clone(),
+                    object_meta: file.object_meta.clone(),
+                },
+            );
+        }
+        if !masks.is_empty() {
+            return plan_err!("Deletion vector was loaded for an unselected file");
+        }
+        let loaded = futures::stream::iter(footer_tasks)
+            .map(|(id, store_url, object_meta, log_count, mask)| {
+                let cache = Arc::clone(
+                    dv_metadata_caches
+                        .get(&store_url)
+                        .expect("selected store must have a scan-local metadata cache"),
+                );
+                async move {
+                    let store = session.runtime_env().object_store(&store_url)?;
+                    let metadata = DFParquetMetadata::new(store.as_ref(), &object_meta)
+                        .with_file_metadata_cache(Some(cache))
+                        .with_page_index_policy(Some(PageIndexPolicy::Skip))
+                        .fetch_metadata()
+                        .await?;
+                    let count = validate_dv_parquet_metadata(
+                        &metadata,
+                        log_count,
+                        mask.len(),
+                        &id,
+                        file_id_name,
+                    )?;
+                    Ok::<_, DataFusionError>((
+                        id,
+                        exec::DeletionVectorEntry {
+                            keep_mask: Some(mask),
+                            row_count: Some(count),
+                        },
+                    ))
+                }
+            })
+            .buffer_unordered(8)
+            .try_collect::<Vec<_>>()
+            .await?;
+        entries.extend(loaded);
+        DvExecutionState::Physical {
+            entries: Arc::new(entries),
+            physical_file_identities: Arc::new(identities),
+        }
+    } else {
+        DvExecutionState::NotPresent
+    };
+
     let files_by_store = partitioned_files
         .into_iter()
+        .zip(uses_dv_cache)
+        .map(|((store, file), uses_dv_cache)| ((store, uses_dv_cache), file))
         .into_group_map()
         .into_iter()
-        .map(|(store, files)| (store, files, has_deletion_vectors));
+        .map(|((store, uses_dv_cache), files)| {
+            let cache = uses_dv_cache.then(|| {
+                dv_metadata_caches
+                    .get(&store)
+                    .expect("DV store must have a scan-local metadata cache")
+                    .clone()
+            });
+            (store, files, has_deletion_vectors, cache)
+        });
 
     // TODO(roeap); not sure exactly how row tracking is implemented in kernel right now
     // so leaving predicate as None for now until we are sure this is safe to do.
@@ -493,8 +725,15 @@ async fn get_data_scan_plan(
         limit,
         &file_id_field,
         predicate,
+        file_pruner.as_ref().map(|pruner| pruner.predicate()),
     )
     .await?;
+    let pq_plan = if has_deletion_vectors && pq_plan.properties().partitioning.partition_count() > 1
+    {
+        Arc::new(CoalescePartitionsExec::new(pq_plan)) as Arc<dyn ExecutionPlan>
+    } else {
+        pq_plan
+    };
 
     let transforms = Arc::new(transforms);
     let public_file_ids = Arc::new(public_file_ids);
@@ -506,7 +745,8 @@ async fn get_data_scan_plan(
         Arc::clone(&public_file_ids),
         partition_stats,
         metrics,
-    );
+    )
+    .with_file_pruner(file_pruner);
 
     Ok(Arc::new(exec))
 }
@@ -547,10 +787,20 @@ fn update_partition_stats(
     Ok(())
 }
 
-type FilesByStore = (ObjectStoreUrl, Vec<PartitionedFile>, bool);
+type FilesByStore = (
+    ObjectStoreUrl,
+    Vec<PartitionedFile>,
+    bool,
+    Option<Arc<FileMetadataCache>>,
+);
 
 fn compact_internal_file_id(file_index: usize) -> String {
     file_index.to_string()
+}
+
+/// The file index of an id from [`compact_internal_file_id`].
+fn internal_file_index(file_id: &str) -> Option<usize> {
+    file_id.parse().ok()
 }
 
 fn remap_deletion_vectors_to_internal_file_ids(
@@ -664,6 +914,7 @@ fn partitioned_files_to_file_groups_with_limit(
     file_groups
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn get_read_plan(
     state: &dyn Session,
     files_by_store: impl IntoIterator<Item = FilesByStore>,
@@ -678,6 +929,11 @@ async fn get_read_plan(
     limit: Option<usize>,
     file_id_field: &FieldRef,
     predicate: Option<&Expr>,
+    // Skips the files that the runtime file filter does not keep, see `RuntimeScanFilePruner`.
+    // `predicate` is not set when the table has deletion vectors, because it can remove single
+    // rows, and the deletion vector of a file must see all rows of that file. This predicate is
+    // always set, because it keeps or removes a file with all its rows.
+    file_predicate: Option<Arc<dyn PhysicalExpr>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut plans = Vec::new();
 
@@ -689,6 +945,7 @@ async fn get_read_plan(
     let parquet_read_schema = &parquet_read_schema;
 
     let pq_options = crate::datafile::ReaderProperties::default().to_table_parquet_options(state);
+    let metadata_size_hint = pq_options.global.metadata_size_hint;
 
     let mut full_read_schema = SchemaBuilder::from(parquet_read_schema.as_ref().clone());
     full_read_schema.push(file_id_field.as_ref().clone().with_nullable(true));
@@ -696,22 +953,34 @@ async fn get_read_plan(
     let parquet_predicate_df_schema = parquet_predicate_schema.clone().to_dfschema()?;
     let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory);
 
-    for (store_url, files, has_deletion_vectors) in files_by_store.into_iter() {
-        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
-            state.runtime_env().object_store(&store_url)?,
-            state.runtime_env().cache_manager.get_file_metadata_cache(),
-        ));
+    for (store_url, files, has_deletion_vectors, scan_cache) in files_by_store.into_iter() {
+        let store = state.runtime_env().object_store(&store_url)?;
+        let metadata_cache = scan_cache
+            .unwrap_or_else(|| state.runtime_env().cache_manager.get_file_metadata_cache());
+        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
 
         // NOTE: In the "next" provider, DataFusion's Parquet scan partition fields are file-id
         // only. Delta partition columns/values are injected via kernel transforms and handled
         // above Parquet, so they are not part of the Parquet partition schema here.
-        let table_schema = TableSchema::builder(parquet_read_schema.clone())
-            .with_table_partition_cols(vec![file_id_field.clone()])
-            .build();
+        let builder = TableSchema::builder(parquet_read_schema.clone())
+            .with_table_partition_cols(vec![file_id_field.clone()]);
+        let table_schema = if has_deletion_vectors {
+            builder
+                .with_virtual_columns(vec![Arc::new(
+                    Field::new(PHYSICAL_POSITION_COLUMN, DataType::Int64, true)
+                        .with_extension_type(RowNumber),
+                )])
+                .build()
+        } else {
+            builder.build()
+        };
         let full_table_schema = table_schema.table_schema().clone();
         let mut file_source = ParquetSource::new(table_schema)
             .with_table_parquet_options(pq_options.clone())
             .with_parquet_file_reader_factory(reader_factory);
+        if let Some(hint) = metadata_size_hint {
+            file_source = file_source.with_metadata_size_hint(hint);
+        }
 
         // TODO(roeap); we might be able to also push selection vectors into the read plan
         // by creating parquet access plans. However we need to make sure this does not
@@ -756,9 +1025,25 @@ async fn get_read_plan(
             }
         }
 
+        if let Some(file_predicate) = &file_predicate {
+            let predicate = match file_source.filter() {
+                Some(predicate) => conjunction([predicate, Arc::clone(file_predicate)]),
+                None => Arc::clone(file_predicate),
+            };
+            file_source = file_source.with_predicate(predicate);
+        }
+
         let file_groups = partitioned_files_to_file_groups(files);
-        let (file_groups, statistics) =
+        let full_table_width = full_table_schema.fields().len();
+        let (file_groups, mut statistics) =
             compute_all_files_statistics(file_groups, full_table_schema, true, false)?;
+
+        // Per-file column stats are omitted when there's no predicate (#4522); the merged
+        // stat then has an empty column vector. Rebuild it as all-unknown full width so the
+        // file source and `map_statistics` see the expected column count.
+        if statistics.column_statistics.is_empty() && full_table_width > 0 {
+            statistics.column_statistics = vec![ColumnStatistics::new_unknown(); full_table_width];
+        }
 
         let file_group_count = file_groups.len();
         let builder = FileScanConfigBuilder::new(store_url, Arc::new(file_source))
@@ -928,6 +1213,31 @@ mod tests {
         assert_eq!(groups[1].len(), 1);
     }
 
+    #[test]
+    fn test_dv_rejects_row_group_index_beyond_i16() -> TestResult {
+        use parquet::file::metadata::{FileMetaData, RowGroupMetaData};
+        use parquet::schema::types::{SchemaDescriptor, Type};
+
+        let schema = Arc::new(SchemaDescriptor::new(Arc::new(
+            Type::group_type_builder("schema").build()?,
+        )));
+        let mut groups = (0..=i16::MAX)
+            .map(|ordinal| {
+                RowGroupMetaData::builder(Arc::clone(&schema))
+                    .set_ordinal(ordinal)
+                    .build()
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        groups.push(RowGroupMetaData::builder(Arc::clone(&schema)).build()?);
+        let metadata =
+            ParquetMetaData::new(FileMetaData::new(1, 0, None, None, schema, None), groups);
+
+        let err = validate_dv_parquet_metadata(&metadata, None, 0, "f0", "file_id")
+            .expect_err("row-group index must fit i16");
+        assert!(err.to_string().contains("row-group index"));
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_resolve_empty_file_selection_does_not_poll_metadata_stream() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
@@ -977,6 +1287,7 @@ mod tests {
             engine,
             None,
             Some(&selection),
+            None,
         )
         .await?;
 
@@ -1032,6 +1343,129 @@ mod tests {
         Ok(())
     }
 
+    /// Regression test for <https://github.com/delta-io/delta-rs/issues/4864>:
+    /// the DataFusion session's `datafusion.execution.parquet.metadata_size_hint`
+    /// must be applied to the scan's `ParquetSource` so the parquet reader prefetches
+    /// the footer with a single hint-sized range read instead of first probing the
+    /// footer length with a small (8-byte) request.
+    #[tokio::test]
+    async fn test_scan_applies_parquet_metadata_size_hint() -> TestResult {
+        use crate::delta_datafusion::DeltaSessionContext;
+        use crate::delta_datafusion::engine::AsObjectStoreUrl as _;
+        use crate::test_utils::object_store::{
+            RecordedObjectStoreOperation, RecordedPathKind, drain_recorded_object_store_operations,
+            recording_log_store,
+        };
+        use futures::TryStreamExt as _;
+
+        // The hint must be small enough to actually prefetch the footer of the single
+        // data file written below, yet large enough that delta-rs's parquet footer cache
+        // would already have to read past the tail of the file if it were consulted with
+        // the file's object size (`tail_bytes = max(footer+8, 16KB)`), so observing an
+        // end-of-file range read of exactly `METADATA_SIZE_HINT` bytes can only come
+        // from the parquet metadata prefetch.
+        const METADATA_SIZE_HINT: u64 = 4096;
+        const NUM_ROWS: i64 = 5000;
+
+        let arrow_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            arrow_schema,
+            vec![Arc::new(Int64Array::from_iter_values(0..NUM_ROWS))],
+        )?;
+        // Disable compression so the data file is guaranteed to be larger than the
+        // footer cache's minimum tail read (`max(footer+8, 16KB)`).
+        let writer_properties = parquet::file::properties::WriterProperties::builder()
+            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+            .build();
+        let table = crate::DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_writer_properties(writer_properties)
+            .await?;
+
+        let (log_store, mut operations) = recording_log_store(table.log_store());
+
+        let session =
+            DeltaSessionContext::new_with_session_overrides(&std::collections::HashMap::from([(
+                "datafusion.execution.parquet.metadata_size_hint".to_string(),
+                METADATA_SIZE_HINT.to_string(),
+            )]))?
+            .into_inner();
+        // Register the recording store for the table's root URL so data-file reads flow
+        // through it (the scan looks up stores in the runtime env by the files' fully
+        // qualified store URLs).
+        session.state().runtime_env().register_object_store(
+            log_store.root_url().as_object_store_url().as_ref(),
+            log_store.object_store(),
+        );
+
+        let provider = table.table_provider().await?;
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let batches = collect(scan, session.task_ctx()).await?;
+        assert_eq!(
+            batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            NUM_ROWS as usize
+        );
+
+        // Sanity: every written parquet file must be larger than the hint, so a hinted
+        // reader issues a bounded prefetch read of exactly `metadata_size_hint` bytes
+        // ending at the end of the file.
+        let parquet_sizes: Vec<u64> = log_store
+            .object_store()
+            .list(None)
+            .try_filter_map(|meta| async move {
+                Ok(meta
+                    .location
+                    .as_ref()
+                    .ends_with(".parquet")
+                    .then_some(meta.size))
+            })
+            .try_collect()
+            .await?;
+        assert!(!parquet_sizes.is_empty(), "expected written parquet files");
+        assert!(
+            parquet_sizes.iter().all(|&size| size > METADATA_SIZE_HINT),
+            "test precondition: parquet files must be larger than the metadata size hint, got {parquet_sizes:?}"
+        );
+        // Sanity: delta-rs's parquet footer cache would need to read the last
+        // `max(footer+8, 16KB)` bytes, so the files must be larger than that to keep the
+        // prefetch-read assertion below unambiguous.
+        const FOOTER_CACHE_MIN_TAIL_BYTES: u64 = 16 * 1024;
+        assert!(
+            parquet_sizes
+                .iter()
+                .all(|&size| size > FOOTER_CACHE_MIN_TAIL_BYTES),
+            "test precondition: parquet files must be larger than the footer cache's \
+             minimum tail read, got {parquet_sizes:?}"
+        );
+
+        let operations = drain_recorded_object_store_operations(&mut operations).await;
+        let has_prefetch_read = operations.iter().any(|op| {
+            let is_prefetch = |range: &std::ops::Range<u64>| {
+                range.end - range.start == METADATA_SIZE_HINT && parquet_sizes.contains(&range.end)
+            };
+            match op {
+                RecordedObjectStoreOperation::GetRange(kind, range)
+                    if matches!(kind, RecordedPathKind::Data | RecordedPathKind::Other) =>
+                {
+                    is_prefetch(range)
+                }
+                RecordedObjectStoreOperation::GetRanges(kind, ranges)
+                    if matches!(kind, RecordedPathKind::Data | RecordedPathKind::Other) =>
+                {
+                    ranges.iter().any(is_prefetch)
+                }
+                _ => false,
+            }
+        });
+        assert!(
+            has_prefetch_read,
+            "scans must propagate datafusion.execution.parquet.metadata_size_hint to the \
+             ParquetSource (https://github.com/delta-io/delta-rs/issues/4864); recorded operations: {operations:?}"
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_scan_public_file_id_uses_file_path_with_compact_internal_ids() -> TestResult {
         let table = TestTables::Simple.table_builder()?.load().await?;
@@ -1071,6 +1505,7 @@ mod tests {
             size: 0,
             transform: None,
             stats: Statistics::new_unknown(&Schema::empty()),
+            num_records: None,
             partitions: None,
         }
     }
@@ -1393,7 +1828,7 @@ mod tests {
         file.partition_values
             .push(wrap_file_id_value("memory:///test_data.parquet"));
 
-        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false)];
+        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false, None)];
 
         let file_id_field =
             crate::delta_datafusion::file_id::file_id_field(Some(FILE_ID_COLUMN_DEFAULT));
@@ -1407,6 +1842,7 @@ mod tests {
             &parquet_predicate_schema,
             None,
             &file_id_field,
+            None,
             None,
         )
         .await?;
@@ -1430,6 +1866,7 @@ mod tests {
             &parquet_predicate_schema,
             Some(1),
             &file_id_field,
+            None,
             None,
         )
         .await?;
@@ -1458,6 +1895,7 @@ mod tests {
             &parquet_predicate_schema_extended,
             Some(1),
             &file_id_field,
+            None,
             None,
         )
         .await?;
@@ -1518,7 +1956,7 @@ mod tests {
         file.partition_values
             .push(wrap_file_id_value("memory:///test_data.parquet"));
 
-        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false)];
+        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false, None)];
 
         let file_id_field =
             crate::delta_datafusion::file_id::file_id_field(Some(FILE_ID_COLUMN_DEFAULT));
@@ -1532,6 +1970,7 @@ mod tests {
             &parquet_predicate_schema,
             None,
             &file_id_field,
+            None,
             None,
         )
         .await?;
@@ -1570,6 +2009,7 @@ mod tests {
             &parquet_predicate_schema_extended,
             None,
             &file_id_field,
+            None,
             None,
         )
         .await?;
@@ -1635,7 +2075,7 @@ mod tests {
         writer.close()?;
         let size = buffer.len() as i64;
 
-        let store = log_store.object_store(None);
+        let store = log_store.object_store();
         store
             .put(&Path::from("part-00000.parquet"), buffer.into())
             .await?;
@@ -1741,8 +2181,8 @@ mod tests {
             .push(wrap_file_id_value("second:///test_data.parquet"));
 
         let files_by_store = vec![
-            (store_url_1.as_object_store_url(), vec![file_1], false),
-            (store_url_2.as_object_store_url(), vec![file_2], false),
+            (store_url_1.as_object_store_url(), vec![file_1], false, None),
+            (store_url_2.as_object_store_url(), vec![file_2], false, None),
         ];
 
         let file_id_field =
@@ -1757,6 +2197,7 @@ mod tests {
             &parquet_predicate_schema,
             None,
             &file_id_field,
+            None,
             None,
         )
         .await?;
@@ -1806,7 +2247,7 @@ mod tests {
         file.partition_values
             .push(wrap_file_id_value("memory:///test_data.parquet"));
 
-        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false)];
+        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false, None)];
 
         let file_id_field =
             crate::delta_datafusion::file_id::file_id_field(Some(FILE_ID_COLUMN_DEFAULT));
@@ -1822,6 +2263,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1869,7 +2311,7 @@ mod tests {
         file.partition_values
             .push(wrap_file_id_value("memory:///test_rewrite_failure.parquet"));
 
-        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false)];
+        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false, None)];
 
         let file_id_field =
             crate::delta_datafusion::file_id::file_id_field(Some(FILE_ID_COLUMN_DEFAULT));
@@ -1885,6 +2327,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1945,7 +2388,7 @@ mod tests {
         file.partition_values
             .push(wrap_file_id_value("memory:///test_view_literal.parquet"));
 
-        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false)];
+        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false, None)];
 
         let file_id_field =
             crate::delta_datafusion::file_id::file_id_field(Some(FILE_ID_COLUMN_DEFAULT));
@@ -1961,6 +2404,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -2018,7 +2462,7 @@ mod tests {
         file.partition_values
             .push(wrap_file_id_value("memory:///test_sql_literal.parquet"));
 
-        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false)];
+        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false, None)];
 
         let file_id_field =
             crate::delta_datafusion::file_id::file_id_field(Some(FILE_ID_COLUMN_DEFAULT));
@@ -2034,6 +2478,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -2092,7 +2537,7 @@ mod tests {
             "memory:///test_column_mapping_pushdown.parquet",
         ));
 
-        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false)];
+        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false, None)];
 
         let file_id_field =
             crate::delta_datafusion::file_id::file_id_field(Some(FILE_ID_COLUMN_DEFAULT));
@@ -2108,6 +2553,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -2178,7 +2624,7 @@ mod tests {
         file.partition_values
             .push(wrap_file_id_value("memory:///test_binary_view.parquet"));
 
-        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false)];
+        let files_by_store = vec![(store_url.as_object_store_url(), vec![file], false, None)];
 
         let file_id_field =
             crate::delta_datafusion::file_id::file_id_field(Some(FILE_ID_COLUMN_DEFAULT));
@@ -2194,6 +2640,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;

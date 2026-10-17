@@ -64,6 +64,19 @@ pub trait ScalarExt: Sized {
     fn to_json(&self) -> Value;
 }
 
+/// Formats an unscaled decimal value with a positive scale, e.g. `-105` with scale 2 as `-1.05`.
+fn serialize_scaled_decimal(value: i128, scale: u8) -> String {
+    let scalar_multiple = 10_u128.pow(scale as u32);
+    let abs = value.unsigned_abs();
+    let sign = if value < 0 { "-" } else { "" };
+    format!(
+        "{sign}{}.{:0>scale$}",
+        abs / scalar_multiple,
+        abs % scalar_multiple,
+        scale = scale as usize
+    )
+}
+
 impl ScalarExt for Scalar {
     /// Serializes this scalar as a string.
     fn serialize(&self) -> String {
@@ -87,8 +100,14 @@ impl ScalarExt for Scalar {
                 let ts = Utc.timestamp_nanos(*ts);
                 ts.naive_utc().format("%Y-%m-%d %H:%M:%S%.9f").to_string()
             }
-            Self::TimestampNtz(ts) | Self::Timestamp(ts) => {
+            Self::Timestamp(ts) => {
                 let ts = Utc.timestamp_micros(*ts).single().unwrap();
+                // Use the recommended ISO8601 representation with an explicit UTC offset.
+                ts.format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string()
+            }
+            Self::TimestampNtz(ts) => {
+                let ts = Utc.timestamp_micros(*ts).single().unwrap();
+                // Timestamp without timezone keeps the offset-less representation.
                 ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
             }
             Self::Date(days) => {
@@ -97,20 +116,7 @@ impl ScalarExt for Scalar {
             }
             Self::Decimal(decimal) => match decimal.scale().cmp(&0) {
                 Ordering::Equal => decimal.bits().to_string(),
-                Ordering::Greater => {
-                    let scale = decimal.scale();
-                    let value = decimal.bits();
-                    let scalar_multiple = 10_i128.pow(scale as u32);
-                    let mut s = String::new();
-                    s.push_str((value / scalar_multiple).to_string().as_str());
-                    s.push('.');
-                    s.push_str(&format!(
-                        "{:0>scale$}",
-                        value % scalar_multiple,
-                        scale = scale as usize
-                    ));
-                    s
-                }
+                Ordering::Greater => serialize_scaled_decimal(decimal.bits(), decimal.scale()),
                 Ordering::Less => {
                     let mut s = decimal.bits().to_string();
                     for _ in 0..decimal.scale() {
@@ -358,18 +364,7 @@ impl ScalarExt for Scalar {
             Self::Decimal(decimal) => match decimal.scale().cmp(&0) {
                 Ordering::Equal => Value::String(decimal.bits().to_string()),
                 Ordering::Greater => {
-                    let scale = decimal.scale();
-                    let value = decimal.bits();
-                    let scalar_multiple = 10_i128.pow(scale as u32);
-                    let mut s = String::new();
-                    s.push_str((value / scalar_multiple).to_string().as_str());
-                    s.push('.');
-                    s.push_str(&format!(
-                        "{:0>scale$}",
-                        value % scalar_multiple,
-                        scale = scale as usize
-                    ));
-                    Value::String(s)
+                    Value::String(serialize_scaled_decimal(decimal.bits(), decimal.scale()))
                 }
                 Ordering::Less => {
                     let mut s = decimal.bits().to_string();
@@ -486,10 +481,19 @@ mod tests {
         let timestamp_micros = 1672574400000000; // 2023-01-01 12:00:00 UTC
         let scalar = Scalar::Timestamp(timestamp_micros);
         let serialized = scalar.serialize();
-        assert!(serialized.starts_with("2023-01-01 12:00:00"));
+        // Timezone-aware timestamps use the recommended ISO8601 representation
+        // with an explicit UTC offset.
+        assert_eq!(serialized, "2023-01-01T12:00:00.000000Z");
 
+        // TIMESTAMP_NTZ keeps the offset-less representation.
         let scalar_ntz = Scalar::TimestampNtz(timestamp_micros);
-        assert_eq!(scalar.serialize(), scalar_ntz.serialize());
+        assert_eq!(scalar_ntz.serialize(), "2023-01-01 12:00:00.000000");
+
+        // The encoded form feeds hive-style partition directory names.
+        assert_eq!(
+            scalar.serialize_encoded(),
+            "2023-01-01T12%3A00%3A00.000000Z"
+        );
     }
 
     #[cfg(feature = "nanosecond-timestamps")]
@@ -531,6 +535,18 @@ mod tests {
         // Test decimal with zero scale
         let decimal2 = Scalar::decimal(123, 10, 0).unwrap();
         assert_eq!(decimal2.serialize(), "123");
+
+        // Test negative decimals with positive scale
+        let decimal = Scalar::decimal(-12345, 10, 2).unwrap();
+        assert_eq!(decimal.serialize(), "-123.45");
+        let decimal = Scalar::decimal(-105, 10, 2).unwrap();
+        assert_eq!(decimal.serialize(), "-1.05");
+        let decimal = Scalar::decimal(-1, 10, 2).unwrap();
+        assert_eq!(decimal.serialize(), "-0.01");
+        assert_eq!(
+            decimal.to_json(),
+            serde_json::Value::String("-0.01".to_string())
+        );
     }
 
     #[test]

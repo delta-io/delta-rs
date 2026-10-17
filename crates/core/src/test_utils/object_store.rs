@@ -93,11 +93,11 @@ pub(crate) fn recording_log_store(
 ) -> (LogStoreRef, UnboundedReceiver<RecordedObjectStoreOperation>) {
     let (operations_sender, operations) = unbounded_channel();
     let wrapped_prefixed_object_store = Arc::new(RecordingObjectStore::with_operations(
-        base.object_store(None),
+        base.object_store(),
         operations_sender.clone(),
     ));
     let wrapped_root_object_store = Arc::new(RecordingObjectStore::with_operations(
-        base.root_object_store(None),
+        base.root_object_store(),
         operations_sender,
     ));
     let log_store = Arc::new(DefaultLogStore::new(

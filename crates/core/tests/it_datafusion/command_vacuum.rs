@@ -4,7 +4,6 @@ use chrono::Duration;
 use deltalake_core::DeltaTable;
 use deltalake_core::kernel::StructType;
 use deltalake_core::operations::vacuum::Clock;
-use deltalake_core::protocol::SaveMode;
 use deltalake_test::clock::TestClock;
 use deltalake_test::*;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt as _, path::Path};
@@ -348,6 +347,6 @@ async fn test_vacuum_struct_column_without_min_max_eligible_leaves() -> TestResu
 
 async fn is_deleted(context: &mut TestContext, path: &Path) -> bool {
     let backend = context.get_storage();
-    let res = backend.object_store(None).head(path).await;
+    let res = backend.object_store().head(path).await;
     matches!(res, Err(ObjectStoreError::NotFound { .. }))
 }

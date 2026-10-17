@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import warnings
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
@@ -750,26 +750,34 @@ class DeltaTable:
         """
         return self._table.generate()
 
-    def history(self, limit: int | None = None) -> list[dict[str, Any]]:
+    def history(self, limit: int | None = None) -> Iterator[dict[str, Any]]:
         """
         Run the history command on the DeltaTable.
         The operations are returned in reverse chronological order.
+
+        The commit infos are read lazily as the iterator is consumed, so stopping
+        early avoids reading the rest of the transaction log. The history is pinned
+        to the table state at the time of the call. Wrap the result in ``list(...)``
+        to materialize it.
 
         Args:
             limit: the commit info limit to return
 
         Returns:
-            list of the commit infos registered in the transaction log
+            iterator over the commit infos registered in the transaction log
         """
-        latest_version, commits = self._table.history(limit)
-        history = []
-        version = latest_version
-        for commit_info_raw in commits:
-            commit = json.loads(commit_info_raw)
-            commit["version"] = version
-            history.append(commit)
-            version -= 1
-        return history
+        commits = self._table.history(limit)
+        latest_version = commits.latest_version
+
+        def _iter() -> Iterator[dict[str, Any]]:
+            version = latest_version
+            for commit_info_raw in commits:
+                commit = json.loads(commit_info_raw)
+                commit["version"] = version
+                yield commit
+                version -= 1
+
+        return _iter()
 
     def count(self) -> int:
         """
@@ -778,21 +786,27 @@ class DeltaTable:
         This requires that add actions have been added to the Delta table with
         per-file statistics enabled. Because this is an optional field this
         "count" will be less than or equal to the true row count of the table.
+        Rows marked as deleted by deletion vectors are not counted.
         In order to get an exact number of rows a full table scan must happen
 
         Returns:
             The approximate number of rows for this specific table
         """
-        total_rows = 0
+        actions = self.get_add_actions(flatten=True)
+        num_records: list[int | None] = actions.column("num_records").to_pylist()
+        deleted_rows: list[int | None]
+        if "deletion_vector.cardinality" in actions.column_names:
+            deleted_rows = actions.column("deletion_vector.cardinality").to_pylist()
+        else:
+            deleted_rows = [None] * len(num_records)
 
-        for value in self.get_add_actions().column("num_records").to_pylist():
-            # Add action file statistics are optional and so while most modern
-            # tables are _likely_ to have this information it is not
-            # guaranteed.
-            if value is not None:
-                total_rows += value
-
-        return total_rows
+        # Add action file statistics are optional and so while most modern
+        # tables are _likely_ to have this information it is not guaranteed.
+        return sum(
+            records - (deleted or 0)
+            for records, deleted in zip(num_records, deleted_rows)
+            if records is not None
+        )
 
     def vacuum(
         self,
@@ -811,7 +825,11 @@ class DeltaTable:
         plus any files not mentioned in the logs (unless they start with underscore).
 
         Args:
-            retention_hours: the retention threshold in hours, if none then the value from `delta.deletedFileRetentionDuration` is used or default of 1 week otherwise.
+            retention_hours: the retention threshold in hours. If None, the value of the
+                `delta.deletedFileRetentionDuration` table property is used (default: 1 week).
+                Set the property when creating the table via the `configuration` argument of
+                `write_deltalake`, or on an existing table with
+                `dt.alter.set_table_properties({TableProperty.DELETED_FILE_RETENTION_DURATION: "interval 30 days"})`.
             dry_run: when activated, list only the files, delete otherwise
             enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `delta.deletedFileRetentionDuration`.
             commit_properties: properties of the transaction commit. If None, default values are used.
@@ -952,7 +970,7 @@ class DeltaTable:
                 if isinstance(value, (int, float, bool, list)):
                     value = str(value)
                 elif isinstance(value, str):
-                    value = f"'{value}'"
+                    value = "'" + value.replace("'", "''") + "'"
                 elif isinstance(value, datetime):
                     value = str(
                         int(value.timestamp() * 1000 * 1000)
@@ -1041,8 +1059,9 @@ class DeltaTable:
             merge_schema: Enable merge schema evolution for mismatch schema between source and target tables
             error_on_type_mismatch: specify if merge returns an error when update or insert expressions fail to cast to target column types :default = True
             writer_properties: Pass writer properties to the Rust parquet writer
-            streamed_exec: Will execute MERGE using a LazyMemoryExec plan, this improves memory pressure for large source tables. Enabling streamed_exec
-                implicitly disables source table stats to derive an early_pruning_predicate
+            streamed_exec: Will execute MERGE using a LazyMemoryExec plan, this improves memory pressure for large source tables. With streamed_exec,
+                the source is read once. The source statistics that skip target files are collected while the source is read, and are applied
+                before the target is read.
             max_spill_size: The maximum number of bytes allowed in memory before spilling to disk.
                 If not specified, uses DataFusion's default.
                 Set this to avoid OOM when merging into large tables with a source table which touches a large number of files.
@@ -1094,6 +1113,7 @@ class DeltaTable:
     ) -> dict[str, Any]:
         """
         Restores table to a given version or datetime. See also [``load_as_version``](#deltalake.DeltaTable.load_as_version).
+        If a datetime object without a timezone is passed, the UTC timezone will be assumed.
 
         Args:
             target: the expected version will restore, which represented by int, date str or datetime.
@@ -1113,6 +1133,8 @@ class DeltaTable:
             ```
         """
         if isinstance(target, datetime):
+            if target.tzinfo is None:
+                target = target.replace(tzinfo=timezone.utc)
             metrics = self._table.restore(
                 target.isoformat(),
                 ignore_missing_files=ignore_missing_files,
@@ -1447,6 +1469,10 @@ class DeltaTable:
         When ``flatten=False`` (default), partition values and column
         statistics are returned as nested struct columns (``partition``,
         ``null_count``, ``min``, ``max``).
+
+        If the table supports deletion vectors, a nested ``deletion_vector``
+        column holds each file's deletion vector descriptor (null when the
+        file has none). Its ``cardinality`` field is the number of deleted rows.
 
         When ``flatten=True``, those structs are flattened into
         top-level columns with dot-separated prefixes, e.g.
