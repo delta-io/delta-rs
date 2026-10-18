@@ -54,7 +54,7 @@ use deltalake::operations::vacuum::VacuumMode;
 use deltalake::operations::write::WriteBuilder;
 use deltalake::parquet::basic::{Compression, Encoding};
 use deltalake::parquet::errors::ParquetError;
-use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
+use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 use deltalake::partitions::{
     FilterLiteral, FilterValue, conjunction_to_kernel_predicate, dnf_to_kernel_predicate,
     filter_literal,
@@ -2262,6 +2262,7 @@ fn set_writer_properties(
     let data_page_row_count_limit = writer_properties.data_page_row_count_limit;
     let write_batch_size = writer_properties.write_batch_size;
     let max_row_group_size = writer_properties.max_row_group_size;
+    let writer_version = writer_properties.writer_version;
     let compression = writer_properties.compression;
     let statistics_truncate_length = writer_properties.statistics_truncate_length;
     let default_column_properties = writer_properties.default_column_properties;
@@ -2284,6 +2285,11 @@ fn set_writer_properties(
     }
     if let Some(truncate_length) = statistics_truncate_length {
         properties = properties.set_statistics_truncate_length(Some(truncate_length));
+    }
+    if let Some(writer_version) = writer_version {
+        let version = WriterVersion::from_str(&writer_version)
+            .map_err(|err| DeltaTableError::Generic(err.to_string()))?;
+        properties = properties.set_writer_version(version);
     }
 
     if let Some(compression) = compression {
@@ -2738,6 +2744,7 @@ pub struct PyWriterProperties {
     data_page_row_count_limit: Option<usize>,
     write_batch_size: Option<usize>,
     max_row_group_size: Option<usize>,
+    writer_version: Option<String>,
     statistics_truncate_length: Option<usize>,
     compression: Option<String>,
     default_column_properties: Option<ColumnProperties>,
