@@ -906,18 +906,12 @@ impl UnityCatalog {
         Ok(table)
     }
 
-    pub fn delta_rest_client(&self) -> Result<Arc<UCDeltaTableClient>, UnityCatalogError> {
-        self.cc_client
-            .as_ref()
-            .cloned()
-            .ok_or(UnityCatalogError::MissingCredential)
+    pub fn delta_rest_client(&self) -> Option<Arc<UCDeltaTableClient>> {
+        self.cc_client.as_ref().cloned()
     }
 
-    pub fn delta_update_client(&self) -> Result<Arc<UCUpdateTableRestClient>, UnityCatalogError> {
-        self.update_client
-            .as_ref()
-            .cloned()
-            .ok_or(UnityCatalogError::MissingCredential)
+    pub fn delta_update_client(&self) -> Option<Arc<UCUpdateTableRestClient>> {
+        self.update_client.as_ref().cloned()
     }
 
     pub async fn get_temp_table_credentials<S>(
@@ -995,8 +989,9 @@ impl ObjectStoreFactory for UnityCatalogFactory {
         table_uri: &Url,
         config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let store = if let Some(managed) = resolve_managed_table(config, table_uri)? {
-            let client = managed.uc.delta_rest_client()?;
+        let store = if let Some(managed) = resolve_managed_table(config, table_uri)?
+            && let Some(client) = managed.uc.delta_rest_client()
+        {
             let credentials = |operation| {
                 client.get_table_credentials(
                     &managed.catalog,
@@ -1009,6 +1004,7 @@ impl ObjectStoreFactory for UnityCatalogFactory {
                 credentials(Operation::ReadWrite).or_else(|_| credentials(Operation::Read)),
             )?
             .map_err(UnityCatalogError::from)?;
+
             build_object_store(
                 &managed.loaded.metadata.location,
                 storage_credentials_to_options(&creds.storage_credentials),
@@ -1061,10 +1057,13 @@ impl LogStoreFactory for UnityCatalogFactory {
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
-        if let Some(managed) = resolve_managed_table(options, location)? {
+        if let Some(managed) = resolve_managed_table(options, location)?
+            && let Some(rc) = managed.uc.delta_rest_client()
+            && let Some(uc) = managed.uc.delta_update_client()
+        {
             let coordinator = Arc::new(UnityCommitCoordinator::new(
-                managed.uc.delta_rest_client()?,
-                managed.uc.delta_update_client()?,
+                rc,
+                uc,
                 managed.catalog,
                 managed.schema,
                 managed.table,
@@ -1119,14 +1118,6 @@ pub(crate) fn storage_credentials_to_options(
     out
 }
 
-fn is_catalog_managed_requested(options: &StorageConfig) -> bool {
-    options
-        .raw
-        .get("catalog_managed")
-        .map(|k| str_is_truthy(k))
-        .unwrap_or(false)
-}
-
 struct ManagedTable {
     uc: UnityCatalog,
     catalog: String,
@@ -1139,27 +1130,25 @@ fn resolve_managed_table(
     options: &StorageConfig,
     location: &Url,
 ) -> DeltaResult<Option<ManagedTable>> {
-    if !is_catalog_managed_requested(options) {
-        return Ok(None);
-    }
     let (catalog, schema, table) = parse_uc_identity(location).ok_or_else(|| {
         DeltaTableError::Generic(format!(
             "`catalog_managed` requires a `uc://catalog.schema.table` identity, got `{location}`"
         ))
     })?;
     let uc = UnityCatalogFactory::new_delta_client(options)?;
-    let loaded = UnityCatalogBuilder::execute_uc_future(
-        uc.delta_rest_client()?
-            .load_table(&catalog, &schema, &table),
-    )?
-    .map_err(UnityCatalogError::from)?;
-    Ok(Some(ManagedTable {
-        uc,
-        catalog,
-        schema,
-        table,
-        loaded,
-    }))
+    if let Some(client) = uc.delta_rest_client() {
+        let loaded =
+            UnityCatalogBuilder::execute_uc_future(client.load_table(&catalog, &schema, &table))?
+                .map_err(UnityCatalogError::from)?;
+        return Ok(Some(ManagedTable {
+            uc,
+            catalog,
+            schema,
+            table,
+            loaded,
+        }));
+    }
+    Ok(None)
 }
 
 fn parse_uc_identity(location: &Url) -> Option<(String, String, String)> {

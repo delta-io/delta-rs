@@ -550,15 +550,6 @@ mod tests {
         assert!(ls.read_commit_entry(99).await.unwrap().is_none());
     }
 
-    #[test]
-    fn catalog_managed_is_opt_in() {
-        let mut cfg = StorageConfig::default();
-        assert!(!crate::is_catalog_managed_requested(&cfg));
-        cfg.raw.insert("catalog_managed".into(), "true".into());
-        assert!(crate::is_catalog_managed_requested(&cfg));
-        cfg.raw.insert("catalog_managed".into(), "false".into());
-        assert!(!crate::is_catalog_managed_requested(&cfg));
-    }
     const OURS: &str = "00000000000000000003.11111111-1111-4111-8111-111111111111.json";
     const THEIRS: &str = "00000000000000000003.22222222-2222-4222-8222-222222222222.json";
 
