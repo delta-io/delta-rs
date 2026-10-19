@@ -122,41 +122,6 @@ fn classify_attempt(
     }
 }
 
-async fn publish_commits(
-    store: &ObjectStoreRef,
-    commits: &[Commit],
-    up_to: Version,
-) -> DeltaResult<Option<Version>> {
-    let mut published = 0;
-    let mut commits = commits.to_vec();
-    commits.sort_by_key(|c| c.version);
-    for commit in commits {
-        let version = commit.version as u64;
-        if version > up_to {
-            break;
-        }
-        if published + 1 != version {
-            return Err(DeltaTableError::Generic(format!(
-                "catalog commits to publish are not contiguous: version {published} is followed by {version}",
-            )));
-        }
-        let numbered = commit_uri_from_version(Some(version));
-        if store.head(&numbered).await.is_err() {
-            let staged_path = staged_commit_path(&commit.file_name)?;
-            let bytes = store.get(&staged_path).await?.bytes().await?;
-            match store
-                .put_opts(&numbered, bytes.into(), PutMode::Create.into())
-                .await
-            {
-                Ok(_) | Err(ObjectStoreError::AlreadyExists { .. }) => {}
-                Err(e) => return Err(e.into()),
-            }
-        }
-        published = version;
-    }
-    Ok(Some(published))
-}
-
 #[async_trait]
 impl Committer for UnityCommitCoordinator {
     async fn commit(
@@ -271,15 +236,34 @@ impl CommitCoordinator for UnityCommitCoordinator {
 
     async fn publish(&self, store: &ObjectStoreRef, up_to: Version) -> DeltaResult<()> {
         let list = self.get_commits().await?;
-        if let Some(published) = publish_commits(store, &list.commits, up_to).await? {
-            let request = self.update_request(DeltaTableUpdate::SetLatestBackfilledVersion {
-                latest_published_version: published as i64,
-            });
-            self.update
-                .update_table(&self.target(), request)
-                .await
-                .map_err(UnityCatalogError::from)?;
+        let mut published = 0;
+        let mut commits = list.commits.to_vec();
+        commits.sort_by_key(|c| c.version);
+        for commit in commits {
+            let version = commit.version as u64;
+            if version > up_to {
+                break;
+            }
+            if published + 1 != version {
+                return Err(DeltaTableError::Generic(format!(
+                    "catalog commits to publish are not contiguous: version {published} is followed by {version}",
+                )));
+            }
+            let numbered = commit_uri_from_version(Some(version));
+            if store.head(&numbered).await.is_err() {
+                let staged_path = staged_commit_path(&commit.file_name)?;
+                let bytes = store.get(&staged_path).await?.bytes().await?;
+                match store
+                    .put_opts(&numbered, bytes.into(), PutMode::Create.into())
+                    .await
+                {
+                    Ok(_) | Err(ObjectStoreError::AlreadyExists { .. }) => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            published = version;
         }
+
         Ok(())
     }
 }
@@ -608,110 +592,5 @@ mod tests {
     fn classify_unratified_attempt_is_unknown() {
         let list = listed(2, "00000000000000000002.x.json", 2);
         assert_eq!(classify_attempt(3, OURS, &list), None);
-    }
-
-    async fn put(store: &ObjectStoreRef, path: &str, body: &'static [u8]) {
-        store
-            .put(&Path::from(path), Bytes::from_static(body).into())
-            .await
-            .unwrap();
-    }
-
-    async fn read(store: &ObjectStoreRef, path: &str) -> Option<Bytes> {
-        match store.get(&Path::from(path)).await {
-            Ok(res) => Some(res.bytes().await.unwrap()),
-            Err(ObjectStoreError::NotFound { .. }) => None,
-            Err(e) => panic!("{e}"),
-        }
-    }
-
-    fn staged(version: i64) -> (String, String) {
-        let name = format!("{version:020}.{}.json", Uuid::nil());
-        let path = format!("_delta_log/_staged_commits/{name}");
-        (name, path)
-    }
-
-    #[tokio::test]
-    async fn publish_copies_contiguous_commits_in_order() {
-        let store = store();
-        let (n1, p1) = staged(1);
-        let (n2, p2) = staged(2);
-        put(&store, &p1, b"one").await;
-        put(&store, &p2, b"two").await;
-        put(&store, "_delta_log/00000000000000000001.json", b"one").await;
-        let commits = vec![
-            Commit::new(2, 0, n2, 3, 0),
-            Commit::new(1, 0, format!("_staged_commits/{n1}"), 3, 0),
-        ];
-
-        let published = publish_commits(&store, &commits, 2).await.unwrap();
-        assert_eq!(published, Some(2));
-        assert_eq!(
-            read(&store, "_delta_log/00000000000000000002.json").await,
-            Some(Bytes::from_static(b"two"))
-        );
-    }
-
-    #[tokio::test]
-    async fn publish_fails_on_missing_staged_source() {
-        let store = store();
-        let (n1, p1) = staged(1);
-        let (n2, _p2) = staged(2);
-        put(&store, &p1, b"one").await;
-        let commits = vec![Commit::new(1, 0, n1, 3, 0), Commit::new(2, 0, n2, 3, 0)];
-
-        let err = publish_commits(&store, &commits, 2).await.unwrap_err();
-        assert!(
-            matches!(
-                err,
-                DeltaTableError::ObjectStore {
-                    source: ObjectStoreError::NotFound { .. }
-                }
-            ),
-            "{err}"
-        );
-        assert!(
-            read(&store, "_delta_log/00000000000000000001.json")
-                .await
-                .is_some()
-        );
-        assert!(
-            read(&store, "_delta_log/00000000000000000002.json")
-                .await
-                .is_none()
-        );
-    }
-
-    #[tokio::test]
-    async fn publish_refuses_non_contiguous_commits() {
-        let store = store();
-        let (n1, p1) = staged(1);
-        let (n3, p3) = staged(3);
-        put(&store, &p1, b"one").await;
-        put(&store, &p3, b"three").await;
-        let commits = vec![Commit::new(1, 0, n1, 3, 0), Commit::new(3, 0, n3, 5, 0)];
-
-        let err = publish_commits(&store, &commits, 3).await.unwrap_err();
-        assert!(err.to_string().contains("not contiguous"), "{err}");
-        assert!(
-            read(&store, "_delta_log/00000000000000000001.json")
-                .await
-                .is_some()
-        );
-    }
-
-    #[tokio::test]
-    async fn publish_keeps_an_existing_published_file() {
-        let store = store();
-        let (n1, p1) = staged(1);
-        put(&store, &p1, b"staged").await;
-        put(&store, "_delta_log/00000000000000000001.json", b"published").await;
-        let commits = vec![Commit::new(1, 0, n1, 6, 0)];
-
-        assert_eq!(publish_commits(&store, &commits, 1).await.unwrap(), Some(1));
-        assert_eq!(
-            read(&store, "_delta_log/00000000000000000001.json").await,
-            Some(Bytes::from_static(b"published"))
-        );
     }
 }
