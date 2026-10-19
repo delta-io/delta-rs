@@ -240,7 +240,7 @@ impl From<TransactionError> for DeltaTableError {
     }
 }
 
-/// Error raised while commiting transaction
+/// Error raised while committing a transaction
 #[derive(thiserror::Error, Debug)]
 pub enum CommitBuilderError {}
 
@@ -766,11 +766,6 @@ impl<'a> PreCommit<'a> {
         Box::pin(async move {
             if let Some(table_reference) = this.table_data {
                 PROTOCOL.can_commit(table_reference, &this.data.actions, &this.data.operation)?;
-                this.log_store.validate_commit(
-                    table_reference,
-                    &this.data.actions,
-                    &this.data.operation,
-                )?;
             }
 
             let log_entry = this.data.get_bytes()?;

@@ -73,9 +73,8 @@ use tokio::runtime::RuntimeFlavor;
 use tracing::*;
 use url::Url;
 
-use crate::kernel::transaction::{TableReference, TransactionError};
+use crate::kernel::transaction::TransactionError;
 use crate::kernel::{Action, CommitInfo, Version, spawn_blocking_with_span};
-use crate::protocol::DeltaOperation;
 use crate::table::normalize_table_url;
 use crate::{DeltaResult, DeltaTableError};
 
@@ -426,17 +425,6 @@ pub trait LogStore: Send + Sync + AsAny {
         Ok(())
     }
 
-    /// Reject a commit this log store cannot accept.
-    fn validate_commit(
-        &self,
-        table: &dyn TableReference,
-        actions: &[Action],
-        operation: &DeltaOperation,
-    ) -> DeltaResult<()> {
-        let _ = (table, actions, operation);
-        Ok(())
-    }
-
     /// Get the object store rooted at the table root (`_delta_log/` is a child).
     fn object_store(&self) -> Arc<dyn ObjectStore>;
 
@@ -591,15 +579,6 @@ impl<T: LogStore + ?Sized> LogStore for Arc<T> {
 
     async fn publish_logs(&self, up_to: Version) -> DeltaResult<()> {
         T::publish_logs(self, up_to).await
-    }
-
-    fn validate_commit(
-        &self,
-        table: &dyn TableReference,
-        actions: &[Action],
-        operation: &DeltaOperation,
-    ) -> DeltaResult<()> {
-        T::validate_commit(self, table, actions, operation)
     }
 
     fn object_store(&self) -> Arc<dyn ObjectStore> {

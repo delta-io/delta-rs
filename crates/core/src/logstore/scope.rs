@@ -34,9 +34,8 @@ use url::Url;
 
 use super::committer::{CommitResponse, Committer, PayloadKind};
 use super::{CatalogLogTail, CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef};
-use crate::kernel::transaction::{TableReference, TransactionError};
-use crate::kernel::{Action, CommitInfo, Version};
-use crate::protocol::DeltaOperation;
+use crate::kernel::transaction::TransactionError;
+use crate::kernel::{CommitInfo, Version};
 use crate::{DeltaResult, DeltaTableError};
 
 /// Write-side handles for one in-flight operation. Produced by [`LogStore::begin_operation`].
@@ -362,15 +361,6 @@ impl LogStore for ScopedLogStore {
 
     async fn publish_logs(&self, up_to: Version) -> DeltaResult<()> {
         self.parent.publish_logs(up_to).await
-    }
-
-    fn validate_commit(
-        &self,
-        table: &dyn TableReference,
-        actions: &[Action],
-        operation: &DeltaOperation,
-    ) -> DeltaResult<()> {
-        self.parent.validate_commit(table, actions, operation)
     }
 
     fn object_store(&self) -> Arc<dyn ObjectStore> {

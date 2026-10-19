@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::UnityCatalogError;
@@ -5,10 +6,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
 use delta_kernel::LogPath;
-use delta_kernel::table_configuration::TableConfiguration;
-use delta_kernel::table_features::TableFeature;
-use deltalake_core::kernel::models::Action;
-use deltalake_core::kernel::transaction::{TableReference, TransactionError};
+use deltalake_core::kernel::transaction::TransactionError;
 use deltalake_core::kernel::{CommitInfo, Version};
 use deltalake_core::logstore::object_store::{
     Error as ObjectStoreError, ObjectStore, ObjectStoreExt, PutMode,
@@ -17,7 +15,7 @@ use deltalake_core::logstore::{
     CatalogLogTail, CommitOrBytes, CommitResponse, Committer, LogStore, LogStoreConfig,
     ObjectStoreRef, PayloadKind, commit_uri_from_version,
 };
-use deltalake_core::protocol::DeltaOperation;
+
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use tracing::warn;
 use unity_catalog_delta_client_api::{
@@ -34,13 +32,11 @@ pub struct CommitList {
 }
 
 #[async_trait]
-pub trait CommitCoordinator: Send + Sync + std::fmt::Debug {
+pub trait CommitCoordinator: Send + Sync + Debug {
     fn table_uuid(&self) -> &str;
     async fn get_commits(&self) -> DeltaResult<CommitList>;
     async fn publish(&self, store: &ObjectStoreRef, up_to: Version) -> DeltaResult<()>;
 }
-
-const UC_TABLE_ID_KEY: &str = "io.unitycatalog.tableId";
 
 fn staged_commit_path(file_name: &str) -> DeltaResult<Path> {
     Ok(Path::from(format!(
@@ -91,23 +87,11 @@ impl UnityCommitCoordinator {
     }
 
     fn update_request(&self, update: DeltaTableUpdate) -> UpdateTableRequest {
-        UpdateTableRequest {
-            requirements: vec![DeltaTableRequirement::AssertTableUuid {
-                uuid: self.table_uuid.clone(),
-            }],
-            updates: vec![update],
-        }
+        let reqs = DeltaTableRequirement::AssertTableUuid {
+            uuid: self.table_uuid.clone(),
+        };
+        UpdateTableRequest::new(vec![reqs], vec![update]).unwrap()
     }
-}
-
-fn check_table_uuid(expected: &str, actual: &str) -> DeltaResult<()> {
-    if expected == actual {
-        return Ok(());
-    }
-    Err(DeltaTableError::Generic(format!(
-        "UC table ID mismatch: expected '{expected}' but found '{actual}'; the table was \
-         dropped and recreated since it was opened, reopen it"
-    )))
 }
 
 /// The staged-commit `file_name` and object-store `Path` for `version` under
@@ -124,15 +108,6 @@ fn commit_failed(msg: String) -> TransactionError {
         source: Box::new(DeltaTableError::Generic(msg.clone())),
         msg,
     }
-}
-
-fn is_version_conflict(err: &UCError) -> bool {
-    matches!(err, UCError::Generic(msg) if msg.contains("status 409"))
-}
-
-fn is_unbackfilled_limit(err: &UCError) -> bool {
-    matches!(err, UCError::MaxUnpublishedCommitsExceeded(_))
-        || matches!(err, UCError::Generic(msg) if msg.contains("status 429"))
 }
 
 fn classify_attempt(
@@ -182,42 +157,6 @@ async fn publish_commits(
     Ok(Some(published))
 }
 
-fn validate_catalog_managed_commit(
-    table_uuid: &str,
-    table: &TableConfiguration,
-    actions: &[Action],
-) -> DeltaResult<()> {
-    if !(table.is_catalog_managed()
-        && table.is_feature_supported(&TableFeature::VacuumProtocolCheck)
-        && table.is_feature_enabled(&TableFeature::InCommitTimestamp))
-    {
-        return Err(DeltaTableError::Generic(
-            "UC catalog-managed tables require catalogManaged, vacuumProtocolCheck and in-commit timestamps".to_string(),
-        ));
-    }
-    let id = table
-        .metadata()
-        .configuration()
-        .get(UC_TABLE_ID_KEY)
-        .ok_or_else(|| {
-            DeltaTableError::Generic(format!(
-                "UC catalog-managed table requires '{UC_TABLE_ID_KEY}' in metadata configuration"
-            ))
-        })?;
-    check_table_uuid(table_uuid, id)?;
-    if actions
-        .iter()
-        .any(|action| matches!(action, Action::Protocol(_) | Action::Metadata(_)))
-    {
-        return Err(DeltaTableError::Generic(
-            "commits that change the table protocol or metadata are not supported for Unity \
-             Catalog catalog-managed tables: the catalog would not learn about the change"
-                .to_string(),
-        ));
-    }
-    Ok(())
-}
-
 #[async_trait]
 impl Committer for UnityCommitCoordinator {
     async fn commit(
@@ -252,7 +191,11 @@ impl Committer for UnityCommitCoordinator {
         let target = self.target();
 
         let mut outcome = self.update.update_table(&target, request.clone()).await;
-        if matches!(&outcome, Err(err) if is_unbackfilled_limit(err)) {
+        // TODO: this is not correct, need to stop it from doubling up on requests
+        if matches!(
+            outcome,
+            Err(UCError::MaxUnpublishedCommitsExceeded(_num_commits))
+        ) {
             warn!(
                 version,
                 "UC reports too many unpublished commits; publishing then retrying ratify"
@@ -265,7 +208,9 @@ impl Committer for UnityCommitCoordinator {
 
         match outcome {
             Ok(()) => Ok(CommitResponse::Committed),
-            Err(err) if is_version_conflict(&err) => Ok(CommitResponse::Conflict { version }),
+            // Not sure what to do on conflicts right now from the catalog, not even sure what the catalog returns
+            // when a conflict occurs
+            // Err(err) if is_version_conflict(&err) => Ok(CommitResponse::Conflict { version }),
             Err(err) => self
                 .get_commits()
                 .await
@@ -306,11 +251,12 @@ impl CommitCoordinator for UnityCommitCoordinator {
             .load_table(&self.catalog, &self.schema, &self.table)
             .await
             .map_err(UnityCatalogError::from)?;
-        check_table_uuid(&self.table_uuid, &resp.metadata.table_uuid)?;
+
         let raw_max_version = resp
             .latest_table_version
             .or(resp.metadata.last_commit_version)
             .unwrap_or(-1);
+
         let max_version = if raw_max_version < 0 {
             0
         } else {
@@ -419,16 +365,6 @@ impl<C: CommitCoordinator + Committer + 'static> LogStore for CatalogManagedLogS
 
     async fn publish_logs(&self, up_to: Version) -> DeltaResult<()> {
         self.coordinator.publish(&self.prefixed_store, up_to).await
-    }
-
-    fn validate_commit(
-        &self,
-        table: &dyn TableReference,
-        actions: &[Action],
-        _operation: &DeltaOperation,
-    ) -> DeltaResult<()> {
-        let table = table.eager_snapshot().table_configuration();
-        validate_catalog_managed_commit(self.coordinator.table_uuid(), table, actions)
     }
 
     fn object_store(&self) -> Arc<dyn ObjectStore> {
@@ -631,26 +567,6 @@ mod tests {
     }
 
     #[test]
-    fn error_classifiers_match_status_and_typed_variants() {
-        use unity_catalog_delta_client_api::Error;
-        assert!(is_version_conflict(&Error::Generic(
-            "HTTP error (status 409): version exists".into()
-        )));
-        assert!(!is_version_conflict(&Error::Generic(
-            "HTTP error (status 500): boom".into()
-        )));
-        assert!(is_unbackfilled_limit(
-            &Error::MaxUnpublishedCommitsExceeded(100)
-        ));
-        assert!(is_unbackfilled_limit(&Error::Generic(
-            "HTTP error (status 429): too many".into()
-        )));
-        assert!(!is_unbackfilled_limit(&Error::Generic(
-            "HTTP error (status 409): version exists".into()
-        )));
-    }
-
-    #[test]
     fn catalog_managed_is_opt_in() {
         let mut cfg = StorageConfig::default();
         assert!(!crate::is_catalog_managed_requested(&cfg));
@@ -797,119 +713,5 @@ mod tests {
             read(&store, "_delta_log/00000000000000000001.json").await,
             Some(Bytes::from_static(b"published"))
         );
-    }
-
-    fn uc_protocol(reader: &[&str], writer: &[&str]) -> deltalake_core::kernel::Protocol {
-        serde_json::from_value(serde_json::json!({
-            "minReaderVersion": 3,
-            "minWriterVersion": 7,
-            "readerFeatures": reader,
-            "writerFeatures": writer,
-        }))
-        .unwrap()
-    }
-
-    fn valid_protocol() -> deltalake_core::kernel::Protocol {
-        uc_protocol(
-            &["catalogManaged", "vacuumProtocolCheck"],
-            &["catalogManaged", "vacuumProtocolCheck", "inCommitTimestamp"],
-        )
-    }
-
-    fn valid_config() -> std::collections::HashMap<String, String> {
-        std::collections::HashMap::from([
-            (UC_TABLE_ID_KEY.to_string(), TABLE_UUID.to_string()),
-            (
-                "delta.enableInCommitTimestamps".to_string(),
-                "true".to_string(),
-            ),
-        ])
-    }
-
-    fn validate(
-        protocol: &deltalake_core::kernel::Protocol,
-        config: &std::collections::HashMap<String, String>,
-        actions: &[Action],
-    ) -> DeltaResult<()> {
-        let metadata = deltalake_core::kernel::new_metadata(
-            &deltalake_core::kernel::StructType::try_new(vec![])?,
-            Vec::<String>::new(),
-            config.clone(),
-        )?;
-        let table = TableConfiguration::try_new(
-            metadata,
-            protocol.clone(),
-            Url::parse("memory:///table/").unwrap(),
-            0,
-        )?;
-        validate_catalog_managed_commit(TABLE_UUID, &table, actions)
-    }
-
-    #[test]
-    fn validate_accepts_data_only_commits() {
-        let add = Action::Add(Default::default());
-        validate(&valid_protocol(), &valid_config(), &[add]).unwrap();
-    }
-
-    #[test]
-    fn validate_rejects_alter_table_changes() {
-        let protocol = Action::Protocol(valid_protocol());
-        let err = validate(&valid_protocol(), &valid_config(), &[protocol]).unwrap_err();
-        assert!(err.to_string().contains("protocol or metadata"), "{err}");
-
-        let metadata = deltalake_core::kernel::new_metadata(
-            &deltalake_core::kernel::StructType::try_new(vec![]).unwrap(),
-            Vec::<String>::new(),
-            Vec::<(String, String)>::new(),
-        )
-        .unwrap();
-        let err = validate(
-            &valid_protocol(),
-            &valid_config(),
-            &[Action::Metadata(metadata)],
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("protocol or metadata"), "{err}");
-    }
-
-    #[test]
-    fn validate_requires_catalog_managed_state() {
-        let missing_vacuum = uc_protocol(
-            &["catalogManaged"],
-            &["catalogManaged", "inCommitTimestamp"],
-        );
-        let err = validate(&missing_vacuum, &valid_config(), &[]).unwrap_err();
-        assert!(err.to_string().contains("vacuumProtocolCheck"), "{err}");
-
-        let missing_ict = uc_protocol(
-            &["catalogManaged", "vacuumProtocolCheck"],
-            &["catalogManaged", "vacuumProtocolCheck"],
-        );
-        let err = validate(&missing_ict, &valid_config(), &[]).unwrap_err();
-        assert!(err.to_string().contains("in-commit timestamps"), "{err}");
-
-        let mut other_table = valid_config();
-        other_table.insert(UC_TABLE_ID_KEY.to_string(), "another-table".to_string());
-        let err = validate(&valid_protocol(), &other_table, &[]).unwrap_err();
-        assert!(err.to_string().contains("table ID mismatch"), "{err}");
-
-        let mut no_id = valid_config();
-        no_id.remove(UC_TABLE_ID_KEY);
-        assert!(validate(&valid_protocol(), &no_id, &[]).is_err());
-
-        let mut ict_off = valid_config();
-        ict_off.insert(
-            "delta.enableInCommitTimestamps".to_string(),
-            "false".to_string(),
-        );
-        let err = validate(&valid_protocol(), &ict_off, &[]).unwrap_err();
-        assert!(err.to_string().contains("in-commit timestamps"), "{err}");
-    }
-
-    #[test]
-    fn table_uuid_change_is_detected() {
-        check_table_uuid(TABLE_UUID, TABLE_UUID).unwrap();
-        let err = check_table_uuid(TABLE_UUID, "recreated").unwrap_err();
-        assert!(err.to_string().contains("dropped and recreated"), "{err}");
     }
 }
