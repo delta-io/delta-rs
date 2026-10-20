@@ -200,6 +200,7 @@ class TableProperty(StrEnum):
     CHECKPOINT_INTERVAL = "delta.checkpointInterval"
     CHECKPOINT_WRITE_STATS_AS_JSON = "delta.checkpoint.writeStatsAsJson"
     CHECKPOINT_WRITE_STATS_AS_STRUCT = "delta.checkpoint.writeStatsAsStruct"
+    # Deprecated: ignored since 1.0.0, checkpoint encoding is not configurable.
     CHECKPOINT_USE_RUN_LENGTH_ENCODING = "delta-rs.checkpoint.useRunLengthEncoding"
     CHECKPOINT_POLICY = "delta.checkpointPolicy"
     COLUMN_MAPPING_MODE = "delta.columnMapping.mode"
@@ -905,6 +906,7 @@ class DeltaTable:
     ) -> dict[str, Any]:
         """`UPDATE` records in the Delta Table that matches an optional predicate. Either updates or new_values needs
         to be passed for it to execute.
+        If a datetime object without a timezone is passed in `new_values`, the UTC timezone will be assumed.
 
         Args:
             updates: a mapping of column name to update SQL expression.
@@ -972,6 +974,8 @@ class DeltaTable:
                 elif isinstance(value, str):
                     value = "'" + value.replace("'", "''") + "'"
                 elif isinstance(value, datetime):
+                    if value.tzinfo is None:
+                        value = value.replace(tzinfo=timezone.utc)
                     value = str(
                         int(value.timestamp() * 1000 * 1000)
                     )  # convert to microseconds
