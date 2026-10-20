@@ -200,6 +200,7 @@ class TableProperty(StrEnum):
     CHECKPOINT_INTERVAL = "delta.checkpointInterval"
     CHECKPOINT_WRITE_STATS_AS_JSON = "delta.checkpoint.writeStatsAsJson"
     CHECKPOINT_WRITE_STATS_AS_STRUCT = "delta.checkpoint.writeStatsAsStruct"
+    # Deprecated: ignored since 1.0.0, checkpoint encoding is not configurable.
     CHECKPOINT_USE_RUN_LENGTH_ENCODING = "delta-rs.checkpoint.useRunLengthEncoding"
     CHECKPOINT_POLICY = "delta.checkpointPolicy"
     COLUMN_MAPPING_MODE = "delta.columnMapping.mode"

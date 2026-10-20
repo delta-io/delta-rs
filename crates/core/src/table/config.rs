@@ -38,6 +38,7 @@ pub enum TableProperty {
 
     /// true for Delta Lake to write checkpoint files using run length encoding (RLE).
     /// Some readers don't support run length encoding (i.e. Fabric) so this can be disabled.
+    #[deprecated(note = "Checkpoints are written by delta-kernel, which ignores this property")]
     CheckpointUseRunLengthEncoding,
 
     /// Whether column mapping is enabled for Delta table columns and the corresponding
@@ -121,6 +122,7 @@ pub enum TableProperty {
     CheckpointPolicy,
 }
 
+#[allow(deprecated)]
 impl AsRef<str> for TableProperty {
     fn as_ref(&self) -> &str {
         match self {
@@ -152,6 +154,7 @@ impl AsRef<str> for TableProperty {
     }
 }
 
+#[allow(deprecated)]
 impl FromStr for TableProperty {
     type Err = DeltaTableError;
 
