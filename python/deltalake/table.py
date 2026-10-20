@@ -1464,24 +1464,26 @@ class DeltaTable:
             filters: A SQL predicate string (`engine="datafusion"` only) or a disjunctive normal form (DNF) tuple predicate for filtering rows. `engine="pyarrow"` also accepts a pyarrow.dataset.Expression
             engine: The engine reading the table. The pyarrow engine is deprecated and will be removed in a future release
         """
-        if engine == "datafusion":
-            return self._to_pyarrow_table_datafusion(
-                partitions=partitions,
-                columns=columns,
-                filesystem=filesystem,
-                filters=filters,
-            )
-        if engine != "pyarrow":
-            raise ValueError(
-                f"unknown engine {engine!r}; expected 'pyarrow' or 'datafusion'"
-            )
-        _warn_pyarrow_engine("to_pyarrow_table")
-        return self._to_pyarrow_table_pyarrow(
-            partitions=partitions,
-            columns=columns,
-            filesystem=filesystem,
-            filters=filters,
-        )
+        match engine:
+            case "datafusion":
+                return self._to_pyarrow_table_datafusion(
+                    partitions=partitions,
+                    columns=columns,
+                    filesystem=filesystem,
+                    filters=filters,
+                )
+            case "pyarrow":
+                _warn_pyarrow_engine("to_pyarrow_table")
+                return self._to_pyarrow_table_pyarrow(
+                    partitions=partitions,
+                    columns=columns,
+                    filesystem=filesystem,
+                    filters=filters,
+                )
+            case _:
+                raise ValueError(
+                    f"unknown engine {engine!r}; expected 'pyarrow' or 'datafusion'"
+                )
 
     def _to_pyarrow_table_pyarrow(
         self,
@@ -1605,24 +1607,26 @@ class DeltaTable:
             types_mapper: A function mapping a pyarrow DataType to a pandas ExtensionDtype
             engine: The engine reading the table. The pyarrow engine is deprecated and will be removed in a future release
         """
-        if engine == "datafusion":
-            return self._to_pyarrow_table_datafusion(
-                partitions=partitions,
-                columns=columns,
-                filesystem=filesystem,
-                filters=filters,
-            ).to_pandas(types_mapper=types_mapper)
-        if engine != "pyarrow":
-            raise ValueError(
-                f"unknown engine {engine!r}; expected 'pyarrow' or 'datafusion'"
-            )
-        _warn_pyarrow_engine("to_pandas")
-        return self._to_pyarrow_table_pyarrow(
-            partitions=partitions,
-            columns=columns,
-            filesystem=filesystem,
-            filters=filters,
-        ).to_pandas(types_mapper=types_mapper)
+        match engine:
+            case "datafusion":
+                return self._to_pyarrow_table_datafusion(
+                    partitions=partitions,
+                    columns=columns,
+                    filesystem=filesystem,
+                    filters=filters,
+                ).to_pandas(types_mapper=types_mapper)
+            case "pyarrow":
+                _warn_pyarrow_engine("to_pandas")
+                return self._to_pyarrow_table_pyarrow(
+                    partitions=partitions,
+                    columns=columns,
+                    filesystem=filesystem,
+                    filters=filters,
+                ).to_pandas(types_mapper=types_mapper)
+            case _:
+                raise ValueError(
+                    f"unknown engine {engine!r}; expected 'pyarrow' or 'datafusion'"
+                )
 
     def update_incremental(self) -> None:
         """
