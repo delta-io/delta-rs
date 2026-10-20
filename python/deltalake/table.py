@@ -69,7 +69,12 @@ SUPPORTED_WRITER_FEATURES = {
 
 MAX_SUPPORTED_READER_VERSION = 3
 NOT_SUPPORTED_READER_VERSION = -1
-SUPPORTED_READER_FEATURES = {"timestampNtz", "v2Checkpoint", "variantType", "variantType-preview"}
+SUPPORTED_READER_FEATURES = {
+    "timestampNtz",
+    "v2Checkpoint",
+    "variantType",
+    "variantType-preview",
+}
 
 FSCK_METRICS_FILES_REMOVED_LABEL = "files_removed"
 
