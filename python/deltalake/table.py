@@ -157,41 +157,50 @@ def _sql_filter_literal(literal: FilterLiteralType) -> str:
     """Render one (column, op, value) tuple with the engine's declared
     semantics: `= None` is IS NULL, a None in an `in` list matches NULLs, and
     `not in` keeps SQL three-valued logic."""
-    if not (isinstance(literal, tuple) and len(literal) == 3):
-        raise ValueError(f"filter must be a (column, op, value) tuple: {literal!r}")
-    column, op, value = literal
-    if not isinstance(column, str) or op not in _SQL_FILTER_OPS:
-        raise ValueError(
-            f"invalid filter {literal!r}; expected a string column and an "
-            f"operator among =, !=, <, <=, >, >=, in, not in"
-        )
+    match literal:
+        case tuple((str() as column, str() as op, value)) if op in _SQL_FILTER_OPS:
+            pass
+        case tuple((_, _, _)):
+            raise ValueError(
+                f"invalid filter {literal!r}; expected a string column and an "
+                f"operator among =, !=, <, <=, >, >=, in, not in"
+            )
+        case _:
+            raise ValueError(f"filter must be a (column, op, value) tuple: {literal!r}")
+
     ident = _sql_identifier(column)
-    if op in ("in", "not in"):
-        if not isinstance(value, (list, tuple, set)):
+    match op, value:
+        case "not in", list() | tuple() | set() if not value:
+            return "TRUE"
+        case "not in", list() | tuple() | set():
+            return f"{ident} NOT IN ({', '.join(_sql_literal(v) for v in value)})"
+        case "in", list() | tuple() | set():
+            non_null = [v for v in value if v is not None]
+            has_null = len(non_null) != len(value)
+            in_clause = f"{ident} IN ({', '.join(_sql_literal(v) for v in non_null)})"
+            match non_null, has_null:
+                case [], False:
+                    return "FALSE"
+                case [], True:
+                    return f"{ident} IS NULL"
+                case _, False:
+                    return in_clause
+                case _:
+                    return f"({in_clause} OR {ident} IS NULL)"
+        case (("in" | "not in"), _):
             raise ValueError(f"operator {op!r} takes a list of values: {literal!r}")
-        values = list(value)
-        if op == "not in":
-            if not values:
-                return "TRUE"
-            return f"{ident} NOT IN ({', '.join(_sql_literal(v) for v in values)})"
-        non_null = [v for v in values if v is not None]
-        in_clause = (
-            f"{ident} IN ({', '.join(_sql_literal(v) for v in non_null)})"
-            if non_null
-            else "FALSE"
-        )
-        if len(non_null) == len(values):
-            return in_clause
-        return f"({in_clause} OR {ident} IS NULL)" if non_null else f"{ident} IS NULL"
-    if isinstance(value, (list, tuple, set)):
-        raise ValueError(f"operator {op!r} takes a single value: {literal!r}")
-    if value is None:
-        if op in ("=", "=="):
+        case _, list() | tuple() | set():
+            raise ValueError(f"operator {op!r} takes a single value: {literal!r}")
+        case (("=" | "=="), None):
             return f"{ident} IS NULL"
-        if op == "!=":
+        case "!=", None:
             return f"{ident} IS NOT NULL"
-        return f"{ident} {op} NULL"
-    return f"{ident} {'=' if op == '==' else op} {_sql_literal(value)}"
+        case _, None:
+            return f"{ident} {op} NULL"
+        case "==", _:
+            return f"{ident} = {_sql_literal(value)}"
+        case _:
+            return f"{ident} {op} {_sql_literal(value)}"
 
 
 def _filters_to_sql_predicate(filters: FilterType) -> str:
