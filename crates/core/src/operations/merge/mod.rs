@@ -1333,24 +1333,25 @@ async fn execute(
             None => TableReference::none(),
         };
         let name = delta_field.name();
-        let kernel_arrow_type = delta_field.data_type().try_into_arrow()?;
+        let kernel_arrow_type: DataType = delta_field.data_type().try_into_arrow()?;
         let mut cast_type: DataType = target_arrow_schema
             .field_with_name(name)
             .ok()
             .filter(|f| !matches!(f.data_type(), DataType::Dictionary(_, _)))
             .map(|f| f.data_type().clone())
-            .unwrap_or(kernel_arrow_type);
+            .unwrap_or_else(|| kernel_arrow_type.clone());
 
         // Receive the correct column reference given that some columns are only in source table
+        let mut field_changed = false;
         let column = if let Some(field) = snapshot.schema().field(name) {
-            if field == delta_field {
-                Column::new(qualifier.clone(), name)
-            } else {
-                // when there is a change in the field such as an added column in a nested data types casts will break with the new field data type
-                let col_ref = Column::new(source_qualifier.clone(), name);
-                cast_type = source_schema.data_type(&col_ref)?.to_owned();
-                col_ref
+            if field != delta_field {
+                // The field changed, e.g. a struct gained a field. Cast every branch, including
+                // the target value kept by rows that don't set it, to the merged type; missing
+                // nested fields become null.
+                field_changed = true;
+                cast_type = kernel_arrow_type;
             }
+            Column::new(qualifier.clone(), name)
         } else {
             null_target_column = Some(merge_cast(
                 lit(ScalarValue::Null).alias(name),
@@ -1365,6 +1366,14 @@ async fn execute(
                 .get(&column)
                 .map(|expr| expr.to_owned())
                 .unwrap_or_else(|| col(column.clone()));
+            // `try_cast` can't plan struct casts that add fields (DataFusion checks them with
+            // arrow's `can_cast_types`), and the merged type is a superset of the target and
+            // source types, so a strict cast loses nothing.
+            let op = if field_changed {
+                cast(op, cast_type.clone())
+            } else {
+                op
+            };
 
             when_expr.push(lit(idx as i32));
             then_expr.push(op);
@@ -1392,7 +1401,7 @@ async fn execute(
             merge_cast(
                 Expr::Column(Column::new(qualifier.clone(), delta_field.name())),
                 cast_type.clone(),
-                safe_cast,
+                safe_cast && !field_changed,
             )
         });
         if should_cdc {
@@ -2039,6 +2048,7 @@ mod tests {
     use itertools::Itertools;
     use pretty_assertions::assert_eq;
     use regex::Regex;
+    use rstest::rstest;
     use serde_json::json;
     use std::collections::HashMap;
     use std::ops::Neg;
@@ -4233,8 +4243,11 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_merge_with_schema_merge_and_pre_existing_struct_added_column() {
+    async fn test_merge_with_schema_merge_and_pre_existing_struct_added_column(
+        #[values(false, true)] safe_cast: bool,
+    ) {
         let table = setup_table(None).await;
 
         let nested_schema = Arc::new(ArrowSchema::new(vec![Field::new(
@@ -4300,6 +4313,7 @@ mod tests {
             .with_source_alias("source")
             .with_target_alias("target")
             .with_merge_schema(true)
+            .with_safe_cast(safe_cast)
             .when_not_matched_insert(|insert| {
                 insert
                     .set("id", col("source.id"))
@@ -4326,6 +4340,165 @@ mod tests {
         let actual = get_data(&table).await;
 
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    /// Merges a source row for id "B" whose `nested` struct has an extra field into the
+    /// struct table, which rewrites the file holding every target row.
+    async fn merge_widened_struct(
+        table: DeltaTable,
+        update_nested: bool,
+        safe_cast: bool,
+    ) -> DeltaTable {
+        let nested_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "count",
+            ArrowDataType::Int64,
+            true,
+        )]));
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new(
+                "nested",
+                ArrowDataType::Struct(nested_schema.fields().clone()),
+                true,
+            ),
+        ]));
+        let table = write_data_struct(table, &schema).await;
+
+        let nested_schema_source = Arc::new(ArrowSchema::new(vec![
+            Field::new("count", ArrowDataType::Int64, true),
+            Field::new("name", ArrowDataType::Utf8, true),
+        ]));
+        let schema_source = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new(
+                "nested",
+                ArrowDataType::Struct(nested_schema_source.fields().clone()),
+                true,
+            ),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema_source,
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B"])),
+                Arc::new(arrow::array::Int32Array::from(vec![20])),
+                Arc::new(arrow::array::StructArray::from(
+                    RecordBatch::try_new(
+                        nested_schema_source,
+                        vec![
+                            Arc::new(arrow::array::Int64Array::from(vec![9])),
+                            Arc::new(arrow::array::StringArray::from(vec!["John"])),
+                        ],
+                    )
+                    .unwrap(),
+                )),
+            ],
+        )
+        .unwrap();
+        let source = SessionContext::new().read_batch(batch).unwrap();
+
+        let (table, _) = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .with_safe_cast(safe_cast)
+            .when_matched_update(|update| {
+                let update = update.update("value", col("source.value"));
+                if update_nested {
+                    update.update("nested", col("source.nested"))
+                } else {
+                    update
+                }
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("nested", col("source.nested"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+        assert_latest_commit_has_metadata_action(&table, true).await;
+        table
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_merge_with_schema_merge_struct_added_field_keeps_copied_rows(
+        #[values(false, true)] safe_cast: bool,
+    ) {
+        let table = merge_widened_struct(setup_table(None).await, true, safe_cast).await;
+        let expected = vec![
+            "+----+-------+------------+------------------------+",
+            "| id | value | modified   | nested                 |",
+            "+----+-------+------------+------------------------+",
+            "| A  | 1     | 2021-02-01 | {count: 1, name: }     |",
+            "| B  | 20    | 2021-02-01 | {count: 9, name: John} |",
+            "| C  | 10    | 2021-02-02 | {count: 3, name: }     |",
+            "| D  | 100   | 2021-02-02 | {count: 4, name: }     |",
+            "+----+-------+------------+------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &get_data(&table).await);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_merge_with_schema_merge_struct_added_field_keeps_unset_column(
+        #[values(false, true)] safe_cast: bool,
+    ) {
+        let table = merge_widened_struct(setup_table(None).await, false, safe_cast).await;
+        let expected = vec![
+            "+----+-------+------------+--------------------+",
+            "| id | value | modified   | nested             |",
+            "+----+-------+------------+--------------------+",
+            "| A  | 1     | 2021-02-01 | {count: 1, name: } |",
+            "| B  | 20    | 2021-02-01 | {count: 2, name: } |",
+            "| C  | 10    | 2021-02-02 | {count: 3, name: } |",
+            "| D  | 100   | 2021-02-02 | {count: 4, name: } |",
+            "+----+-------+------------+--------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &get_data(&table).await);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_merge_with_schema_merge_struct_added_field_cdf(
+        #[values(false, true)] safe_cast: bool,
+    ) {
+        use crate::kernel::ProtocolInner;
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_actions(vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())])
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        let table = merge_widened_struct(table, true, safe_cast).await;
+
+        let ctx = SessionContext::new();
+        let cdf = table
+            .scan_cdf()
+            .with_starting_version(2)
+            .build(&ctx.state(), None)
+            .await
+            .unwrap();
+        let mut batches = collect(cdf, ctx.task_ctx()).await.unwrap();
+        // drop _commit_timestamp
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(6)).collect();
+        assert_batches_sorted_eq! {[
+            "+----+-------+------------+------------------------+------------------+-----------------+",
+            "| id | value | modified   | nested                 | _change_type     | _commit_version |",
+            "+----+-------+------------+------------------------+------------------+-----------------+",
+            "| B  | 10    | 2021-02-01 | {count: 2, name: }     | update_preimage  | 2               |",
+            "| B  | 20    | 2021-02-01 | {count: 9, name: John} | update_postimage | 2               |",
+            "+----+-------+------------+------------------------+------------------+-----------------+",
+        ], &batches }
     }
 
     #[tokio::test]

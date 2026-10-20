@@ -78,6 +78,15 @@ opentelemetry-otlp = { version = "0.33", features = ["http-proto"] }
 opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Temporary pin to unbreak Windows CI. cc 1.9.0 routes MSVC compiles through
+# RUSTC_WRAPPER (https://github.com/rust-lang/cc-rs/pull/2022), and sccache's
+# MSVC argument handling then breaks the C++ build of libmimalloc-sys on
+# windows-latest runners ("/WX-" is consumed by cl.exe as a source file).
+# Cargo.lock is gitignored, so the pin must live here; it is referenced by
+# deltalake-python's build-dependencies to constrain workspace resolution.
+# Remove once sccache handles -Tp/-Tc arguments (https://github.com/mozilla/sccache/issues/2062).
+cc = "=1.8.0"
+
 [workspace.metadata.typos]
 files.extend-exclude = ["CHANGELOG.md", "crates/benchmarks/queries/tpcds/*.sql"]
 default.extend-ignore-re = [
