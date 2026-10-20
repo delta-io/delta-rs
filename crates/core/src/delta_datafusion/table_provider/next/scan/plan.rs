@@ -1367,6 +1367,51 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_parquet_read_schema_override_is_noop_when_all_children_selected() -> TestResult {
+        // Guards the no-op branch in `narrow_field`:
+        // when the override selects every child of a struct root (kept.len() ==
+        // phys_children.fields().len()), the narrowing is a no-op and the
+        // physical struct is returned unchanged. Also exercises the deliberate
+        // one-level-only scope documented on `narrow_physical_to_override`.
+        let mut table = open_fs_path("../test/tests/data/table_with_null_stats_in_notnull_struct");
+        table.load().await?;
+        let snapshot = table.snapshot()?.snapshot();
+
+        // Override explicitly selects BOTH children of `s`.
+        let override_schema = Arc::new(Schema::new(vec![Arc::new(arrow_schema::Field::new(
+            "s",
+            DataType::Struct(
+                vec![
+                    Arc::new(arrow_schema::Field::new("l", DataType::Int64, false)),
+                    Arc::new(arrow_schema::Field::new("b", DataType::Boolean, true)),
+                ]
+                .into(),
+            ),
+            false,
+        ))]));
+        let config = DeltaScanConfig {
+            schema: Some(override_schema),
+            ..Default::default()
+        };
+
+        let scan_plan = KernelScanPlan::try_new(snapshot.snapshot(), None, &[], &config, None)?;
+
+        // Both physical children must remain (no-op passthrough).
+        let s_field = scan_plan.parquet_read_schema.field_with_name("s")?;
+        let DataType::Struct(children) = s_field.data_type() else {
+            panic!("expected struct, got {:?}", s_field.data_type());
+        };
+        let mut child_names: Vec<&str> = children.iter().map(|f| f.name().as_str()).collect();
+        child_names.sort();
+        assert_eq!(
+            child_names,
+            vec!["b", "l"],
+            "no-op override must preserve all physical children; got {child_names:?}"
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_projected_scan_contract_separates_provider_capability_from_scan_output_requirement()
     -> TestResult {
