@@ -259,3 +259,25 @@ def test_stats_columns_after_excluded_struct(tmp_path: pathlib.Path) -> None:
     assert actions["min"][0].as_py() == {"a": 1, "b": 3}
     assert actions["max"][0].as_py() == {"a": 2, "b": 4}
     assert actions["null_count"][0].as_py() == {"a": 0, "b": 0}
+
+
+@pytest.mark.pyarrow
+def test_pyarrow_dataset_keeps_files_without_min_max_4915(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A file with no min/max for a column must not be skipped by a filter on it."""
+    import pyarrow as pa
+
+    def make(i: int) -> pa.Table:
+        return pa.table({"k": [f"k{i}{j}" for j in range(4)], "flag": [True] * 4})
+
+    write_deltalake(
+        tmp_path, make(1), configuration={"delta.dataSkippingStatsColumns": "k"}
+    )
+    DeltaTable(tmp_path).alter.set_table_properties(
+        {"delta.dataSkippingStatsColumns": "k,flag"}
+    )
+    write_deltalake(tmp_path, make(2), mode="append")
+
+    dt = DeltaTable(tmp_path)
+    assert dt.to_pyarrow_table(filters=[("flag", "=", True)]).num_rows == 8
