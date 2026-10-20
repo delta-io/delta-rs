@@ -2597,6 +2597,8 @@ fn filestats_to_expression_next<'py>(
                 match value {
                     // TODO: Handle nested field statistics.
                     Scalar::Struct(_) => {}
+                    // No statistic for this column in this file, so no bound.
+                    Scalar::Null(_) => {}
                     _ => {
                         let maybe_minimum =
                             cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, schema);
@@ -2626,6 +2628,8 @@ fn filestats_to_expression_next<'py>(
                 match value {
                     // TODO: Handle nested field statistics.
                     Scalar::Struct(_) => {}
+                    // No statistic for this column in this file, so no bound.
+                    Scalar::Null(_) => {}
                     _ => {
                         let maybe_maximum =
                             cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, schema);
