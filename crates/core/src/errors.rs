@@ -227,6 +227,27 @@ pub enum DeltaTableError {
     #[error("End timestamp {ending_timestamp} is greater than latest commit timestamp")]
     ChangeDataTimestampGreaterThanCommit { ending_timestamp: DateTime<Utc> },
 
+    /// A data file referenced by a commit in the CDF read range is missing from
+    /// object storage, typically because `VACUUM` removed it past
+    /// `delta.deletedFileRetentionDuration` while `delta.logRetentionDuration`
+    /// kept the referencing commit log entry around. CDF reads are bounded by
+    /// `deletedFileRetentionDuration`; set it to span the CDF range you need, or
+    /// start the CDF read at a later version.
+    #[error(
+        "Change data file for version {version} is missing from storage: {path}. \
+         This file was likely removed by VACUUM. CDF reads are bounded by \
+         `delta.deletedFileRetentionDuration` (currently stricter than \
+         `delta.logRetentionDuration`). {retention_guidance}"
+    )]
+    ChangeDataFileNotFound {
+        /// The commit version whose `add`/`remove`/`cdc` action referenced this path.
+        version: Version,
+        /// The missing object-store path.
+        path: String,
+        /// Human-readable guidance on how to adjust retention or the CDF range.
+        retention_guidance: String,
+    },
+
     #[error("No starting version or timestamp provided for CDC")]
     NoStartingVersionOrTimestamp,
 
