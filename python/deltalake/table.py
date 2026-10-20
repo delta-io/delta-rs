@@ -1242,7 +1242,14 @@ class DeltaTable:
                     "but these are not yet supported by the deltalake reader."
                 )
 
-        if (
+        # minReaderVersion 2 tables carry column mapping without a
+        # reader_features list, so the feature check alone misses them and the
+        # scanner reads logical column names against physical parquet columns,
+        # returning all nulls. Check the table configuration directly.
+        column_mapping_mode = self.metadata().configuration.get(
+            "delta.columnMapping.mode", "none"
+        )
+        if column_mapping_mode not in ("none",) or (
             table_protocol.reader_features
             and "columnMapping" in table_protocol.reader_features
         ):
