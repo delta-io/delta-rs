@@ -2294,6 +2294,23 @@ async fn test_optimize_spark_written_nullable_nested_field() -> Result<(), Box<d
     Ok(())
 }
 
+#[tokio::test]
+async fn test_optimize_partition_values_with_special_characters() -> Result<(), Box<dyn Error>> {
+    for value in ["a~b", "a b", "a%b", "a%20b", "a/b"] {
+        let context = setup_test(true).await?;
+        let mut dt = context.table;
+        let mut writer = RecordBatchWriter::for_table(&dt)?;
+        write(&mut writer, &mut dt, tuples_to_batch(vec![(1, 2)], value)?).await?;
+        write(&mut writer, &mut dt, tuples_to_batch(vec![(2, 3)], value)?).await?;
+
+        let (dt, metrics) = dt.optimize().await?;
+        assert_eq!(metrics.num_files_removed, 2, "partition value {value:?}");
+        assert_eq!(metrics.num_files_added, 1, "partition value {value:?}");
+        assert_eq!(dt.get_file_uris()?.count(), 1, "partition value {value:?}");
+    }
+    Ok(())
+}
+
 /// Issue <https://github.com/delta-io/delta-rs/issues/3790>: one 8192-row scan batch holds
 /// ~2.2 GB of strings, which overflowed i32 offsets when optimize cast it from Utf8View to Utf8.
 #[tokio::test]
