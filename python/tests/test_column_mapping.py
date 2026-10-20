@@ -182,3 +182,61 @@ def test_column_mapping_merge_schema_evolution_rejected(tmp_path: pathlib.Path):
             .when_not_matched_insert_all()
             .execute()
         )
+
+
+def test_column_mapping_drop_column(tmp_path: pathlib.Path):
+    """Dropping a column on a column-mapped table removes it from the schema while the
+    surviving column still reads back every row."""
+    table_uri = _column_mapping_table(tmp_path)
+    dt = DeltaTable(table_uri)
+
+    dt.alter.drop_columns("Super Name")
+
+    assert dt.schema().to_arrow().names == ["Company Very Short"]
+    assert dt.history(1)[0]["operation"] == "DROP COLUMNS"
+
+    result = (
+        QueryBuilder()
+        .register("tbl", DeltaTable(table_uri))
+        .execute('select "Company Very Short" from tbl order by "Company Very Short"')
+        .read_all()
+    )
+    assert result.to_struct_array().to_pylist() == [
+        {"Company Very Short": "BME"},
+        {"Company Very Short": "BMS"},
+        {"Company Very Short": "BMS"},
+        {"Company Very Short": "BMS"},
+        {"Company Very Short": "BMS"},
+    ]
+
+
+def test_column_mapping_drop_partition_column_rejected(tmp_path: pathlib.Path):
+    """A partition column is encoded in the file layout, so it cannot be dropped."""
+    table_uri = _column_mapping_table(tmp_path)
+    dt = DeltaTable(table_uri)
+
+    with pytest.raises(DeltaError, match="partition column"):
+        dt.alter.drop_columns("Company Very Short")
+
+
+def test_column_mapping_drop_all_columns_rejected(tmp_path: pathlib.Path):
+    """A table must keep at least one column."""
+    table_uri = _column_mapping_table(tmp_path)
+    dt = DeltaTable(table_uri)
+
+    with pytest.raises(DeltaError, match="at least one column"):
+        dt.alter.drop_columns(["Company Very Short", "Super Name"])
+
+
+def test_column_mapping_drop_missing_column(tmp_path: pathlib.Path):
+    """A missing column raises by default, and is a no-op when raise_if_not_exists=False."""
+    table_uri = _column_mapping_table(tmp_path)
+    dt = DeltaTable(table_uri)
+    version_before = dt.version()
+
+    with pytest.raises(DeltaError, match="does_not_exist"):
+        dt.alter.drop_columns("does_not_exist")
+
+    dt.alter.drop_columns("does_not_exist", raise_if_not_exists=False)
+    assert dt.version() == version_before
+    assert dt.schema().to_arrow().names == ["Company Very Short", "Super Name"]
