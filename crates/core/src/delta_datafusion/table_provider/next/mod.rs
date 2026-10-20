@@ -39,7 +39,6 @@ use datafusion::{
     physical_plan::ExecutionPlan,
 };
 use delta_kernel::{Engine, table_configuration::TableConfiguration, table_features::TableFeature};
-use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -233,7 +232,7 @@ fn add_path_for_selection(add: Add) -> String {
         strip_url_sensitive_parts(&mut url);
         url.to_string()
     } else {
-        String::from(Path::from(path))
+        crate::kernel::models::actions::serde_path::encode_path(&path)
     }
 }
 

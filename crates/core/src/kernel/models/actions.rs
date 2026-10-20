@@ -1327,7 +1327,7 @@ pub(crate) mod serde_path {
         .add(b'*')
         .add(b'?');
 
-    fn encode_path(path: &str) -> String {
+    pub(crate) fn encode_path(path: &str) -> String {
         utf8_percent_encode(path, INVALID).to_string()
     }
 
