@@ -56,29 +56,6 @@ const KNOWN_FAILURES: KnownFailures = &[
         &["time_travel_timestamps_read_ts_epoch"],
     ),
     (
-        "the interval year-to-month type panics in crates/core/src/kernel/snapshot/iterators/\
-         scan_row.rs",
-        &["interval_types_intv_003_interval_partitioned_read_all"],
-    ),
-    (
-        "a LIKE filter on a nested field is dropped: the provider reports it as exact, and the \
-         parquet row filter skips nested fields",
-        &[
-            "data_skipping_starts_with_nested_read_ab_like_a",
-            "data_skipping_starts_with_nested_read_ab_like_app",
-            "data_skipping_starts_with_nested_read_ab_like_b",
-            "data_skipping_starts_with_nested_read_miss_c",
-            "data_skipping_starts_with_nested_read_miss_z",
-        ],
-    ),
-    (
-        "IS NOT NULL on a nested field added later keeps the rows of older files",
-        &[
-            "schema_evolution_add_nested_field_read_infoemail_is_not_null",
-            "schema_evolution_nested_field_pred_read_infoemail_is_not_null",
-        ],
-    ),
-    (
         "the typeWidening reader feature is rejected; the kernel reads these tables through the \
          executor",
         &[
