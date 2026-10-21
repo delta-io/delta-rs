@@ -5,7 +5,7 @@
 # For the most part you should be able to rely on cargo for development.
 
 .DEFAULT_GOAL := help
-DAT_VERSION := 0.0.3
+DAT_VERSION := 0.0.8
 DEFAULT_FEATURES := "integration_test,azure,datafusion,s3,gcs,glue,hdfs"
 
 ## begin dat related
@@ -16,12 +16,13 @@ setup-dat: dat/v$(DAT_VERSION) ## Download and setup the Delta Acceptance Tests 
 dat:
 	mkdir -p dat
 
-dat/v$(DAT_VERSION): dat  ## Download DAT test files into ./dat
-	curl -L --silent --output dat/deltalake-dat-v$(DAT_VERSION).tar.gz \
-		https://github.com/delta-incubator/dat/releases/download/v$(DAT_VERSION)/deltalake-dat-v$(DAT_VERSION).tar.gz
-	tar --no-same-permissions -xzf dat/deltalake-dat-v$(DAT_VERSION).tar.gz
-	mv out dat/v$(DAT_VERSION)
-	rm dat/deltalake-dat-v$(DAT_VERSION).tar.gz
+dat/v$(DAT_VERSION): dat  ## Download the DAT workloads into ./dat
+	curl -L --silent --fail --output dat/dat-workloads-v$(DAT_VERSION).tar.gz \
+		https://github.com/delta-incubator/dat/releases/download/v$(DAT_VERSION)-preview/v$(DAT_VERSION)_dat_workloads.tar.gz
+	mkdir -p $@.tmp
+	tar --no-same-permissions -xzf dat/dat-workloads-v$(DAT_VERSION).tar.gz -C $@.tmp
+	mv $@.tmp $@
+	rm dat/dat-workloads-v$(DAT_VERSION).tar.gz
 
 
 ####################

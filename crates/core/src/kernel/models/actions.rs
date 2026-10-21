@@ -1482,7 +1482,7 @@ mod tests {
 
     #[test]
     fn test_serialize_round_trips_spark_written_path() {
-        // Spark writes this path, see dat/v0.0.3/reader_tests/generated/multi_partitioned_2.
+        // Spark writes this path, see crates/test/tests/data/multi_partitioned_2.
         // Re-serializing it has to reproduce the same string, because kernel matches removes
         // against adds on the raw path rather than the decoded one.
         let path = "bool=false/time=1970-01-02%2008%253A45%253A00/amount=12.000000000000000000/part-00000-12004196-1e98-4a42-a622-a12f05a4578e.c000.snappy.parquet";

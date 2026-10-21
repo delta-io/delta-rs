@@ -1105,7 +1105,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_meta_only_scan() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1156,7 +1156,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_meta_only_scan_with_projection() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1202,7 +1202,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_meta_only_scan_with_file_id() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().with_file_column("file_id").await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1233,7 +1233,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_meta_only_scan_with_file_id_count_all() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().with_file_column("file_id").await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1255,7 +1255,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_meta_only_scan_with_file_id_projection() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().with_file_column("file_id").await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1291,7 +1291,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_meta_only_scan_excludes_unprojected_file_id_from_reported_schema() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().with_file_column("file_id").await?;
         let session = Arc::new(create_session().into_inner());
         let data_idx = provider.schema().index_of("data").unwrap();

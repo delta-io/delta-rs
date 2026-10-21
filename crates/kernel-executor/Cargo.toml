@@ -48,6 +48,8 @@ tokio = { workspace = true, features = ["rt", "sync"] }
 [dev-dependencies]
 arrow-array = { workspace = true }
 rstest = { version = "0.27" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

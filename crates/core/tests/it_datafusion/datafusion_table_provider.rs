@@ -14,7 +14,7 @@ use deltalake_core::delta_datafusion::create_session;
 use deltalake_core::delta_datafusion::engine::DataFusionEngine;
 use deltalake_core::kernel::Snapshot;
 use deltalake_test::TestResult;
-use deltalake_test::acceptance::read_dat_case;
+use url::Url;
 
 async fn scan_dat(case: &str) -> TestResult<(Snapshot, SessionContext)> {
     let session = create_session().into_inner();
@@ -24,15 +24,14 @@ async fn scan_dat(case: &str) -> TestResult<(Snapshot, SessionContext)> {
 
 async fn scan_dat_with_session(case: &str, session: &SessionContext) -> TestResult<Snapshot> {
     let root_dir = format!(
-        "{}/../../dat/v0.0.3/reader_tests/generated/{}/",
+        "{}/../test/tests/data/{}/",
         env!["CARGO_MANIFEST_DIR"],
         case
     );
-    let root_dir = std::fs::canonicalize(root_dir)?;
-    let case = read_dat_case(root_dir)?;
+    let table_root = Url::from_directory_path(std::fs::canonicalize(root_dir)?).unwrap();
 
     let engine = DataFusionEngine::new_from_session(&session.state());
-    let snapshot = Snapshot::try_new_with_engine(engine.clone(), case.table_root()?, None).await?;
+    let snapshot = Snapshot::try_new_with_engine(engine.clone(), table_root, None).await?;
 
     Ok(snapshot)
 }
