@@ -64,6 +64,7 @@ pub(crate) use crate::delta_datafusion::file_id::FILE_ID_COLUMN_DEFAULT;
 
 /// Policy for selected files that are not active in a scan snapshot.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MissingSelectedFilePolicy {
     /// Return an error when a selected file is not active in the scan snapshot.
     #[default]
@@ -432,6 +433,7 @@ pub(crate) fn normalize_path_as_file_id(
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SnapshotWrapper {
     Snapshot(Arc<Snapshot>),
     EagerSnapshot(Arc<EagerSnapshot>),
