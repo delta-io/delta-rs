@@ -3836,3 +3836,46 @@ def test_merge_insert_predicate_skips_rejected_rows_4784(
 
     result = DeltaTable(tmp_path).to_pyarrow_table().sort_by("id").to_pylist()
     assert result == [{"id": 1, "v": 10.0}, {"id": 2, "v": 20.0}]
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("operation", ["merge", "update", "delete"])
+def test_rewrites_keep_pyarrow_string_filters_working(
+    tmp_path: pathlib.Path, operation: str
+):
+    """Rewritten files used to carry string_view, which pyarrow can't compare
+    with a string value, so filtered pyarrow reads failed (#4909)."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    write_deltalake(
+        tmp_path,
+        pa.table(
+            {
+                "k": [1, 2, 3],
+                "purpose": ["load", "discharge", "load"],
+                "payload": [b"a", b"b", b"c"],
+            }
+        ),
+    )
+    dt = DeltaTable(tmp_path)
+    if operation == "merge":
+        source = pa.table(
+            {"k": [3, 4], "purpose": ["discharge", "load"], "payload": [b"c", b"d"]}
+        )
+        dt.merge(
+            source, predicate="t.k = s.k", source_alias="s", target_alias="t"
+        ).when_matched_update_all().when_not_matched_insert_all().execute()
+    elif operation == "update":
+        dt.update(predicate="k = 1", updates={"purpose": "'discharge'"})
+    else:
+        dt.delete("k = 2")
+
+    dt = DeltaTable(tmp_path)
+    for uri in dt.file_uris():
+        schema = pq.read_schema(uri)
+        assert not pa.types.is_string_view(schema.field("purpose").type), uri
+        assert not pa.types.is_binary_view(schema.field("payload").type), uri
+    expected_rows = {"merge": 2, "update": 1, "delete": 2}[operation]
+    loads = dt.to_pyarrow_table(filters=[("purpose", "==", "load")])
+    assert loads.num_rows == expected_rows

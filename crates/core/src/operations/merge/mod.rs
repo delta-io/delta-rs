@@ -3424,6 +3424,98 @@ mod tests {
             .unwrap()
     }
 
+    /// Merge, update and delete read the table with `Utf8View`/`BinaryView` columns. The files
+    /// they write must not carry the view types: pyarrow can't compare a `string_view` column
+    /// with a `string` value, so filtered pyarrow reads of those files fail (#4909).
+    #[tokio::test]
+    async fn test_rewrites_do_not_write_view_types() {
+        use crate::logstore::parquet_reader::ParquetObjectReader;
+        use arrow::array::{ArrayRef, BinaryArray, ListBuilder, StringBuilder, StructArray};
+        use parquet::arrow::ParquetRecordBatchStreamBuilder;
+
+        async fn assert_no_view_types(table: &DeltaTable, operation: &str) {
+            fn has_view(data_type: &ArrowDataType) -> bool {
+                match data_type {
+                    ArrowDataType::Utf8View | ArrowDataType::BinaryView => true,
+                    ArrowDataType::Struct(fields) => fields.iter().any(|f| has_view(f.data_type())),
+                    ArrowDataType::List(f) | ArrowDataType::LargeList(f) => has_view(f.data_type()),
+                    _ => false,
+                }
+            }
+            let store = table.log_store().object_store();
+            for add in table.snapshot().unwrap().log_data() {
+                let reader = ParquetObjectReader::new(store.clone(), add.object_store_path());
+                let builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
+                for field in builder.schema().fields() {
+                    assert!(
+                        !has_view(field.data_type()),
+                        "{operation} wrote {}: {}",
+                        field.name(),
+                        field.data_type()
+                    );
+                }
+            }
+        }
+
+        let tag = Arc::new(Field::new("tag", ArrowDataType::Utf8, true));
+        let mut labels = ListBuilder::new(StringBuilder::new());
+        for row in [["x", "y"], ["y", "z"], ["z", "x"]] {
+            labels.append_value(row.map(Some));
+        }
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "id",
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C"])) as ArrayRef,
+            ),
+            (
+                "payload",
+                Arc::new(BinaryArray::from_vec(vec![b"a", b"b", b"c"])) as ArrayRef,
+            ),
+            (
+                "nested",
+                Arc::new(StructArray::from(vec![(
+                    tag,
+                    Arc::new(arrow::array::StringArray::from(vec!["t1", "t2", "t3"])) as ArrayRef,
+                )])) as ArrayRef,
+            ),
+            ("labels", Arc::new(labels.finish()) as ArrayRef),
+        ])
+        .unwrap();
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch.clone()])
+            .await
+            .unwrap();
+        assert_no_view_types(&table, "write").await;
+
+        let source = SessionContext::new().read_batch(batch.slice(1, 1)).unwrap();
+        let (table, _) = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update.update("payload", lit(ScalarValue::Binary(Some(b"m".to_vec()))))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+        assert_no_view_types(&table, "merge").await;
+
+        let (table, _) = table
+            .update()
+            .with_predicate(col("id").eq(lit("A")))
+            .with_update("payload", lit(ScalarValue::Binary(Some(b"u".to_vec()))))
+            .await
+            .unwrap();
+        assert_no_view_types(&table, "update").await;
+
+        let (table, _) = table
+            .delete()
+            .with_predicate(col("id").eq(lit("C")))
+            .await
+            .unwrap();
+        assert_no_view_types(&table, "delete").await;
+    }
+
     async fn write_data_struct(table: DeltaTable, schema: &Arc<ArrowSchema>) -> DeltaTable {
         let count_array = arrow::array::Int64Array::from(vec![Some(1), Some(2), Some(3), Some(4)]);
         let nested_schema = Arc::new(ArrowSchema::new(vec![Field::new(

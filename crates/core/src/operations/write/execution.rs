@@ -1,12 +1,13 @@
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
 
-use arrow::datatypes::Schema;
+use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow_array::RecordBatch;
 use datafusion::catalog::Session;
 use datafusion::common::ToDFSchema;
 use datafusion::logical_expr::{Expr, col, lit, when};
-use datafusion::physical_expr::expressions::col as physical_col;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::{CastExpr, col as physical_col};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{
@@ -58,8 +59,69 @@ mod tests {
 
     use super::{
         ObjectStoreRef, SendableRecordBatchStream, WriterConfig, parse_positive_usize,
-        write_streams,
+        without_view_types, write_streams,
     };
+
+    #[test]
+    fn without_view_types_uses_large_types_at_every_level() {
+        let field = |name: &str, data_type: DataType| Arc::new(Field::new(name, data_type, true));
+        let with_views = DataType::Struct(
+            vec![
+                field("s", DataType::Utf8View),
+                field("b", DataType::BinaryView),
+                field("l", DataType::List(field("item", DataType::Utf8View))),
+                field(
+                    "m",
+                    DataType::Map(
+                        field(
+                            "entries",
+                            DataType::Struct(
+                                vec![
+                                    Arc::new(Field::new("key", DataType::Utf8View, false)),
+                                    field("value", DataType::BinaryView),
+                                ]
+                                .into(),
+                            ),
+                        ),
+                        false,
+                    ),
+                ),
+                field("i", DataType::Int64),
+            ]
+            .into(),
+        );
+        let expected = DataType::Struct(
+            vec![
+                field("s", DataType::LargeUtf8),
+                field("b", DataType::LargeBinary),
+                field("l", DataType::List(field("item", DataType::LargeUtf8))),
+                field(
+                    "m",
+                    DataType::Map(
+                        field(
+                            "entries",
+                            DataType::Struct(
+                                vec![
+                                    Arc::new(Field::new("key", DataType::LargeUtf8, false)),
+                                    field("value", DataType::LargeBinary),
+                                ]
+                                .into(),
+                            ),
+                        ),
+                        false,
+                    ),
+                ),
+                field("i", DataType::Int64),
+            ]
+            .into(),
+        );
+
+        assert_eq!(without_view_types(&with_views), expected);
+        assert_eq!(
+            without_view_types(&DataType::LargeUtf8),
+            DataType::LargeUtf8
+        );
+    }
 
     #[rstest]
     #[case::zero(Some("0"), 7)]
@@ -473,6 +535,67 @@ fn drop_internal_column(
     Ok(Arc::new(ProjectionExec::try_new(expressions, plan)?))
 }
 
+/// `plan` with `Utf8View`/`BinaryView` columns (also inside structs, lists and maps) cast to
+/// `LargeUtf8`/`LargeBinary`.
+///
+/// Plans that read the table through DataFusion (merge, update, delete) produce view types
+/// because the session sets `schema_force_view_types`. Writing them unchanged records
+/// `string_view` in the file's `ARROW:schema`, and pyarrow has no kernel comparing a
+/// `string_view` column with a `string` value, so filtered pyarrow reads fail. The large types
+/// are what pyarrow input writes anyway, and their 64-bit offsets hold a batch with more than
+/// 2 GiB of values (#3790).
+fn cast_view_types(plan: Arc<dyn ExecutionPlan>) -> DeltaResult<Arc<dyn ExecutionPlan>> {
+    let schema = plan.schema();
+    let targets: Vec<_> = schema
+        .fields()
+        .iter()
+        .map(|field| without_view_types(field.data_type()))
+        .collect();
+    if targets
+        .iter()
+        .zip(schema.fields())
+        .all(|(target, field)| target == field.data_type())
+    {
+        return Ok(plan);
+    }
+
+    let expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = schema
+        .fields()
+        .iter()
+        .zip(targets)
+        .map(|(field, target)| {
+            let column = physical_col(field.name(), &schema)?;
+            let expr: Arc<dyn PhysicalExpr> = if &target == field.data_type() {
+                column
+            } else {
+                Arc::new(CastExpr::new(column, target, None))
+            };
+            Ok((expr, field.name().clone()))
+        })
+        .collect::<DeltaResult<_>>()?;
+    Ok(Arc::new(ProjectionExec::try_new(expressions, plan)?))
+}
+
+fn without_view_types(data_type: &DataType) -> DataType {
+    let field = |f: &FieldRef| -> FieldRef {
+        Arc::new(
+            f.as_ref()
+                .clone()
+                .with_data_type(without_view_types(f.data_type())),
+        )
+    };
+    match data_type {
+        DataType::Utf8View => DataType::LargeUtf8,
+        DataType::BinaryView => DataType::LargeBinary,
+        DataType::Struct(fields) => DataType::Struct(fields.iter().map(field).collect()),
+        DataType::List(f) => DataType::List(field(f)),
+        DataType::LargeList(f) => DataType::LargeList(field(f)),
+        DataType::FixedSizeList(f, size) => DataType::FixedSizeList(field(f), *size),
+        DataType::Map(f, sorted) => DataType::Map(field(f), *sorted),
+        other => other.clone(),
+    }
+}
+
 pub(crate) async fn write_exec_plan(
     session: &dyn Session,
     log_store: &dyn LogStore,
@@ -755,6 +878,7 @@ async fn write_data_plan(
         column_mapping,
         path_prefix,
     } = sink_config;
+    let plan = cast_view_types(plan)?;
     let (plan, partition_columns, random_prefix_length) =
         apply_column_mapping_to_plan(plan, partition_columns, &column_mapping)?;
     let config = WriterConfig::new(plan.schema().clone(), partition_columns.clone(), props)
@@ -915,6 +1039,7 @@ async fn write_cdc_plan(
             "a change data write does not take a path prefix: its files go below `_change_data`",
         ));
     }
+    let plan = cast_view_types(plan)?;
     let (plan, partition_columns, random_prefix_length) =
         apply_column_mapping_to_plan(plan, partition_columns, &column_mapping)?;
     // Change data goes below `_change_data` in the same store, so paths come back table-relative.
