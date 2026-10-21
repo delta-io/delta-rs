@@ -10,7 +10,7 @@ pub enum Error {
     #[error("unsupported by the DataFusion plan executor: {0}")]
     Unsupported(String),
 
-    /// DataFusion failed to plan or run the compiled query.
+    /// DataFusion failed to plan or run the translated query.
     #[error(transparent)]
     DataFusion(#[from] datafusion::error::DataFusionError),
 
