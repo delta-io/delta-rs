@@ -62,13 +62,19 @@ SUPPORTED_WRITER_FEATURES = {
     "appendOnly",
     "invariants",
     "timestampNtz",
+    "v2Checkpoint",
     "variantType",
     "variantType-preview",
 }
 
 MAX_SUPPORTED_READER_VERSION = 3
 NOT_SUPPORTED_READER_VERSION = -1
-SUPPORTED_READER_FEATURES = {"timestampNtz", "variantType", "variantType-preview"}
+SUPPORTED_READER_FEATURES = {
+    "timestampNtz",
+    "v2Checkpoint",
+    "variantType",
+    "variantType-preview",
+}
 
 FSCK_METRICS_FILES_REMOVED_LABEL = "files_removed"
 
@@ -1236,7 +1242,14 @@ class DeltaTable:
                     "but these are not yet supported by the deltalake reader."
                 )
 
-        if (
+        # minReaderVersion 2 tables carry column mapping without a
+        # reader_features list, so the feature check alone misses them and the
+        # scanner reads logical column names against physical parquet columns,
+        # returning all nulls. Check the table configuration directly.
+        column_mapping_mode = self.metadata().configuration.get(
+            "delta.columnMapping.mode", "none"
+        )
+        if column_mapping_mode not in ("none",) or (
             table_protocol.reader_features
             and "columnMapping" in table_protocol.reader_features
         ):
