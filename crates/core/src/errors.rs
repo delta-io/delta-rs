@@ -10,6 +10,7 @@ pub type DeltaResult<T, E = DeltaTableError> = Result<T, E>;
 
 /// Whether an unsupported column-mapping access was a read or a write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ColumnMappingOperation {
     /// A read-path operation.
     Read,
@@ -29,6 +30,7 @@ impl std::fmt::Display for ColumnMappingOperation {
 /// Delta Table specific error
 #[allow(missing_docs)]
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum DeltaTableError {
     #[error("Kernel error: {0}")]
     KernelError(#[from] delta_kernel::error::Error),
