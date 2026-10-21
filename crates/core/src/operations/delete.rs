@@ -65,6 +65,7 @@ use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::DeltaSessionExt;
 use crate::delta_datafusion::SessionFallbackPolicy;
 use crate::delta_datafusion::SessionResolveContext;
+use crate::delta_datafusion::engine::{is_exact_partition_predicate, to_delta_predicate};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::{
     LogicalPlanBuilderExt as _, LogicalPlanExt, MetricObserver,
@@ -478,17 +479,15 @@ async fn execute(
 
     if props.partition_only {
         let partition_predicate = conjunction(skipping_pred).unwrap_or(lit(true));
-        let full_file = match crate::delta_datafusion::engine::to_delta_predicate(
-            &partition_predicate,
-        ) {
-            Ok(delta_predicate) => {
-                // `Snapshot::files` documents predicate filtering as "best effort" file skipping
-                // because, in general, files may contain a mix of matching and non-matching rows.
-                //
-                // For partition-only predicates, partition values are constant per file, so
-                // evaluating `partition_predicate` against `partitionValues_parsed` is exact:
-                // a file either fully matches or does not. It is therefore safe to treat this as
-                // the authoritative match set for DELETE.
+        let exact_kernel_predicate =
+            is_exact_partition_predicate(&partition_predicate, &props.partition_columns)
+                .then(|| to_delta_predicate(&partition_predicate).ok())
+                .flatten();
+        let full_file = match exact_kernel_predicate {
+            Some(delta_predicate) => {
+                // Kernel file skipping is best effort and keeps files for terms it cannot
+                // evaluate. Partition values are constant per file and the predicate only uses
+                // shapes kernel evaluates exactly on them, so the returned files are the match set.
                 collect_full_file_deletes(snapshot.active_adds(
                     log_store.as_ref(),
                     ActiveAddOptions {
@@ -498,10 +497,9 @@ async fn execute(
                 ))
                 .await?
             }
-            Err(err) => {
+            None => {
                 tracing::debug!(
-                    ?err,
-                    "Partition-only delete predicate not convertible to kernel; falling back to DataFusion evaluation"
+                    "Partition-only delete predicate is not exact in kernel; falling back to DataFusion evaluation"
                 );
 
                 let matching_paths = Arc::new(
@@ -2976,6 +2974,76 @@ mod tests {
             assert_eq!(table.version(), Some(4));
         }
 
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::arithmetic_plus("p + 1 = 2", true, &[0, 2, 3])]
+    #[case::arithmetic_times("p * 2 = 2", true, &[0, 2, 3])]
+    #[case::case_when("CASE WHEN p = 1 THEN true ELSE false END", true, &[0, 2, 3])]
+    #[case::not_coalesce("NOT coalesce(q > 'a', false)", true, &[1, 3])]
+    #[case::null_comparison("x = NULL", true, &[0, 1, 2, 3])]
+    #[case::null_comparison_unpartitioned("x = NULL", false, &[0, 1, 2, 3])]
+    #[case::partition_and_null_comparison("p = 1 AND x = NULL", true, &[0, 1, 2, 3])]
+    #[case::eq("p = 1", true, &[0, 2, 3])]
+    #[case::in_list("p IN (0, 1)", true, &[2, 3])]
+    #[case::is_null("p IS NULL", true, &[0, 1, 3])]
+    #[case::is_not_null("p IS NOT NULL", true, &[2])]
+    #[case::junction("p > 0 AND q <> 'c'", true, &[0, 2, 3])]
+    #[case::scalar_function("upper(q) = 'B'", true, &[0, 2, 3])]
+    #[tokio::test]
+    async fn test_delete_partition_only_predicates_follow_sql_semantics(
+        #[case] predicate: &str,
+        #[case] partitioned: bool,
+        #[case] expected_remaining: &[i64],
+    ) -> DeltaResult<()> {
+        use arrow::array::AsArray;
+        use arrow::datatypes::Int64Type;
+        use arrow_array::Int64Array;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("x", DataType::Int64, true),
+            Field::new("p", DataType::Int32, true),
+            Field::new("q", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![0, 1, 2, 3])),
+                Arc::new(Int64Array::from(vec![Some(0), Some(1), Some(2), None])),
+                Arc::new(Int32Array::from(vec![Some(0), Some(1), None, Some(2)])),
+                Arc::new(StringArray::from(vec![
+                    Some("a"),
+                    Some("b"),
+                    None,
+                    Some("c"),
+                ])),
+            ],
+        )?;
+        let partition_columns: &[&str] = if partitioned { &["p", "q"] } else { &[] };
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_partition_columns(partition_columns.iter().copied())
+            .await?;
+
+        let (table, metrics) = table.delete().with_predicate(predicate).await?;
+
+        let mut remaining: Vec<i64> = get_data(&table)
+            .await
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column_by_name("id")
+                    .unwrap()
+                    .as_primitive::<Int64Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        remaining.sort_unstable();
+        assert_eq!(remaining, expected_remaining);
+        assert_eq!(metrics.num_deleted_rows, Some(4 - expected_remaining.len()));
         Ok(())
     }
 }
