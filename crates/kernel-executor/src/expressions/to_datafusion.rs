@@ -20,13 +20,13 @@ use delta_kernel::expressions::{
 use delta_kernel::schema::DataType;
 use itertools::Itertools;
 
-use crate::delta_datafusion::engine::expressions::to_json::to_json;
+use crate::expressions::to_json::to_json;
 
 /// Converts a Delta kernel Expression into a DataFusion Expr.
 ///
 /// Recursively transforms Delta kernel expressions (literals, columns, predicates, etc.)
 /// into their DataFusion equivalents, using the provided output type for type inference.
-pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> DFResult<Expr> {
+pub fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> DFResult<Expr> {
     match expr {
         Expression::Literal(scalar) => to_datafusion_scalar(scalar).map(lit),
         Expression::Column(name) => {
@@ -65,7 +65,7 @@ pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> D
 ///
 /// Handles type mapping between Delta Lake's scalar types and DataFusion's scalar types,
 /// including primitive types, temporal types, structs, and null values.
-pub(crate) fn to_datafusion_scalar(scalar: &Scalar) -> DFResult<ScalarValue> {
+pub fn to_datafusion_scalar(scalar: &Scalar) -> DFResult<ScalarValue> {
     Ok(match scalar {
         Scalar::Boolean(value) => ScalarValue::Boolean(Some(*value)),
         Scalar::String(value) => ScalarValue::Utf8(Some(value.clone())),
@@ -174,7 +174,7 @@ fn binary_pred_to_df(bin: &BinaryPredicate, output_type: &DataType) -> DFResult<
     })
 }
 
-pub(crate) fn predicate_to_df(predicate: &Predicate, output_type: &DataType) -> DFResult<Expr> {
+pub fn predicate_to_df(predicate: &Predicate, output_type: &DataType) -> DFResult<Expr> {
     match predicate {
         Predicate::BooleanExpression(expr) => to_datafusion_expr(expr, output_type),
         Predicate::Not(expr) => Ok(!(predicate_to_df(expr, output_type)?)),

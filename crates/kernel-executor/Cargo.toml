@@ -1,5 +1,5 @@
 [package]
-name = "delta-kernel-datafusion-executor"
+name = "deltalake-kernel-executor"
 version = "2.0.0"
 description = "DataFusion-backed executor for delta-kernel declarative plans"
 authors.workspace = true
@@ -23,12 +23,21 @@ delta_kernel = { workspace = true, features = [
     "vendored-protoc",
 ] }
 
+# The storage / file-format handlers wrap the default engine's object_store
+# based handlers, one per object store registered in the DataFusion session.
+delta_kernel_default_engine = { workspace = true }
+
+# arrow
+arrow = { workspace = true }
+object_store = { workspace = true }
+
 # datafusion
 datafusion = { workspace = true }
-object_store = { workspace = true }
 
 # "stdlib"
 bytes = { workspace = true }
+dashmap = "6"
+itertools = "0.15"
 thiserror = { workspace = true }
 url = { workspace = true }
 
@@ -37,4 +46,11 @@ futures = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync"] }
 
 [dev-dependencies]
+arrow-array = { workspace = true }
+rstest = { version = "0.27" }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[features]
+# Experimental support for nanosecond timestamps primitive type
+nanosecond-timestamps = ["delta_kernel/nanosecond-timestamps"]

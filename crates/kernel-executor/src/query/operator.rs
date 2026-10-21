@@ -1,6 +1,6 @@
-//! Compiles one kernel [`Operator`] into a DataFusion `LogicalPlan`.
+//! Translates one kernel [`Operator`] into a DataFusion `LogicalPlan`.
 //!
-//! Each kernel operator has one function here. The function receives the already compiled
+//! Each kernel operator has one function here. The function receives the already translated
 //! inputs in the order [`PlanNode::inputs`] lists them.
 //!
 //! [`PlanNode::inputs`]: delta_kernel::plans::ir::plan::PlanNode::inputs
@@ -13,8 +13,8 @@ use delta_kernel::plans::ir::nodes::{
 
 use crate::{DataFusionPlanExecutor, Error};
 
-/// Dispatches `op` to its compile function.
-pub fn compile(
+/// Dispatches `op` to the function that translates it.
+pub fn to_logical_plan(
     executor: &DataFusionPlanExecutor,
     op: &Operator,
     inputs: &[&LogicalPlan],
