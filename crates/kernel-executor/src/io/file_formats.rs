@@ -129,10 +129,11 @@ impl ParquetHandler for DataFusionFileFormatHandler {
 
     fn write_parquet_file(
         &self,
-        _location: url::Url,
-        _data: Box<dyn Iterator<Item = KernelResult<Box<dyn EngineData>>> + Send>,
+        location: url::Url,
+        data: Box<dyn Iterator<Item = KernelResult<Box<dyn EngineData>>> + Send>,
     ) -> KernelResult<()> {
-        todo!("write parquet file")
+        self.get_or_create_pq(location.as_object_store_url())?
+            .write_parquet_file(location, data)
     }
 
     fn read_parquet_footer(&self, file: &FileMeta) -> KernelResult<delta_kernel::ParquetFooter> {

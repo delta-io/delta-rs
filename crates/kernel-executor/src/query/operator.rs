@@ -4,12 +4,6 @@
 //! inputs in the order [`PlanNode::inputs`] lists them. Scans need the executor for its object
 //! stores; every other operator is a pure function of its inputs and goes through
 //! [`lower_operator`].
-//!
-//! The dispatch and the operator lowerings are taken from delta-kernel-rs
-//! `datafusion-executor/src/operator.rs` at commit 04c2ec32 (Apache-2.0; see the NOTICE file in
-//! this crate).
-//!
-//! [`PlanNode::inputs`]: delta_kernel::plans::ir::plan::PlanNode::inputs
 
 use std::sync::Arc;
 
@@ -25,15 +19,16 @@ use datafusion::logical_expr::{
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::{ColumnName, Scalar};
 use delta_kernel::plans::ir::nodes::{
-    Agg, Aggregate, DynamicScan, Filter, Operator, Project, ScanJson, ScanParquet, SemiJoin,
-    UnionAll, Values,
+    Agg, Aggregate, DynamicScan, FileType, Filter, Operator, Project, ScanJson, ScanParquet,
+    SemiJoin, UnionAll, Values,
 };
 use delta_kernel::schema::{StructField, StructType};
 
+use super::scan;
 use crate::expressions::{
     column_to_df_expr, to_datafusion_predicate_expr, to_datafusion_scalar, to_df_struct_columns,
 };
-use crate::{DataFusionPlanExecutor, Error};
+use crate::{DataFusionPlanExecutor, ExecutorError};
 
 /// Dispatches `op` to the function that translates it.
 pub fn to_logical_plan(
@@ -42,8 +37,8 @@ pub fn to_logical_plan(
     inputs: &[Arc<LogicalPlan>],
 ) -> crate::Result<LogicalPlan> {
     match op {
-        Operator::ScanParquet(op) => scan_parquet(executor, op),
-        Operator::ScanJson(op) => scan_json(executor, op),
+        Operator::ScanParquet(op) => scan_parquet(op),
+        Operator::ScanJson(op) => scan_json(op),
         Operator::DynamicScan(op) => dynamic_scan(executor, op, inputs),
         _ => Ok(lower_operator(op, inputs)?),
     }
@@ -117,27 +112,30 @@ pub(crate) fn lower_operator(op: &Operator, inputs: &[Arc<LogicalPlan>]) -> DFRe
     }
 }
 
-/// Source: reads Parquet files from the executor's object store.
-fn scan_parquet(
-    _executor: &DataFusionPlanExecutor,
-    _op: &ScanParquet,
-) -> crate::Result<LogicalPlan> {
-    Err(Error::unsupported("operator scan_parquet"))
+/// Source: reads Parquet files from the session's object stores (see [`scan`]).
+fn scan_parquet(op: &ScanParquet) -> crate::Result<LogicalPlan> {
+    scan::lower_scan(
+        FileType::Parquet,
+        &op.files,
+        &op.file_constant_columns,
+        &op.schema,
+    )
 }
 
-/// Source: reads newline-delimited JSON files from the executor's object store.
-fn scan_json(_executor: &DataFusionPlanExecutor, _op: &ScanJson) -> crate::Result<LogicalPlan> {
-    Err(Error::unsupported("operator scan_json"))
+/// Source: reads newline-delimited JSON files from the session's object stores (see [`scan`]).
+fn scan_json(op: &ScanJson) -> crate::Result<LogicalPlan> {
+    scan::lower_scan(
+        FileType::Json,
+        &op.files,
+        &op.file_constant_columns,
+        &op.schema,
+    )
 }
 
 /// Lowers a [`Values`](Values) node into literal rows carrying `schema`'s field names.
 ///
-/// An empty `rows` is the uninhabited relation over `schema`, which DataFusion spells as an
-/// `EmptyRelation` rather than a `Values`.
-///
 /// DataFusion's [`LogicalPlanBuilder::values_with_schema`] automatically inserts a cast whenever
-/// [`can_cast_types`](datafusion::arrow::compute::can_cast_types) accepts a type mismatch. Since
-/// this still conforms to Kernel's schema, it is accepted functionality.
+/// [`can_cast_types`](datafusion::arrow::compute::can_cast_types) accepts a type mismatch.
 fn lower_values(values: &Values) -> DFResult<LogicalPlan> {
     let arrow_schema: ArrowSchema = values.schema.as_ref().try_into_arrow()?;
     let df_schema = Arc::new(arrow_schema.try_into()?);
@@ -149,8 +147,8 @@ fn lower_values(values: &Values) -> DFResult<LogicalPlan> {
         };
         return Ok(LogicalPlan::EmptyRelation(empty));
     }
-
     let rows: DFResult<Vec<Vec<Expr>>> = values.rows.iter().map(|row| lower_row(row)).collect();
+
     // The builder assigns column1, column2, ...; restore the names declared by the kernel schema.
     let field_aliases = df_schema
         .fields()
@@ -189,9 +187,11 @@ fn lower_project(project: &Project, input: &Arc<LogicalPlan>) -> DFResult<Logica
     let input_schema: StructType = input.schema().as_arrow().try_into_kernel()?;
     let arrow_schema: ArrowSchema = project.schema.as_ref().try_into_arrow()?;
     let df_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
+
     let columns = to_df_struct_columns(&project.expr, &input_schema, project.schema.as_ref())
         .map_err(|error| DataFusionError::External(Box::new(error)))?
         .into_guarded_columns();
+
     let exprs: DFResult<Vec<Expr>> = columns
         .into_iter()
         .zip(project.schema.fields())
@@ -201,6 +201,7 @@ fn lower_project(project: &Project, input: &Arc<LogicalPlan>) -> DFResult<Logica
             Ok(expr)
         })
         .collect();
+
     let projection = DFProjection::try_new_with_schema(exprs?, Arc::clone(input), df_schema)?;
     Ok(LogicalPlan::Projection(projection))
 }
@@ -221,7 +222,7 @@ fn dynamic_scan(
     _op: &DynamicScan,
     _inputs: &[Arc<LogicalPlan>],
 ) -> crate::Result<LogicalPlan> {
-    Err(Error::unsupported("operator dynamic_scan"))
+    Err(ExecutorError::unsupported("operator dynamic_scan"))
 }
 
 /// Lowers an [`Aggregate`](Aggregate) to a DataFusion aggregate over its input.
@@ -368,11 +369,13 @@ fn lower_semi_join(
             Ok((probe_key, build_key))
         })
         .collect();
+
     let join_type = if semi_join.inverted {
         JoinType::LeftAnti
     } else {
         JoinType::LeftSemi
     };
+
     let mut join = DFJoin::try_new(
         Arc::clone(probe),
         Arc::clone(build),

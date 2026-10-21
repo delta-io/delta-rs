@@ -4,9 +4,6 @@
 //! [`to_logical_plan`] walks the nodes in order, builds one `LogicalPlan` per node from its
 //! already translated inputs ([`operator`]), and returns the plan of the terminal (last) node.
 //! Expressions and predicates inside operators go through [`crate::expressions`].
-//!
-//! The walk is taken from delta-kernel-rs `datafusion-executor/src/plan.rs` at commit 04c2ec32
-//! (Apache-2.0; see the NOTICE file in this crate).
 
 use std::sync::Arc;
 
@@ -17,17 +14,22 @@ use delta_kernel::DeltaResult;
 use delta_kernel::plans::PlanResult;
 use delta_kernel::plans::ir::plan::Plan;
 
-use crate::{DataFusionPlanExecutor, Error};
+use crate::{DataFusionPlanExecutor, ExecutorError};
 
 pub mod operator;
+pub mod scan;
 
 /// Translates `plan`, runs it on a session built from the executor's task context, and streams
 /// the terminal node's rows as [`PlanResult::Data`].
 pub fn execute(executor: &DataFusionPlanExecutor, plan: Plan) -> DeltaResult<PlanResult> {
     let logical = to_logical_plan(executor, &plan)?;
     let ctx = executor.task_ctx();
-    let session =
-        SessionContext::new_with_config_rt(ctx.session_config().clone(), ctx.runtime_env());
+    let mut config = ctx.session_config().clone();
+
+    // A scan gives every file its own partition. Splitting a file further by byte range would
+    // interleave its rows, and the kernel's handler contract wants them in file order.
+    config.options_mut().optimizer.repartition_file_scans = false;
+    let session = SessionContext::new_with_config_rt(config, ctx.runtime_env());
     let stream = crate::runtime::block_on(executor.handle(), async move {
         session
             .execute_logical_plan(logical)
@@ -35,7 +37,8 @@ pub fn execute(executor: &DataFusionPlanExecutor, plan: Plan) -> DeltaResult<Pla
             .execute_stream()
             .await
     })
-    .map_err(Error::from)?;
+    .map_err(ExecutorError::from)?;
+
     Ok(PlanResult::Data(crate::stream::into_engine_data(
         executor.handle(),
         stream,
@@ -55,6 +58,7 @@ pub fn to_logical_plan(
     // strictly less than the node's own, so a single forward pass leaves each node's inputs already
     // lowered by the time it is reached.
     let mut lowered: Vec<Arc<LogicalPlan>> = Vec::with_capacity(plan.nodes.len());
+
     for (node_index, node) in plan.nodes.iter().enumerate() {
         let op = &node.op;
         let available = lowered.len();

@@ -1,22 +1,22 @@
+use datafusion::arrow::array::{Array as _, StructArray};
 use datafusion::common::tree_node::{Transformed, TreeNode as _};
 use datafusion::common::{Result, ScalarValue, plan_datafusion_err, plan_err};
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::utils::{conjunction, disjunction};
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
+use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::expressions::{
     BinaryExpression, BinaryExpressionOp, BinaryPredicate, BinaryPredicateOp, ColumnName,
-    DecimalData, Expression, JunctionPredicate, JunctionPredicateOp, Predicate, Scalar,
+    DecimalData, Expression, JunctionPredicate, JunctionPredicateOp, Predicate, Scalar, StructData,
     UnaryPredicate, UnaryPredicateOp,
 };
-use delta_kernel::schema::{DataType, DecimalType, PrimitiveType};
-
-use crate::kernel::scalars::ScalarExt;
+use delta_kernel::schema::{DataType, DecimalType, PrimitiveType, StructField};
 
 /// Converts a DataFusion expression to a Delta predicate.
 ///
 /// If the expression converts to a Delta predicate, returns it directly.
 /// Otherwise, wraps the expression as a boolean expression predicate.
-pub(crate) fn to_delta_predicate(expr: &Expr) -> Result<Predicate> {
+pub fn to_delta_predicate(expr: &Expr) -> Result<Predicate> {
     match to_delta_expression(&normalize_delta_predicate_expr(expr)?)? {
         Expression::Predicate(pred) => Ok(pred.as_ref().clone()),
         expr => Ok(Predicate::BooleanExpression(expr)),
@@ -30,7 +30,7 @@ pub(crate) fn to_delta_predicate(expr: &Expr) -> Result<Predicate> {
 /// (arithmetic, `IS NOT DISTINCT FROM`, `IS NULL` over a comparison, NULL literals, ...). Only
 /// comparisons between a partition column and a non-null literal, `IS [NOT] NULL` on a partition
 /// column and `IN` lists of non-null literals, combined with `AND` / `OR`, are evaluated exactly.
-pub(crate) fn is_exact_partition_predicate(expr: &Expr, partition_columns: &[String]) -> bool {
+pub fn is_exact_partition_predicate(expr: &Expr, partition_columns: &[String]) -> bool {
     let is_partition_column =
         |expr: &Expr| matches!(expr, Expr::Column(c) if partition_columns.contains(&c.name));
     let is_non_null_literal = |expr: &Expr| matches!(expr, Expr::Literal(v, _) if !v.is_null());
@@ -119,7 +119,7 @@ fn rewrite_in_list_expr_for_kernel(in_list: &InList) -> Option<Expr> {
 }
 
 /// Converts a DataFusion expression to a Delta kernel expression.
-pub(crate) fn to_delta_expression(expr: &Expr) -> Result<Expression> {
+pub fn to_delta_expression(expr: &Expr) -> Result<Expression> {
     match expr {
         Expr::Column(column) => Ok(Expression::Column(ColumnName::new([column.name.as_str()]))),
         Expr::Literal(scalar, _meta) => {
@@ -226,22 +226,23 @@ pub(crate) fn to_delta_expression(expr: &Expr) -> Result<Expression> {
             }
         }
         Expr::ScalarFunction(scalar_fn) => {
+            // `get_field(a, 'b', 'c')` is `a.b.c`: each argument after the first is one level.
             if scalar_fn.name() == "get_field" {
-                if scalar_fn.args.len() != 2 {
-                    return plan_err!(
-                        "get_field function requires exactly 2 arguments, got {}",
-                        scalar_fn.args.len()
-                    );
+                let Some((base, field_names)) = scalar_fn.args.split_first() else {
+                    return plan_err!("get_field function requires arguments");
+                };
+                if field_names.is_empty() {
+                    return plan_err!("get_field function requires a field name");
                 }
 
-                let field_name = match &scalar_fn.args[1] {
+                let field_names = field_names.iter().map(|name| match name {
                     Expr::Literal(name, _) => name.to_string(),
                     other => other.schema_name().to_string(),
-                };
+                });
 
-                if let Expression::Column(ref col_name) = to_delta_expression(&scalar_fn.args[0])? {
+                if let Expression::Column(ref col_name) = to_delta_expression(base)? {
                     return Ok(Expression::Column(
-                        col_name.join(&ColumnName::new([field_name.as_str()])),
+                        col_name.join(&ColumnName::new(field_names)),
                     ));
                 }
             }
@@ -254,7 +255,7 @@ pub(crate) fn to_delta_expression(expr: &Expr) -> Result<Expression> {
     }
 }
 
-pub(crate) fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> Result<Scalar> {
+pub fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> Result<Scalar> {
     match scalar {
         ScalarValue::Boolean(maybe_value) => match maybe_value {
             Some(value) => Ok(Scalar::Boolean(*value)),
@@ -333,11 +334,29 @@ pub(crate) fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> Result<Scalar
                     .map_err(|e| plan_datafusion_err!("{e}"))?,
             )))),
         },
-        ScalarValue::Struct(data) => Ok(Scalar::from_array(data.as_ref(), 0)
-            .ok_or_else(|| plan_datafusion_err!("Struct to kernel scalar conversion failed."))?),
+        ScalarValue::Struct(data) => struct_scalar(data),
         ScalarValue::Dictionary(_, value) => datafusion_scalar_to_scalar(value.as_ref()),
         _ => plan_err!("Cannot convert to kernel scalar value: {:?}", scalar),
     }
+}
+
+/// The kernel scalar of the one-row struct array `data`.
+fn struct_scalar(data: &StructArray) -> Result<Scalar> {
+    if data.is_null(0) {
+        return Ok(Scalar::Null(data.data_type().try_into_kernel()?));
+    }
+    let fields = data
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().try_into_kernel())
+        .collect::<std::result::Result<Vec<StructField>, _>>()?;
+    let values = data
+        .columns()
+        .iter()
+        .map(|column| datafusion_scalar_to_scalar(&ScalarValue::try_from_array(column, 0)?))
+        .collect::<Result<Vec<_>>>()?;
+    let data = StructData::try_new(fields, values).map_err(|e| plan_datafusion_err!("{e}"))?;
+    Ok(Scalar::Struct(data))
 }
 
 fn to_binary_predicate_op(op: Operator) -> Result<BinaryPredicateOp> {
@@ -527,6 +546,13 @@ mod tests {
             Expression::Column(ColumnName::new(["a", "b"]))
         );
         let expr = col("a").field("b").field("c");
+        assert_eq!(
+            to_delta_expression(&expr).unwrap(),
+            Expression::Column(ColumnName::new(["a", "b", "c"]))
+        );
+        // The simplifier merges nested accesses into one call.
+        let expr =
+            datafusion::functions::core::get_field().call(vec![col("a"), lit("b"), lit("c")]);
         assert_eq!(
             to_delta_expression(&expr).unwrap(),
             Expression::Column(ColumnName::new(["a", "b", "c"]))
@@ -1023,5 +1049,26 @@ mod tests {
             col("p").in_list(vec![lit(1), lit(ScalarValue::Int32(None))], true)
         ));
         assert!(!exact(col("p").in_list(vec![], false)));
+    }
+
+    /// A struct literal, set and NULL, round trips through the DataFusion scalar.
+    #[test]
+    fn test_struct_scalar_round_trip() {
+        let fields = vec![
+            StructField::nullable("a", DataType::INTEGER),
+            StructField::nullable("b", DataType::STRING),
+        ];
+        let set = Scalar::Struct(
+            StructData::try_new(
+                fields.clone(),
+                vec![Scalar::Integer(1), Scalar::Null(DataType::STRING)],
+            )
+            .unwrap(),
+        );
+        let null = Scalar::Null(DataType::try_struct_type(fields).unwrap());
+        for scalar in [set, null] {
+            let df_scalar = crate::expressions::to_datafusion_scalar(&scalar).unwrap();
+            assert_eq!(datafusion_scalar_to_scalar(&df_scalar).unwrap(), scalar);
+        }
     }
 }

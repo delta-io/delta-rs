@@ -1,11 +1,11 @@
 //! Crate errors and their mapping to [`delta_kernel::Error`].
 //!
 //! Kernel entry points return [`delta_kernel::DeltaResult`], so every public function in this
-//! crate converts its [`Error`] into a kernel error at the boundary.
+//! crate converts its [`ExecutorError`] into a kernel error at the boundary.
 
 /// Errors raised while compiling or running a kernel plan on DataFusion.
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub enum ExecutorError {
     /// The plan uses an operator, expression, or I/O operation this executor does not handle yet.
     #[error("unsupported by the DataFusion plan executor: {0}")]
     Unsupported(String),
@@ -24,20 +24,26 @@ pub enum Error {
 }
 
 /// Shorthand for results inside this crate.
-pub type Result<T, E = Error> = std::result::Result<T, E>;
+pub type Result<T, E = ExecutorError> = std::result::Result<T, E>;
 
-impl Error {
-    /// Builds an [`Error::Unsupported`] for `what`.
+impl ExecutorError {
+    /// Builds an [`ExecutorError::Unsupported`] for `what`.
     pub fn unsupported(what: impl std::fmt::Display) -> Self {
         Self::Unsupported(what.to_string())
     }
 }
 
-impl From<Error> for delta_kernel::Error {
-    fn from(err: Error) -> Self {
+impl From<arrow::error::ArrowError> for ExecutorError {
+    fn from(err: arrow::error::ArrowError) -> Self {
+        Self::DataFusion(err.into())
+    }
+}
+
+impl From<ExecutorError> for delta_kernel::Error {
+    fn from(err: ExecutorError) -> Self {
         match err {
-            Error::Unsupported(msg) => delta_kernel::Error::unsupported(msg),
-            Error::Kernel(err) => err,
+            ExecutorError::Unsupported(msg) => delta_kernel::Error::unsupported(msg),
+            ExecutorError::Kernel(err) => err,
             other => delta_kernel::Error::generic_err(other),
         }
     }
