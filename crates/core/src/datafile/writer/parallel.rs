@@ -122,6 +122,9 @@ pub(crate) struct ParallelArrowWriter<W: AsyncFileWriter> {
     /// The maximum number of rows to write to each row group, retrieved from [`WriterProperties`]
     max_rows_in_group_row: usize,
 
+    /// The maximum uncompressed size of a row group in bytes, retrieved from [`WriterProperties`]
+    max_bytes_in_group_row: usize,
+
     /// Workers for the open row group; empty until the first write into it.
     workers: Vec<ColumnWorker>,
     buffered_rows: usize,
@@ -159,6 +162,7 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
 
         Ok(Self {
             max_rows_in_group_row: props.max_row_group_row_count().unwrap_or(usize::MAX),
+            max_bytes_in_group_row: props.max_row_group_bytes().unwrap_or(usize::MAX),
             file_writer,
             factory: row_group_factory,
             sink_writer,
@@ -176,8 +180,17 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
                 self.start_row_group()?;
             }
 
+            // Recomputed after every close: the density changes once a row group has
+            // been measured.
+            let bpr = self.get_estimated_bytes_per_row(batch);
+            let buffered_bytes = self.get_estimated_total_bytes(bpr);
             let length = usize::min(
-                self.max_rows_in_group_row - self.buffered_rows,
+                usize::min(
+                    self.max_rows_in_group_row - self.buffered_rows,
+                    // One row at least, so a bound under one row's worth still makes progress.
+                    (self.max_bytes_in_group_row as f64 / bpr - buffered_bytes / bpr).max(1.0)
+                        as usize,
+                ),
                 batch.num_rows() - offset,
             );
             if length == batch.num_rows() {
@@ -188,7 +201,9 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
             offset += length;
 
             self.buffered_rows += length;
-            if self.buffered_rows >= self.max_rows_in_group_row {
+            if self.buffered_rows >= self.max_rows_in_group_row
+                || self.get_estimated_total_bytes(bpr) > self.max_bytes_in_group_row as f64
+            {
                 self.close_row_group().await?;
             }
         }
@@ -231,6 +246,37 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
 
     pub(crate) fn flushed_row_groups(&self) -> &[RowGroupMetaData] {
         self.file_writer.flushed_row_groups()
+    }
+
+    /// Estimated bytes per row, from the last row group that closed; the first row group of a
+    /// file, having no earlier group to measure, is sized from the batch slice's own memory
+    /// rather than from the buffers it shares.
+    fn get_estimated_bytes_per_row(&self, batch: &RecordBatch) -> f64 {
+        let (rows, bytes) = match self.file_writer.flushed_row_groups().last() {
+            Some(group) => (
+                group.num_rows() as usize,
+                group.total_byte_size().max(0) as usize,
+            ),
+            // `get_array_memory_size` on a slice reports the whole backing buffer,
+            // so seed from the slice's own share where arrow can provide it; else
+            // the first row group of a file lands far under the bound.
+            None => (
+                batch.num_rows(),
+                batch
+                    .columns()
+                    .iter()
+                    .map(|column| column.to_data().get_slice_memory_size().ok())
+                    .sum::<Option<usize>>()
+                    .unwrap_or_else(|| batch.get_array_memory_size()),
+            ),
+        };
+        // 1 bit per row is parquet's densest encoding, so the density floors there.
+        (bytes as f64 / rows as f64).max(0.125)
+    }
+
+    /// Estimated encoded bytes the open row group holds, at that density.
+    fn get_estimated_total_bytes(&self, bytes_per_row: f64) -> f64 {
+        self.buffered_rows as f64 * bytes_per_row
     }
 
     fn sum(&self, field: impl Fn(&ColumnWorker) -> &Arc<AtomicUsize>) -> usize {
