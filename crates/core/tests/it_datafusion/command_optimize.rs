@@ -1182,8 +1182,8 @@ async fn test_no_conflict_for_remove_actions_in_other_partition() -> Result<(), 
         dt.snapshot()?.snapshot(),
         &filter,
         None,
-        WriterProperties::builder().build(),
-        ArrowWriterOptions::default(),
+        DeltaWriterProperties::default()
+            .with_parquet_properties(WriterProperties::builder().build()),
         df_context.state(),
     )
     .await?;
@@ -1252,8 +1252,8 @@ async fn test_conflict_for_remove_actions_with_commit_interval() -> Result<(), B
         dt.snapshot()?.snapshot(),
         &[],
         Some(target_size),
-        WriterProperties::builder().build(),
-        ArrowWriterOptions::default(),
+        DeltaWriterProperties::default()
+            .with_parquet_properties(WriterProperties::builder().build()),
         df_context.state(),
     )
     .await?;
@@ -1312,8 +1312,8 @@ async fn test_zorder_conflict_for_remove_actions() -> Result<(), Box<dyn Error>>
         dt.snapshot()?.snapshot(),
         &[],
         None,
-        WriterProperties::builder().build(),
-        ArrowWriterOptions::default(),
+        DeltaWriterProperties::default()
+            .with_parquet_properties(WriterProperties::builder().build()),
         df_context.state(),
     )
     .await?;
