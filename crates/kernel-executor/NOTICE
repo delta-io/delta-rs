@@ -13,9 +13,9 @@ The following files are copied from the `datafusion-executor` crate in that
 repository at commit 04c2ec32 (main, 2026-10-16). Where a file has since been
 modified, its header comment lists the changes:
 
-  src/expressions/expression.rs   <- datafusion-executor/src/expression.rs
-  src/expressions/predicate.rs    <- datafusion-executor/src/predicate.rs
-  src/expressions/scalar.rs       <- datafusion-executor/src/scalar.rs
-  src/expressions/utils.rs        <- datafusion-executor/src/utils.rs
-  src/query/upstream/plan.rs      <- datafusion-executor/src/plan.rs
-  src/query/upstream/operator.rs  <- datafusion-executor/src/operator.rs
+  src/expressions/to_datafusion/expression.rs  <- datafusion-executor/src/expression.rs
+  src/expressions/to_datafusion/predicate.rs   <- datafusion-executor/src/predicate.rs
+  src/expressions/to_datafusion/scalar.rs      <- datafusion-executor/src/scalar.rs
+  src/expressions/to_datafusion/utils.rs       <- datafusion-executor/src/utils.rs
+  src/query/upstream/plan.rs                   <- datafusion-executor/src/plan.rs
+  src/query/upstream/operator.rs               <- datafusion-executor/src/operator.rs
