@@ -1158,6 +1158,10 @@ pub struct CommitInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_info: Option<String>,
 
+    /// Unique identifier of the transaction that created the commit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub txn_id: Option<String>,
+
     /// Additional provenance information for the commit
     #[serde(flatten, default)]
     pub info: HashMap<String, serde_json::Value>,
