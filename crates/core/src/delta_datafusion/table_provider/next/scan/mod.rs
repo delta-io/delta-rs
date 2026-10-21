@@ -64,6 +64,9 @@ use delta_kernel::{
     Engine, Expression, engine::arrow_data::ArrowEngineData, expressions::StructData,
     scan::ScanMetadata, table_features::TableFeature,
 };
+use deltalake_kernel_executor::query::scan::expr_adapter::{
+    DeltaPhysicalExprAdapterFactory, relax_schema_nested_nullability,
+};
 use futures::{Stream, StreamExt as _, TryStreamExt as _, future::ready};
 use itertools::Itertools as _;
 use object_store::{ObjectMeta, path::Path};
@@ -75,7 +78,6 @@ use url::Url;
 pub use self::exec::DeltaScanExec;
 use self::exec::DvExecutionState;
 use self::exec_meta::DeltaScanMetaExec;
-use self::expr_adapter::{DeltaPhysicalExprAdapterFactory, relax_schema_nested_nullability};
 pub(crate) use self::plan::{KernelScanPlan, ProjectedScanContract, supports_filters_pushdown};
 use self::replay::{ScanFileContext, ScanFileStream};
 pub(crate) use self::runtime_filter::RuntimeFileFilter;
@@ -94,7 +96,6 @@ use crate::{
 
 mod exec;
 mod exec_meta;
-mod expr_adapter;
 mod plan;
 mod replay;
 mod runtime_filter;
