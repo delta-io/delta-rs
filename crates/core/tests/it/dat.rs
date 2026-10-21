@@ -67,11 +67,6 @@ const KNOWN_FAILURES: KnownFailures = &[
         "a truncated last line in a commit fails the load; the kernel and Spark skip it",
         &["corruption_truncated_commit_snapshot"],
     ),
-    (
-        "the interval year-to-month type panics in crates/core/src/kernel/snapshot/iterators/\
-         scan_row.rs",
-        &["interval_types_intv_003_interval_partitioned_snapshot"],
-    ),
 ];
 
 /// A snapshot workload loads the table and checks its protocol and metadata, or expects the

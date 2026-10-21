@@ -33,7 +33,7 @@ arrow-cast = { workspace = true }
 
 # datafusion
 datafusion-ffi = { workspace = true }
-datafusion-execution = { version = "55" }
+datafusion-execution = { version = "55.2" }
 
 # serde
 serde = { workspace = true }
