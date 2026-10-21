@@ -82,6 +82,7 @@ pub struct RuntimeConfig {
 
 /// Provide custom Tokio RT or a runtime config
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum IORuntime {
     /// Tokio RT handle
     RT(Handle),

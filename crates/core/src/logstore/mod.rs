@@ -315,6 +315,7 @@ pub fn logstore_with(
 
 /// Holder whether it's tmp_commit path or commit bytes
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum CommitOrBytes {
     /// Path of the tmp commit, to be used by logstores which use CopyIfNotExists
     TmpCommit(Path),

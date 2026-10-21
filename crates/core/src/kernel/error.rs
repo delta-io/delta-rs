@@ -7,6 +7,7 @@ pub type DeltaResult<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(thiserror::Error, Debug)]
 #[allow(missing_docs)]
+#[non_exhaustive]
 pub enum Error {
     #[error("Arrow error: {0}")]
     Arrow(#[from] arrow_schema::ArrowError),
