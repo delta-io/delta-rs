@@ -1,0 +1,40 @@
+[package]
+name = "delta-kernel-datafusion-executor"
+version = "2.0.0"
+description = "DataFusion-backed executor for delta-kernel declarative plans"
+authors.workspace = true
+keywords.workspace = true
+readme = "README.md"
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# `deltalake-core` depends on this crate, so this crate must never depend on
+# `deltalake-core`. It only knows the kernel, DataFusion, and object_store.
+
+[dependencies]
+# `default-engine-base` provides `ArrowEngineData`, the Arrow-backed `EngineData`
+# the executor hands query results back in.
+delta_kernel = { workspace = true, features = [
+    "declarative-plans",
+    "default-engine-base",
+    "vendored-protoc",
+] }
+
+# datafusion
+datafusion = { workspace = true }
+object_store = { workspace = true }
+
+# "stdlib"
+bytes = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+
+# runtime
+futures = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
