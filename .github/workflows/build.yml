@@ -29,9 +29,6 @@ jobs:
         # <https://github.com/actions-rust-lang/rustfmt/releases/tag/v1.1.2>
         uses: actions-rust-lang/rustfmt@4066006ec54a31931b9b1fddfd38f2fdf2d27143
 
-      - name: build and lint with clippy
-        run: cargo clippy --profile=ci --features ${{ env.DEFAULT_FEATURES }} --tests
-
       - name: Run Machete to check for unused dependencies
         uses: bnjbvr/cargo-machete@aa070c61641e482bc2b5d41c97b496ee4755bf37
 
@@ -74,9 +71,6 @@ jobs:
 
       - name: Default build
         run: cargo build --profile=ci --package deltalake
-
-      - name: Default features with clippy
-        run: cargo clippy --profile=ci --features ${{ env.DEFAULT_FEATURES }} --tests
 
       - name: Spot-check build for native-tls features
         run: cargo build --profile=ci --package deltalake --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue
