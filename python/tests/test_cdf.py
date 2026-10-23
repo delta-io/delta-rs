@@ -778,6 +778,22 @@ def test_write_overwrite_partitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Tabl
     ).sort_by(sort_values)
 
 
+def test_read_cdf_unpaired_actions_with_deletion_vectors():
+    dt = DeltaTable("../crates/test/tests/data/cdf-table-dv-unpaired-actions/")
+    columns = ["id", "_change_type", "_commit_version"]
+    data = dt.load_cdf(3, 4, columns=columns).read_all()
+
+    rows = zip(
+        data["id"].to_pylist(),
+        data["_change_type"].to_pylist(),
+        data["_commit_version"].to_pylist(),
+    )
+    live_ids = [0, 1, 4, 5, 6, 7, 8, 9]
+    assert sorted(rows) == sorted(
+        [(i, "delete", 3) for i in live_ids] + [(i, "insert", 4) for i in live_ids]
+    )
+
+
 def test_read_cdf_version_out_of_range():
     dt = DeltaTable("../crates/test/tests/data/cdf-table/")
 
