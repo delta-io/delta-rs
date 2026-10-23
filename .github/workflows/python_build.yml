@@ -221,8 +221,18 @@ jobs:
           uv run --no-sync python -c 'import deltalake'
 
   test-windows:
-    name: Python Windows tests (x64)
-    runs-on: windows-latest
+    name: Python Windows tests (${{ matrix.architecture }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            architecture: x64
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            architecture: arm64
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
     env:
       # This job does not use setup-builder, which installs sccache.
       RUSTC_WRAPPER: ""
@@ -233,20 +243,37 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: '3.11'
-          architecture: x64
+          architecture: ${{ matrix.architecture }}
+
+      - name: Configure ARM64 native compiler
+        if: matrix.architecture == 'arm64'
+        shell: pwsh
+        run: |
+          $llvm = "$env:ProgramFiles\LLVM\bin"
+          if (!(Test-Path "$llvm\clang.exe") -or !(Test-Path "$llvm\clang-cl.exe")) {
+            throw "LLVM clang and clang-cl are required for Windows ARM64"
+          }
+          $llvm >> $env:GITHUB_PATH
+          "CC_aarch64_pc_windows_msvc=clang-cl" >> $env:GITHUB_ENV
+          "CXX_aarch64_pc_windows_msvc=clang-cl" >> $env:GITHUB_ENV
 
       - name: Install uv
         # <https://github.com/astral-sh/setup-uv/releases/tag/v8.0.0>
         uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57
 
       - name: Install test dependencies
+        if: matrix.architecture == 'x64'
         run: uv sync --python python --no-install-project --all-extras
+
+      - name: Install test dependencies without optional extras
+        if: matrix.architecture == 'arm64'
+        run: uv sync --python python --no-install-project --no-group other
 
       - name: Build and install deltalake
         # <https://github.com/PyO3/maturin-action/releases/tag/v1.50.1>
         uses: messense/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad
         with:
-          target: x86_64-pc-windows-msvc
+          target: ${{ matrix.target }}
           rust-toolchain: stable
           working-directory: python
           command: develop
@@ -256,7 +283,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tree=$(cargo tree -p deltalake-python --target x86_64-pc-windows-msvc)
+          tree=$(cargo tree -p deltalake-python --target ${{ matrix.target }})
 
           if grep -Eq '(^|[[:space:]])openssh v' <<<"$tree"; then
             printf '%s\n' "$tree"
@@ -271,7 +298,13 @@ jobs:
           fi
 
       - name: Install minimum PyArrow version
+        if: matrix.architecture == 'x64'
         run: uv pip install pyarrow==21.0.0
 
       - name: Run unit tests and doctests
+        if: matrix.architecture == 'x64'
         run: uv run --no-sync pytest -q -n auto --doctest-modules
+
+      - name: Run unit tests without PyArrow and Pandas
+        if: matrix.architecture == 'arm64'
+        run: uv run --no-sync pytest -q -n auto -m "not pyarrow and not pandas and not datafusion and not integration and not benchmark"
