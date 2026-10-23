@@ -477,6 +477,26 @@ def test_read_cdf_partitioned_projection():
     assert columns == dt.load_cdf(0, 3, columns=columns).schema.names
 
 
+def test_read_cdf_deletion_vectors_on_multi_row_group_file():
+    dt = DeltaTable("../crates/test/tests/data/cdf-table-dv-multi-row-group/")
+    columns = ["id", "_change_type", "_commit_version"]
+    data = dt.load_cdf(2, 3, columns=columns).read_all()
+
+    rows = zip(
+        data["id"].to_pylist(),
+        data["_change_type"].to_pylist(),
+        data["_commit_version"].to_pylist(),
+    )
+    assert sorted(rows) == [
+        (5, "delete", 2),
+        (99, "delete", 3),
+        (100, "delete", 3),
+        (150, "delete", 2),
+        (200, "delete", 3),
+        (299, "delete", 2),
+    ]
+
+
 @pytest.mark.pyarrow
 def test_delete_unpartitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
     import pyarrow as pa
