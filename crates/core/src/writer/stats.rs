@@ -712,6 +712,7 @@ mod tests {
         protocol::{ColumnCountStat, ColumnValueStat},
         table::builder::DeltaTableBuilder,
     };
+    use futures::TryStreamExt;
     use parquet::basic::{Compression, IntType, TimestampType};
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::properties::WriterProperties;
@@ -1085,10 +1086,13 @@ mod tests {
     }
 
     fn decimal_stat(unscaled: i128, precision: u8, scale: i8, use_min: bool) -> Option<Value> {
-        let stats = simple_parquet_stat!(
-            Statistics::FixedLenByteArray,
-            FixedLenByteArray::from(unscaled.to_be_bytes().to_vec())
-        );
+        let stats = match i64::try_from(unscaled) {
+            Ok(unscaled) if precision <= 18 => simple_parquet_stat!(Statistics::Int64, unscaled),
+            _ => simple_parquet_stat!(
+                Statistics::FixedLenByteArray,
+                FixedLenByteArray::from(unscaled.to_be_bytes().to_vec())
+            ),
+        };
         let logical_type = LogicalType::Decimal(DecimalType {
             scale: scale.into(),
             precision: precision.into(),
@@ -1100,7 +1104,7 @@ mod tests {
 
     #[test]
     fn test_decimal_stats_contain_value() {
-        let cases: [(i128, u8, i8); 13] = [
+        let cases: [(i128, u8, i8); 16] = [
             (1_123_456_789_012_345_678, 38, 18),
             (-1_123_456_789_012_345_678, 38, 18),
             (1_123_456_789_012_345_560, 38, 18),
@@ -1114,6 +1118,9 @@ mod tests {
             (1, 38, 18),
             (10_i128.pow(38) - 1, 38, 6),
             (1 - 10_i128.pow(38), 38, 6),
+            (999_999_999_999_999_999, 18, 2),
+            (-999_999_999_999_999_999, 18, 2),
+            (999_999_999_999_999_873, 18, 2),
         ];
         for (unscaled, precision, scale) in cases {
             let min = decimal_stat(unscaled, precision, scale, true);
@@ -1160,18 +1167,21 @@ mod tests {
     #[test]
     fn test_decimal_stats_omit_bounds_outside_the_type() {
         let largest = 10_i128.pow(38) - 1;
-        for (unscaled, scale, use_min) in [
-            (largest, 18, false),
-            (-largest, 18, true),
-            (largest, 6, false),
-            (-largest, 6, true),
-            (largest, 0, false),
-            (-largest, 0, true),
+        for (unscaled, precision, scale, use_min) in [
+            (largest, 38, 18, false),
+            (-largest, 38, 18, true),
+            (largest, 38, 6, false),
+            (-largest, 38, 6, true),
+            (largest, 38, 0, false),
+            (-largest, 38, 0, true),
+            (999_999_999_999_999_999, 18, 2, false),
+            (-999_999_999_999_999_999, 18, 2, true),
+            (999_999_999_999_999_873, 18, 2, false),
         ] {
             assert_eq!(
-                decimal_stat(unscaled, 38, scale, use_min),
+                decimal_stat(unscaled, precision, scale, use_min),
                 None,
-                "{unscaled} as decimal(38,{scale}), use_min={use_min}"
+                "{unscaled} as decimal({precision},{scale}), use_min={use_min}"
             );
         }
     }
@@ -1218,6 +1228,62 @@ mod tests {
             stats.max_values["amount"].as_value().unwrap().as_i64(),
             Some(999_999_999_999_999_999)
         );
+    }
+
+    #[tokio::test]
+    async fn test_int64_decimal_add_stats_at_the_top_of_the_type() {
+        for values in [
+            vec![999_999_999_999_999_999],
+            vec![999_999_999_999_999_873, 1],
+        ] {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let schema = json!({
+                "type": "struct",
+                "fields": [
+                    { "name": "d", "type": "decimal(18,2)", "nullable": true, "metadata": {} }
+                ]
+            });
+            create_temp_table_with_schema(temp_dir.path(), &schema);
+            let table_uri = Url::from_directory_path(temp_dir.path()).unwrap();
+            let mut table = load_table(&table_uri, HashMap::new()).await.unwrap();
+            let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+            let min = *values.iter().min().unwrap();
+            let max = *values.iter().max().unwrap();
+            let array = arrow_array::Decimal128Array::from(values)
+                .with_precision_and_scale(18, 2)
+                .unwrap();
+            let batch =
+                arrow_array::RecordBatch::try_new(writer.arrow_schema(), vec![Arc::new(array)])
+                    .unwrap();
+            writer.write(batch).await.unwrap();
+            writer.flush_and_commit(&mut table).await.unwrap();
+
+            let table = load_table(&table_uri, HashMap::new()).await.unwrap();
+            let adds: Vec<_> = table
+                .get_active_add_actions_by_partitions(&[])
+                .try_collect()
+                .await
+                .unwrap();
+            assert_eq!(adds.len(), 1);
+            let read_stat = |stat: Option<Scalar>| match stat {
+                Some(Scalar::Struct(data)) => match &data.values()[0] {
+                    Scalar::Decimal(decimal) => Some(decimal.bits()),
+                    Scalar::Null(_) => None,
+                    other => panic!("unexpected stat {other:?}"),
+                },
+                other => panic!("unexpected stats {other:?}"),
+            };
+            let min_stat = read_stat(adds[0].min_values());
+            assert!(
+                min_stat.is_some_and(|stat| stat <= min),
+                "minValues {min_stat:?} doesn't bound {min}"
+            );
+            let max_stat = read_stat(adds[0].max_values());
+            assert!(
+                max_stat.is_none_or(|stat| stat >= max),
+                "maxValues {max_stat:?} is below {max}"
+            );
+        }
     }
 
     #[tokio::test]
