@@ -441,3 +441,20 @@ def test_merge_with_gc_invalid(table_with_gc: DeltaTable, invalid_gc_data):
             .when_not_matched_insert_all()
             .execute()
         )
+
+
+def test_write_with_invalid_gc_after_enabling_deletion_vectors(
+    table_with_gc, invalid_gc_data
+):
+    import re
+
+    table_with_gc.alter.set_table_properties({"delta.enableDeletionVectors": "true"})
+
+    with pytest.raises(
+        Exception,
+        match=re.escape("Invalid data found: 1 rows failed validation check."),
+    ):
+        write_deltalake(table_with_gc, mode="append", data=invalid_gc_data)
+    protocol = DeltaTable(table_with_gc.table_uri).protocol()
+    assert protocol.writer_features is not None
+    assert "generatedColumns" in protocol.writer_features
