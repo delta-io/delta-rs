@@ -1166,7 +1166,6 @@ async fn test_no_conflict_for_remove_actions_in_other_partition() -> Result<(), 
         &filter,
         None,
         WriterProperties::builder().build(),
-        ArrowWriterOptions::default(),
         df_context.state(),
     )
     .await?;
@@ -1186,6 +1185,8 @@ async fn test_no_conflict_for_remove_actions_in_other_partition() -> Result<(), 
             1,
             None,
             CommitProperties::default(),
+            Uuid::new_v4(),
+            None,
         )
         .await?;
 
