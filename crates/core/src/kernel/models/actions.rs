@@ -1003,7 +1003,7 @@ pub struct Add {
 }
 
 /// Represents a tombstone (deleted file) in the Delta log.
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, Default)]
+#[derive(Deserialize, Debug, Clone, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Remove {
     /// A relative path to a data file from the root of the table or an absolute path to a file
@@ -1011,7 +1011,7 @@ pub struct Remove {
     /// [RFC 2396 URI Generic Syntax], which needs to be decoded to get the data file path.
     ///
     /// [RFC 2396 URI Generic Syntax]: https://www.ietf.org/rfc/rfc2396.txt
-    #[serde(with = "serde_path")]
+    #[serde(deserialize_with = "serde_path::deserialize")]
     pub path: String,
 
     /// When `false` the records in the removed file must be contained
@@ -1051,6 +1051,72 @@ pub struct Remove {
     /// First commit version in which an add action with the same path was committed to the table.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_row_commit_version: Option<i64>,
+
+    /// The `path` of the removed `add` action exactly as it is stored in the log.
+    ///
+    /// Readers match a remove to its add by comparing the stored path strings, and writers do
+    /// not all escape paths the same way (Spark keeps non-ASCII characters as is). When set,
+    /// this string is written to the log as the remove's `path` instead of re-encoding
+    /// [`Remove::path`]. It is never read from the log.
+    #[serde(skip)]
+    pub log_path: Option<String>,
+}
+
+impl Serialize for Remove {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct LogRemove<'a> {
+            path: std::borrow::Cow<'a, str>,
+            data_change: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            deletion_timestamp: Option<i64>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            extended_file_metadata: Option<bool>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            partition_values: Option<&'a HashMap<String, Option<String>>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            size: Option<i64>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            tags: Option<&'a HashMap<String, Option<String>>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            deletion_vector: Option<&'a DeletionVectorDescriptor>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            base_row_id: Option<i64>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            default_row_commit_version: Option<i64>,
+        }
+
+        let Remove {
+            path,
+            data_change,
+            deletion_timestamp,
+            extended_file_metadata,
+            partition_values,
+            size,
+            tags,
+            deletion_vector,
+            base_row_id,
+            default_row_commit_version,
+            log_path,
+        } = self;
+        LogRemove {
+            path: match log_path {
+                Some(log_path) => log_path.into(),
+                None => serde_path::encode_path(path).into(),
+            },
+            data_change: *data_change,
+            deletion_timestamp: *deletion_timestamp,
+            extended_file_metadata: *extended_file_metadata,
+            partition_values: partition_values.as_ref(),
+            size: *size,
+            tags: tags.as_ref(),
+            deletion_vector: deletion_vector.as_ref(),
+            base_row_id: *base_row_id,
+            default_row_commit_version: *default_row_commit_version,
+        }
+        .serialize(serializer)
+    }
 }
 
 /// Delta AddCDCFile action that describes a parquet CDC data file.
@@ -1425,6 +1491,51 @@ mod tests {
             serde_json::to_value(&cdc).unwrap()["path"],
             "_change_data/part%202.parquet"
         );
+    }
+
+    #[test]
+    fn test_serialize_remove_writes_log_path_verbatim() {
+        let remove = Remove {
+            path: "city=Zürich/part 1.parquet".to_string(),
+            log_path: Some("city=Zürich/part%201.parquet".to_string()),
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(&remove).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"path": "city=Zürich/part%201.parquet", "dataChange": false})
+        );
+        let read_back: Remove = serde_json::from_value(value).unwrap();
+        assert_eq!(read_back.path, remove.path);
+        assert_eq!(read_back.log_path, None);
+    }
+
+    #[test]
+    fn test_serialize_remove_round_trips_every_field() {
+        let json = serde_json::json!({
+            "path": "city=Z%C3%BCrich/part-0.parquet",
+            "dataChange": true,
+            "deletionTimestamp": 1,
+            "extendedFileMetadata": true,
+            "partitionValues": {"city": "Zürich"},
+            "size": 2,
+            "tags": {"k": "v"},
+            "deletionVector": {
+                "storageType": "u",
+                "pathOrInlineDv": "vBn[lx{q8@P<9BNH/isA",
+                "offset": 1,
+                "sizeInBytes": 36,
+                "cardinality": 2
+            },
+            "baseRowId": 3,
+            "defaultRowCommitVersion": 4
+        });
+
+        let remove: Remove = serde_json::from_value(json.clone()).unwrap();
+
+        assert_eq!(remove.path, "city=Zürich/part-0.parquet");
+        assert_eq!(serde_json::to_value(&remove).unwrap(), json);
     }
 
     #[test]

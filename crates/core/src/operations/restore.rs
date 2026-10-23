@@ -463,6 +463,7 @@ mod tests {
             deletion_vector: target_add.deletion_vector.clone(),
             base_row_id: target_add.base_row_id,
             default_row_commit_version: target_add.default_row_commit_version,
+            log_path: None,
         };
         let mut current_add = crate::test_utils::make_test_add(
             target_add.path.clone(),
@@ -562,6 +563,7 @@ mod tests {
             deletion_vector: current_add.deletion_vector,
             base_row_id: current_add.base_row_id,
             default_row_commit_version: current_add.default_row_commit_version,
+            log_path: None,
         };
         assert_eq!(
             normalize_removes(lazy_removes)?,

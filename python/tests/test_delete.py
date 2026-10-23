@@ -292,3 +292,43 @@ def test_delete_partition_predicate_follows_sql_semantics(
     )
     assert sorted(remaining) == expected_remaining
     assert metrics["num_deleted_rows"] == 4 - len(expected_remaining)
+
+
+SPARK_NON_ASCII_PARTITIONS = (
+    pathlib.Path(__file__).parents[2]
+    / "crates/test/tests/data/spark-non-ascii-partitions"
+)
+
+
+def _log_paths(table_path: pathlib.Path, version: int, action: str) -> set[str]:
+    commit = table_path / "_delta_log" / f"{version:020}.json"
+    lines = commit.read_text(encoding="utf-8").splitlines()
+    return {
+        payload[action]["path"]
+        for payload in map(json.loads, lines)
+        if action in payload
+    }
+
+
+def test_delete_spark_non_ascii_partition(tmp_path: pathlib.Path):
+    import shutil
+
+    shutil.copytree(SPARK_NON_ASCII_PARTITIONS, tmp_path, dirs_exist_ok=True)
+    zurich_adds = {
+        path
+        for version in (1, 2)
+        for path in _log_paths(tmp_path, version, "add")
+        if path.startswith("city=Zürich/")
+    }
+
+    DeltaTable(tmp_path).delete("city = 'Zürich'")
+
+    assert _log_paths(tmp_path, 3, "remove") == zurich_adds
+    result = (
+        QueryBuilder()
+        .register("tbl", DeltaTable(tmp_path))
+        .execute("select id, city from tbl order by id")
+        .read_all()
+    )
+    assert result["id"].to_pylist() == [2, 3, 5, 6]
+    assert result["city"].to_pylist() == ["Paris", "東京", "Paris", "東京"]
