@@ -319,8 +319,11 @@ impl StatsScalar {
                     TimeUnit::MILLIS => chrono::DateTime::from_timestamp_millis(v),
                     TimeUnit::MICROS => chrono::DateTime::from_timestamp_micros(v),
                     TimeUnit::NANOS => {
-                        let secs = v / 1_000_000_000;
-                        let nanosecs = (v % 1_000_000_000) as u32;
+                        // Euclidean division keeps the seconds part floored and
+                        // the sub-second part non-negative, so pre-epoch
+                        // (negative) values convert like positive ones.
+                        let secs = v.div_euclid(1_000_000_000);
+                        let nanosecs = v.rem_euclid(1_000_000_000) as u32;
                         chrono::DateTime::from_timestamp(secs, nanosecs)
                     }
                 };
@@ -938,6 +941,39 @@ mod tests {
             let scalar = StatsScalar::try_from_stats(stats, logical_type.as_ref(), true).unwrap();
             let actual = serde_json::Value::from(scalar);
             assert_eq!(&actual, expected);
+        }
+    }
+
+    #[test]
+    fn test_stats_scalar_pre_epoch_nanos_timestamp() {
+        let logical_type = Some(LogicalType::Timestamp(TimestampType {
+            is_adjusted_to_u_t_c: true,
+            unit: parquet::basic::TimeUnit::NANOS,
+        }));
+        let cases = &[
+            // Exact whole seconds before the epoch already converted fine
+            (-1_000_000_000, "1969-12-31T23:59:59Z"),
+            (-2_000_000_000, "1969-12-31T23:59:58Z"),
+            // A sub-second component used to fail with StatsParsingFailed,
+            // which silently dropped the bound from the file statistics
+            (-1_500_000_000, "1969-12-31T23:59:58.500Z"),
+            (-500_000_000, "1969-12-31T23:59:59.500Z"),
+            // Serialized truncated to millisecond precision, like positive values
+            (-1, "1969-12-31T23:59:59.999Z"),
+        ];
+        for (value, expected) in cases {
+            // the same value must convert as a minimum and as a maximum
+            for use_min in [true, false] {
+                let stats = simple_parquet_stat!(Statistics::Int64, *value);
+                let scalar =
+                    StatsScalar::try_from_stats(&stats, logical_type.as_ref(), use_min).unwrap();
+                let actual = serde_json::Value::from(scalar);
+                assert_eq!(
+                    actual,
+                    Value::from(*expected),
+                    "value: {value}, use_min: {use_min}"
+                );
+            }
         }
     }
 
