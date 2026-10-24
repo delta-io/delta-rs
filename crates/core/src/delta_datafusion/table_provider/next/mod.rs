@@ -3079,8 +3079,7 @@ mod tests {
         crate::DeltaTable,
         Arc<crate::delta_datafusion::table_provider::next::DeltaScan>,
     )> {
-        let mut table =
-            open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let mut table = open_fs_path("../test/tests/data/multi_partitioned");
         table.load().await?;
 
         let provider = crate::delta_datafusion::table_provider::next::DeltaScan::new(
@@ -3241,8 +3240,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delta_scan_provider_schema_keeps_configured_file_id_capability() -> TestResult {
-        let mut table =
-            open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let mut table = open_fs_path("../test/tests/data/multi_partitioned");
         table.load().await?;
         let provider = crate::delta_datafusion::table_provider::next::DeltaScan::new(
             table.snapshot()?.snapshot().clone(),
@@ -3256,8 +3254,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delta_scan_config_file_column_projection() -> TestResult {
-        let mut table =
-            open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let mut table = open_fs_path("../test/tests/data/multi_partitioned");
         table.load().await?;
         let provider = Arc::new(
             crate::delta_datafusion::table_provider::next::DeltaScan::new(
