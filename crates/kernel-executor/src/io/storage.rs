@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use chrono::DateTime;
 use dashmap::DashMap;
 use dashmap::mapref::one::Ref;
+use datafusion::datasource::listing::PartitionedFile;
 use datafusion::execution::TaskContext;
 use datafusion::execution::object_store::{ObjectStoreRegistry, ObjectStoreUrl};
 use delta_kernel::plans::ir::nodes::ScanFile;
@@ -13,6 +15,8 @@ use delta_kernel_default_engine::executor::tokio::{
 use delta_kernel_default_engine::filesystem::ObjectStoreStorageHandler;
 use indexmap::IndexMap;
 use itertools::Itertools;
+use object_store::ObjectMeta;
+use object_store::path::Path;
 use tokio::runtime::{Handle, RuntimeFlavor};
 use url::Url;
 
@@ -164,6 +168,18 @@ fn get_store_url(url: &url::Url) -> ObjectStoreUrl {
     // from a valid url and pass only the parts that object store url
     // expects.
     .unwrap()
+}
+
+/// The file at `meta` as a [`PartitionedFile`], without the double encoding of `PartitionedFile::new`.
+pub fn to_partitioned_file(meta: &FileMeta) -> Result<PartitionedFile, object_store::path::Error> {
+    Ok(ObjectMeta {
+        location: Path::from_url_path(meta.location.path())?,
+        last_modified: DateTime::from_timestamp_millis(meta.last_modified).unwrap_or_default(),
+        size: meta.size,
+        e_tag: None,
+        version: None,
+    }
+    .into())
 }
 
 /// `files` grouped by the object store that serves them, in first-seen order.

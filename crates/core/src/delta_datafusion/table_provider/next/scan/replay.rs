@@ -21,7 +21,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use delta_kernel::{
-    Engine, ExpressionRef,
+    Engine, ExpressionRef, FileMeta,
     engine::{arrow_conversion::TryIntoArrow, arrow_data::ArrowEngineData},
     engine_data::FilteredEngineData,
     expressions::{Scalar, StructData},
@@ -154,7 +154,7 @@ where
                     if file.dv_info.has_vector() {
                         let engine = this.engine.clone();
                         let dv_info = file.dv_info.clone();
-                        let file_url = file.file_url.clone();
+                        let file_url = file.meta.location.clone();
                         // Kernel's visitor reads JSON stats. Recover counts from structured stats.
                         let num_records = file.num_records.or_else(|| {
                             LogicalFileView::new(scan_files.clone(), index)
@@ -223,7 +223,7 @@ where
                     .into_iter()
                     .map(|ctx| {
                         let (stats, partitions) = file_statistics
-                            .remove(&ctx.file_url)
+                            .remove(&ctx.meta.location)
                             .unwrap_or_else(|| (unknown_stats(), None));
                         ScanFileContext::new(ctx, stats, partitions)
                     })
@@ -387,8 +387,8 @@ fn extract_struct(scalar: Option<Scalar>) -> Option<StructData> {
 ///
 /// # Fields
 ///
-/// - [`file_url`](Self::file_url): Complete URL for reading the file from object storage
-/// - [`size`](Self::size): File size in bytes for I/O planning
+/// - [`meta`](Self::meta): Complete URL for reading the file from object storage, its size in
+///   bytes for I/O planning, and its modification time
 /// - [`transform`](Self::transform): Expression to apply partition values and column mapping
 /// - [`stats`](Self::stats): File-level statistics for predicate pushdown and pruning
 /// - [`partitions`](Self::partitions): Partition column values to materialize
@@ -396,10 +396,8 @@ fn extract_struct(scalar: Option<Scalar>) -> Option<StructData> {
 /// These contexts are created during the scan replay phase and consumed by execution plans.
 #[derive(Debug)]
 pub(crate) struct ScanFileContext {
-    /// Fully qualified URL of the file.
-    pub file_url: Url,
-    /// Size of the file on disk.
-    pub size: u64,
+    /// The file's fully qualified URL, size, and modification time.
+    pub meta: FileMeta,
     /// Transformations to apply to the data in the file.
     pub transform: Option<ExpressionRef>,
     /// Statistics about the data in the file.
@@ -416,8 +414,7 @@ impl ScanFileContext {
     /// Create a new `ScanFileContext` with the given file URL, size, and statistics.
     fn new(inner: ScanFileContextInner, stats: Statistics, partitions: Option<StructData>) -> Self {
         Self {
-            file_url: inner.file_url,
-            size: inner.size,
+            meta: inner.meta,
             transform: inner.transform,
             stats,
             num_records: inner.num_records,
@@ -429,10 +426,8 @@ impl ScanFileContext {
 /// Metadata to read a data file from object storage.
 #[derive(Debug)]
 struct ScanFileContextInner {
-    /// Fully qualified URL of the file.
-    pub file_url: Url,
-    /// Size of the file on disk.
-    pub size: u64,
+    /// The file's fully qualified URL, size, and modification time.
+    pub meta: FileMeta,
     /// Transformations to apply to the data in the file.
     pub transform: Option<ExpressionRef>,
     /// Number of records in the file from Add-file stats.
@@ -529,8 +524,11 @@ fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
     ctx.files.push(ScanFileContextInner {
         dv_info: scan_file.dv_info,
         transform: scan_file.transform,
-        file_url,
-        size: scan_file.size as u64,
+        meta: FileMeta {
+            location: file_url,
+            last_modified: scan_file.modification_time,
+            size: scan_file.size as u64,
+        },
         num_records: scan_file.stats.map(|stats| stats.num_records),
     });
     ctx.count += 1;
@@ -572,7 +570,7 @@ mod tests {
         let ctx = ctx.error_or().unwrap();
         assert_eq!(ctx.files.len(), 1);
         assert_eq!(
-            ctx.files[0].file_url.as_str(),
+            ctx.files[0].meta.location.as_str(),
             "file:///tmp/delta/part-000.parquet"
         );
     }
