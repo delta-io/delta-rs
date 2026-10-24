@@ -195,6 +195,7 @@ impl FromStr for TableProperty {
 
 /// Delta configuration error
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DeltaConfigError {
     /// Error returned when configuration validation failed.
     #[error("Validation failed - {0}")]

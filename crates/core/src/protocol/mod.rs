@@ -31,6 +31,7 @@ pub(crate) use checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 /// Struct used to represent minValues and maxValues in add action statistics.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum ColumnValueStat {
     /// Composite HashMap representation of statistics.
     Column(HashMap<String, ColumnValueStat>),
@@ -59,6 +60,7 @@ impl ColumnValueStat {
 /// Struct used to represent nullCount in add action statistics.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum ColumnCountStat {
     /// Composite HashMap representation of statistics.
     Column(HashMap<String, ColumnCountStat>),
@@ -229,6 +231,7 @@ pub struct MergePredicate {
 #[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum DeltaOperation {
     /// Represents a Delta `Add Column` operation.
     /// Used to add new columns or field in a struct
@@ -516,6 +519,7 @@ pub(crate) fn operation_parameter_value(value: Value) -> Value {
 
 /// The SaveMode used when performing a DeltaOperation
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SaveMode {
     /// Files will be appended to the target location.
     Append,
@@ -545,6 +549,7 @@ impl FromStr for SaveMode {
 
 /// The OutputMode used in streaming operations.
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
+#[non_exhaustive]
 pub enum OutputMode {
     /// Only new rows will be written when new data is available.
     Append,

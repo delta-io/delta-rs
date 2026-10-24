@@ -25,6 +25,7 @@ use itertools::Either;
 
 /// Exceptions raised during commit conflict resolution
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum CommitConflictError {
     /// This exception occurs when a concurrent operation adds files in the same partition
     /// (or anywhere in an un-partitioned table) that your operation reads. The file additions
