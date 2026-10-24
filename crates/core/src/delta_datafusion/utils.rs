@@ -99,6 +99,8 @@ pub(crate) fn maybe_into_expr(
 pub(crate) enum LossyLiterals {
     /// Cast the column to the common comparison type so the predicate keeps its meaning and
     /// every side of the comparison has the same type, e.g. `CAST(int_col AS DOUBLE) < 8.5`.
+    /// When the common type is the column's own type, e.g. a `DOUBLE` column against a
+    /// `BIGINT`, only the literal is cast.
     WidenColumn,
     /// Leave the comparison as written, e.g. when the expression is persisted as SQL text.
     Keep,
@@ -260,9 +262,12 @@ fn coerce_comparison(
     }) else {
         return Ok(None);
     };
-    if common_type == expr_type {
-        return Ok(None);
-    }
+    // DataFusion compares a float column with an integer in the column's float type,
+    // which rounds the literal. Spark compares those in DOUBLE, so do the same where it is wider.
+    let common_type = match common_type {
+        DataType::Float16 | DataType::Float32 if common_type == expr_type => DataType::Float64,
+        common_type => common_type,
+    };
     let Ok(widened) = literals
         .iter()
         .map(|value| value.cast_to(&common_type))
@@ -270,7 +275,12 @@ fn coerce_comparison(
     else {
         return Ok(None);
     };
-    Ok(Some((cast(expr.clone(), common_type), widened)))
+    let expr = if common_type == expr_type {
+        expr.clone()
+    } else {
+        cast(expr.clone(), common_type)
+    };
+    Ok(Some((expr, widened)))
 }
 
 /// Casts `value` to `target`, or returns `None` if casting the result back does not give
@@ -626,6 +636,7 @@ mod tests {
             Field::new("int32_col", ArrowDataType::Int32, true),
             Field::new("int64_col", ArrowDataType::Int64, true),
             Field::new("float32_col", ArrowDataType::Float32, true),
+            Field::new("float64_col", ArrowDataType::Float64, true),
             Field::new("dec_col", ArrowDataType::Decimal128(10, 2), true),
         ])
         .to_dfschema()
@@ -670,6 +681,19 @@ mod tests {
     #[case::float32_vs_float64(
         col("float32_col").lt(lit(2.0000001_f64)),
         cast(col("float32_col"), ArrowDataType::Float64).lt(lit(2.0000001_f64))
+    )]
+    #[case::float32_vs_int(
+        col("float32_col").eq(lit(16_777_217_i64)),
+        cast(col("float32_col"), ArrowDataType::Float64).eq(lit(16_777_217.0_f64))
+    )]
+    #[case::float32_in_list(
+        col("float32_col").in_list(vec![lit(16_777_217_i64), lit(1_i64)], false),
+        cast(col("float32_col"), ArrowDataType::Float64)
+            .in_list(vec![lit(16_777_217.0_f64), lit(1.0_f64)], false)
+    )]
+    #[case::float64_vs_int(
+        col("float64_col").eq(lit((1_i64 << 53) + 1)),
+        col("float64_col").eq(lit(9_007_199_254_740_992.0_f64))
     )]
     #[case::decimal_scale(
         col("dec_col").eq(dec(1235, 4, 3)),

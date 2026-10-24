@@ -2182,6 +2182,57 @@ mod tests {
         assert_eq!(ids, expected_ids, "predicate: {predicate}");
     }
 
+    #[rstest]
+    #[case::eq("value = 16777217", vec![1, 2, 3])]
+    #[case::lt("value < 16777217", vec![3])]
+    #[case::gt("value > 16777217", vec![1, 2])]
+    #[case::in_list("value IN (16777217, 1)", vec![2, 3])]
+    #[case::in_list_with_double("value IN (16777217, 1.5)", vec![1, 2, 3])]
+    #[tokio::test]
+    async fn test_delete_float32_column_with_inexact_integer_literal(
+        #[case] predicate: &str,
+        #[case] expected_ids: Vec<i64>,
+        #[values(false, true)] partitioned: bool,
+    ) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("value", DataType::Float32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(arrow::array::Int64Array::from(vec![1, 2, 3])),
+                Arc::new(arrow::array::Float32Array::from(vec![
+                    1.0,
+                    16_777_216.0,
+                    16_777_218.0,
+                ])),
+            ],
+        )
+        .unwrap();
+        let partitions = if partitioned { vec!["value"] } else { vec![] };
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_partition_columns(partitions)
+            .await
+            .unwrap();
+
+        let (table, _) = table.delete().with_predicate(predicate).await.unwrap();
+
+        let mut ids: Vec<i64> = get_data(&table)
+            .await
+            .iter()
+            .flat_map(|batch| {
+                let ids = batch.column_by_name("id").unwrap();
+                arrow::array::AsArray::as_primitive::<arrow::datatypes::Int64Type>(ids)
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        ids.sort();
+        assert_eq!(ids, expected_ids, "predicate: {predicate}");
+    }
+
     #[tokio::test]
     async fn test_delete_does_not_round_decimal_literals_to_column_scale() {
         let schema = Arc::new(Schema::new(vec![Field::new(
