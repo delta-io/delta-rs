@@ -160,6 +160,9 @@ fn matches_datatype(dtype_to_check: &DataType, dtype: &DataType) -> bool {
         DataType::Struct(inner) => inner
             .fields()
             .any(|f| matches_datatype(f.data_type(), dtype)),
+        DataType::Map(inner) => {
+            matches_datatype(inner.key_type(), dtype) || matches_datatype(inner.value_type(), dtype)
+        }
         _ => false,
     }
 }
@@ -1419,6 +1422,40 @@ mod tests {
     fn test_primitive() {
         let types: PrimitiveType = serde_json::from_str("\"string\"").unwrap();
         println!("{types:?}");
+    }
+
+    fn nested_in_maps(dtype: DataType) -> Vec<DataType> {
+        use delta_kernel::schema::{ArrayType, MapType};
+        let map_key = DataType::Map(Box::new(MapType::new(
+            dtype.clone(),
+            DataType::STRING,
+            true,
+        )));
+        let map_value = DataType::Map(Box::new(MapType::new(DataType::STRING, dtype, true)));
+        let array_of_map = DataType::Array(Box::new(ArrayType::new(map_value.clone(), true)));
+        vec![map_key, map_value, array_of_map]
+    }
+
+    #[test]
+    fn test_contains_timestampntz_in_map() {
+        for dtype in nested_in_maps(DataType::TIMESTAMP_NTZ) {
+            let field = StructField::nullable("c", dtype.clone());
+            assert!(contains_timestampntz(std::iter::once(&field)), "{dtype:?}");
+        }
+        let field = StructField::nullable("c", nested_in_maps(DataType::TIMESTAMP).remove(0));
+        assert!(!contains_timestampntz(std::iter::once(&field)));
+    }
+
+    #[cfg(feature = "nanosecond-timestamps")]
+    #[test]
+    fn test_contains_timestamp_nanos_in_map() {
+        for dtype in nested_in_maps(DataType::TIMESTAMP_NANOS_NTZ) {
+            let field = StructField::nullable("c", dtype.clone());
+            assert!(
+                contains_timestamp_nanos(std::iter::once(&field)),
+                "{dtype:?}"
+            );
+        }
     }
 
     #[test]
