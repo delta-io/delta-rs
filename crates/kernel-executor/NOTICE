@@ -1,4 +1,4 @@
-delta-kernel-datafusion-executor
+deltalake-kernel-executor
 Copyright 2026 The delta-rs Authors
 Licensed under the Apache License, Version 2.0 (see LICENSE.txt)
 
@@ -9,13 +9,12 @@ https://github.com/delta-io/delta-kernel-rs
 Copyright 2023-2024 The Delta Kernel Rust Authors
 Licensed under the Apache License, Version 2.0
 
-The following files are copied from the `datafusion-executor` crate in that
-repository at commit 04c2ec32 (main, 2026-10-16). Where a file has since been
-modified, its header comment lists the changes:
+src/expressions/to_datafusion/{expression,predicate,scalar,utils}.rs are
+each derived from the file of the same name in the `datafusion-executor`
+crate in that repository at commit 04c2ec32 (main, 2026-10-16), with the
+entry points renamed to `to_datafusion_expr`, `to_datafusion_predicate_expr`
+and `to_datafusion_scalar`.
 
-  src/expressions/expression.rs   <- datafusion-executor/src/expression.rs
-  src/expressions/predicate.rs    <- datafusion-executor/src/predicate.rs
-  src/expressions/scalar.rs       <- datafusion-executor/src/scalar.rs
-  src/expressions/utils.rs        <- datafusion-executor/src/utils.rs
-  src/query/upstream/plan.rs      <- datafusion-executor/src/plan.rs
-  src/query/upstream/operator.rs  <- datafusion-executor/src/operator.rs
+src/query/mod.rs and src/query/operator.rs take their plan walk and
+operator lowerings from datafusion-executor/src/plan.rs and
+datafusion-executor/src/operator.rs at the same commit.
