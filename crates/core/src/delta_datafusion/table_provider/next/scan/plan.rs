@@ -312,9 +312,21 @@ impl KernelScanPlan {
         } else {
             Arc::new(scan_builder.build()?)
         };
+        // When DeltaScanConfig::schema narrows nested leaves, kernel's physical
+        // schema still carries every sibling under each selected root (kernel
+        // projects at root granularity). Narrow the kernel physical struct to
+        // only the leaves the override actually selects before converting to
+        // Arrow, so DataFusion's parquet reader can prune nested columns.
+        // Kernel field order is preserved because kernel transforms depend on it;
+        // topologies we can't narrow safely are passed through unchanged.
+        let narrowed_physical = narrow_physical_to_override(
+            scan.physical_schema().as_ref(),
+            kernel_logical_schema.as_ref(),
+            config.schema.as_deref(),
+        );
         let parquet_read_schema = config.physical_arrow_schema(
             scan.snapshot().table_configuration(),
-            &scan.physical_schema().as_ref().try_into_arrow()?,
+            &narrowed_physical.as_ref().try_into_arrow()?,
         )?;
         let parquet_predicate_schema =
             build_parquet_predicate_schema(&parquet_read_schema, &contract.file_id_field);
@@ -339,6 +351,123 @@ impl KernelScanPlan {
     pub(crate) fn table_configuration(&self) -> &TableConfiguration {
         self.scan.snapshot().table_configuration()
     }
+}
+
+/// Narrow a kernel physical [`StructType`] to only the leaves selected by an
+/// optional `DeltaScanConfig::schema` override.
+///
+/// The override is an Arrow schema that carries logical (column-mapping)
+/// names. The physical schema carries physical names. We walk the override's
+/// top-level roots, translate each to its physical counterpart via
+/// `logical_schema`, and keep only the physical struct leaves whose logical
+/// paths appear in the override.
+///
+/// Any root we can't narrow safely (not a struct on both sides, column-mapping
+/// name translation fails, list/map subtree, non-trivial topology mismatch)
+/// is passed through unchanged. Order of kernel fields is preserved verbatim.
+///
+/// Returns the original schema when no override is set, when the override is
+/// a no-op, or when no root could be narrowed.
+fn narrow_physical_to_override(
+    physical: &StructType,
+    logical: &StructType,
+    override_schema: Option<&Schema>,
+) -> Arc<StructType> {
+    let Some(override_schema) = override_schema else {
+        return Arc::new(physical.clone());
+    };
+
+    // Map override roots (logical name) -> set of child logical names kept.
+    let mut override_struct_roots: HashMap<&str, Option<HashSet<&str>>> = HashMap::new();
+    for f in override_schema.fields() {
+        match f.data_type() {
+            DataType::Struct(children) => {
+                let mut leaves: HashSet<&str> = HashSet::new();
+                for c in children {
+                    leaves.insert(c.name().as_str());
+                }
+                override_struct_roots.insert(f.name().as_str(), Some(leaves));
+            }
+            _ => {
+                override_struct_roots.insert(f.name().as_str(), None);
+            }
+        }
+    }
+
+    if override_struct_roots.is_empty() {
+        return Arc::new(physical.clone());
+    }
+
+    let mut narrowed_fields: Vec<StructField> = Vec::with_capacity(physical.fields().len());
+    let mut narrowed_any = false;
+
+    for (phys_root, log_root) in physical.fields().zip(logical.fields()) {
+        let Some(selection) = override_struct_roots.get(log_root.name().as_str()) else {
+            narrowed_fields.push(phys_root.clone());
+            continue;
+        };
+        let Some(leaf_names) = selection else {
+            narrowed_fields.push(phys_root.clone());
+            continue;
+        };
+        match (phys_root.data_type(), log_root.data_type()) {
+            (KernelDataType::Struct(phys_children), KernelDataType::Struct(log_children)) => {
+                if let Some(narrow) = narrow_field(
+                    phys_root,
+                    phys_children.as_ref(),
+                    log_children.as_ref(),
+                    leaf_names,
+                ) {
+                    narrowed_fields.push(narrow);
+                    narrowed_any = true;
+                } else {
+                    narrowed_fields.push(phys_root.clone());
+                }
+            }
+            _ => {
+                narrowed_fields.push(phys_root.clone());
+            }
+        }
+    }
+
+    if !narrowed_any {
+        return Arc::new(physical.clone());
+    }
+
+    // ponytail: single-level nested narrowing only; recursive struct-in-struct
+    //           narrowing can land as a follow-up if a user reports it.
+    match StructType::try_new(narrowed_fields) {
+        Ok(s) => Arc::new(s),
+        Err(_) => Arc::new(physical.clone()),
+    }
+}
+
+/// Produce a narrowed copy of a single struct root. Returns `None` when
+/// narrowing would be unsafe or would be a no-op (all children already kept).
+fn narrow_field(
+    phys_root: &StructField,
+    phys_children: &StructType,
+    log_children: &StructType,
+    leaf_names: &HashSet<&str>,
+) -> Option<StructField> {
+    if phys_children.fields().len() != log_children.fields().len() {
+        return None;
+    }
+    let mut kept: Vec<StructField> = Vec::new();
+    for (p, l) in phys_children.fields().zip(log_children.fields()) {
+        if leaf_names.contains(l.name().as_str()) {
+            kept.push(p.clone());
+        }
+    }
+    if kept.is_empty() || kept.len() == phys_children.fields().len() {
+        return None;
+    }
+    let narrowed_struct = StructType::try_new(kept).ok()?;
+    Some(StructField::new(
+        phys_root.name(),
+        KernelDataType::Struct(Box::new(narrowed_struct)),
+        phys_root.is_nullable(),
+    ))
 }
 
 pub(crate) fn build_parquet_predicate_schema(
@@ -1176,6 +1305,116 @@ mod tests {
                 .is_err()
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_read_schema_narrows_nested_leaves_from_override() -> TestResult {
+        // Fixture `s: struct<l: long, b: boolean>`, no column mapping.
+        let mut table = open_fs_path("../test/tests/data/table_with_null_stats_in_notnull_struct");
+        table.load().await?;
+        let snapshot = table.snapshot()?.snapshot();
+
+        // Override restricts `s` to only its `l` child.
+        let override_schema = Arc::new(Schema::new(vec![Arc::new(arrow_schema::Field::new(
+            "s",
+            DataType::Struct(
+                vec![Arc::new(arrow_schema::Field::new(
+                    "l",
+                    DataType::Int64,
+                    false,
+                ))]
+                .into(),
+            ),
+            false,
+        ))]));
+        let config = DeltaScanConfig {
+            schema: Some(override_schema),
+            ..Default::default()
+        };
+
+        let scan_plan = KernelScanPlan::try_new(snapshot.snapshot(), None, &[], &config, None)?;
+
+        let s_field = scan_plan.parquet_read_schema.field_with_name("s")?;
+        let DataType::Struct(children) = s_field.data_type() else {
+            panic!("expected struct, got {:?}", s_field.data_type());
+        };
+        let child_names: Vec<&str> = children.iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(
+            child_names,
+            vec!["l"],
+            "parquet_read_schema must prune sibling `b`; got {child_names:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_read_schema_passthrough_when_no_override() -> TestResult {
+        // No override -> every physical leaf must still be present.
+        let mut table = open_fs_path("../test/tests/data/table_with_null_stats_in_notnull_struct");
+        table.load().await?;
+        let snapshot = table.snapshot()?.snapshot();
+
+        let scan_plan = KernelScanPlan::try_new(
+            snapshot.snapshot(),
+            None,
+            &[],
+            &DeltaScanConfig::default(),
+            None,
+        )?;
+
+        let s_field = scan_plan.parquet_read_schema.field_with_name("s")?;
+        let DataType::Struct(children) = s_field.data_type() else {
+            panic!("expected struct, got {:?}", s_field.data_type());
+        };
+        let mut child_names: Vec<&str> = children.iter().map(|f| f.name().as_str()).collect();
+        child_names.sort();
+        assert_eq!(child_names, vec!["b", "l"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parquet_read_schema_override_is_noop_when_all_children_selected() -> TestResult {
+        // Guards the no-op branch in `narrow_field`:
+        // when the override selects every child of a struct root (kept.len() ==
+        // phys_children.fields().len()), the narrowing is a no-op and the
+        // physical struct is returned unchanged. Also exercises the deliberate
+        // one-level-only scope documented on `narrow_physical_to_override`.
+        let mut table = open_fs_path("../test/tests/data/table_with_null_stats_in_notnull_struct");
+        table.load().await?;
+        let snapshot = table.snapshot()?.snapshot();
+
+        // Override explicitly selects BOTH children of `s`.
+        let override_schema = Arc::new(Schema::new(vec![Arc::new(arrow_schema::Field::new(
+            "s",
+            DataType::Struct(
+                vec![
+                    Arc::new(arrow_schema::Field::new("l", DataType::Int64, false)),
+                    Arc::new(arrow_schema::Field::new("b", DataType::Boolean, true)),
+                ]
+                .into(),
+            ),
+            false,
+        ))]));
+        let config = DeltaScanConfig {
+            schema: Some(override_schema),
+            ..Default::default()
+        };
+
+        let scan_plan = KernelScanPlan::try_new(snapshot.snapshot(), None, &[], &config, None)?;
+
+        // Both physical children must remain (no-op passthrough).
+        let s_field = scan_plan.parquet_read_schema.field_with_name("s")?;
+        let DataType::Struct(children) = s_field.data_type() else {
+            panic!("expected struct, got {:?}", s_field.data_type());
+        };
+        let mut child_names: Vec<&str> = children.iter().map(|f| f.name().as_str()).collect();
+        child_names.sort();
+        assert_eq!(
+            child_names,
+            vec!["b", "l"],
+            "no-op override must preserve all physical children; got {child_names:?}"
+        );
         Ok(())
     }
 
