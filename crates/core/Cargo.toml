@@ -48,6 +48,7 @@ datafusion = { workspace = true, optional = true }
 datafusion-datasource = { workspace = true, optional = true }
 datafusion-physical-expr-adapter = { workspace = true, optional = true }
 datafusion-proto = { workspace = true, optional = true }
+deltalake-kernel-executor = { version = "2.0", path = "../kernel-executor", optional = true }
 
 # serde
 serde = { workspace = true, features = ["derive"] }
@@ -124,6 +125,7 @@ datafusion = [
     "datafusion-datasource",
     "datafusion-physical-expr-adapter",
     "datafusion-proto",
+    "dep:deltalake-kernel-executor",
 ]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
@@ -136,7 +138,10 @@ cloud = ["object_store/cloud", "dep:humantime"]
 delta-cache = ["foyer", "tempfile", "url/serde"]
 
 # Experimental support for nanosecond timestamps primitive type
-nanosecond-timestamps = ["delta_kernel/nanosecond-timestamps"]
+nanosecond-timestamps = [
+    "delta_kernel/nanosecond-timestamps",
+    "deltalake-kernel-executor?/nanosecond-timestamps",
+]
 
 integration_test = []
 

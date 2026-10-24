@@ -762,7 +762,12 @@ fn update_partition_stats(
         } else {
             (
                 Precision::Exact(0),
-                Precision::Exact(to_datafusion_scalar(stat)?),
+                Precision::Exact(to_datafusion_scalar(stat).map_err(|e| {
+                    DataFusionError::External(Box::new(e)).context(format!(
+                        "failure during planning, when translating the partition value of column '{}'",
+                        field.name()
+                    ))
+                })?),
             )
         };
         if let Some(part_stat) = part_stats.get_mut(field.name()) {
