@@ -36,6 +36,7 @@ datafusion-physical-expr-adapter = { workspace = true }
 # "stdlib"
 async-trait = { workspace = true }
 bytes = { workspace = true }
+chrono = { workspace = true }
 dashmap = "6"
 indexmap = "2.2.1"
 itertools = "0.15"

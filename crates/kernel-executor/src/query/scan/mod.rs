@@ -26,7 +26,6 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{DFSchema, Result as DFResult, ScalarValue, project_schema};
-use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::FileGroup;
 use datafusion::datasource::provider_as_source;
 use datafusion::datasource::source::DataSourceExec;
@@ -40,12 +39,10 @@ use datafusion_datasource::TableSchema;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::plans::ir::nodes::{FileType, ScanFile};
 use delta_kernel::schema::{MetadataColumnSpec, StructField, StructType};
-use object_store::ObjectMeta;
-use object_store::path::Path;
 
 use crate::ExecutorError;
 use crate::expressions::to_datafusion_scalar;
-use crate::io::storage::group_by_store;
+use crate::io::storage::{group_by_store, to_partitioned_file};
 
 mod declared_type;
 pub mod expr_adapter;
@@ -236,11 +233,6 @@ fn arrow_field(field: &StructField) -> crate::Result<FieldRef> {
     Ok(Arc::new(arrow_field))
 }
 
-/// `file`'s path within its object store.
-fn store_path(file: &ScanFile) -> crate::Result<Path> {
-    Ok(Path::from_url_path(file.meta.location.path()).map_err(object_store::Error::from)?)
-}
-
 /// The files one object store serves, with their constants as partition values.
 #[derive(Debug)]
 struct StoreFiles {
@@ -258,17 +250,9 @@ impl StoreFiles {
         let file_groups = files
             .iter()
             .map(|file| {
-                // From the `ObjectMeta`: `PartitionedFile::new` parses its path string again,
-                // which encodes a `%` in the file's path a second time.
-                let meta = ObjectMeta {
-                    location: store_path(file)?,
-                    last_modified: Default::default(),
-                    size: file.meta.size,
-                    e_tag: None,
-                    version: None,
-                };
-                let partitioned =
-                    PartitionedFile::from(meta).with_partition_values(layout.constants_for(file)?);
+                let partitioned = to_partitioned_file(&file.meta)
+                    .map_err(object_store::Error::from)?
+                    .with_partition_values(layout.constants_for(file)?);
                 Ok(FileGroup::new(vec![partitioned]))
             })
             .collect::<crate::Result<_>>()?;
