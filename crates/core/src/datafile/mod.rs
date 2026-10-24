@@ -1,7 +1,8 @@
 //! Data-file read/write abstractions, in two tiers:
 //!
 //! * **File tier** ([`DataFileWriter`], [`DataFileReader`]) — the per-file
-//!   seam where parquet `WriterProperties` attach.
+//!   seam where parquet `WriterProperties` attach, resolved per file from a
+//!   [`DeltaWriterProperties`] and its [`WriterPropertiesLayer`]s.
 //!   Impl: [`writer::PartitionWriter`].
 //! * **Dataset tier** ([`DeltaDataWriter`], [`DeltaDataReader`]) — composes the
 //!   file tier across a table. Impl: [`writer::DeltaWriter`].
@@ -22,7 +23,10 @@ pub mod writer;
 #[cfg(feature = "datafusion")]
 pub mod datafusion_ext;
 
-pub use properties::ReaderProperties;
+pub(crate) use properties::DEFAULT_WRITE_BATCH_SIZE;
+pub use properties::{
+    DeltaWriterProperties, FileContext, ReaderProperties, WriterPropertiesLayer, WriterStatsConfig,
+};
 
 /// A fallible stream of [`RecordBatch`]es — the common currency of both tiers.
 /// Producers that parallelize (concurrent file opens, partitioned scans) do so
@@ -41,8 +45,8 @@ where
 }
 
 /// File tier: writes a single Delta data file (or size-split set for one
-/// partition). The per-file seam where parquet `WriterProperties`/encryption
-/// attach. Impl: [`writer::PartitionWriter`].
+/// partition). The per-file seam where parquet `WriterProperties` attach, see
+/// [`DeltaWriterProperties::resolve`]. Impl: [`writer::PartitionWriter`].
 #[async_trait::async_trait]
 pub trait DataFileWriter: Send {
     /// Buffer a record batch, writing to one or more parquet files as needed.

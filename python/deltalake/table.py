@@ -62,13 +62,19 @@ SUPPORTED_WRITER_FEATURES = {
     "appendOnly",
     "invariants",
     "timestampNtz",
+    "v2Checkpoint",
     "variantType",
     "variantType-preview",
 }
 
 MAX_SUPPORTED_READER_VERSION = 3
 NOT_SUPPORTED_READER_VERSION = -1
-SUPPORTED_READER_FEATURES = {"timestampNtz", "variantType", "variantType-preview"}
+SUPPORTED_READER_FEATURES = {
+    "timestampNtz",
+    "v2Checkpoint",
+    "variantType",
+    "variantType-preview",
+}
 
 FSCK_METRICS_FILES_REMOVED_LABEL = "files_removed"
 
@@ -114,6 +120,112 @@ def _encode_filter_conjunction(
             str_value = encode_partition_value(value)
         encoded.append((field, op, str_value))
     return encoded
+
+
+def _warn_pyarrow_engine(method: str) -> None:
+    warnings.warn(
+        f"The pyarrow engine of {method} is deprecated and will be removed in a "
+        'future release; pass engine="datafusion". The engines differ in edge '
+        'cases: see the "Choosing an engine" section of the Querying Delta '
+        "Tables docs before migrating.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
+_SQL_FILTER_OPS = frozenset({"=", "==", "!=", "<", "<=", ">", ">=", "in", "not in"})
+
+
+def _sql_identifier(name: str) -> str:
+    """Double-quote an identifier so case survives and any name is legal."""
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _sql_literal(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        return str(value)
+    escaped = encode_partition_value(value).replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _sql_filter_literal(literal: FilterLiteralType) -> str:
+    """Render one (column, op, value) tuple with the engine's declared
+    semantics: `= None` is IS NULL, a None in an `in` list matches NULLs, and
+    `not in` keeps SQL three-valued logic."""
+    match literal:
+        case tuple((str() as column, str() as op, value)) if op in _SQL_FILTER_OPS:
+            pass
+        case tuple((_, _, _)):
+            raise ValueError(
+                f"invalid filter {literal!r}; expected a string column and an "
+                f"operator among =, !=, <, <=, >, >=, in, not in"
+            )
+        case _:
+            raise ValueError(f"filter must be a (column, op, value) tuple: {literal!r}")
+
+    ident = _sql_identifier(column)
+    match op, value:
+        case "not in", list() | tuple() | set() if not value:
+            return "TRUE"
+        case "not in", list() | tuple() | set():
+            return f"{ident} NOT IN ({', '.join(_sql_literal(v) for v in value)})"
+        case "in", list() | tuple() | set():
+            non_null = [v for v in value if v is not None]
+            has_null = len(non_null) != len(value)
+            in_clause = f"{ident} IN ({', '.join(_sql_literal(v) for v in non_null)})"
+            match non_null, has_null:
+                case [], False:
+                    return "FALSE"
+                case [], True:
+                    return f"{ident} IS NULL"
+                case _, False:
+                    return in_clause
+                case _:
+                    return f"({in_clause} OR {ident} IS NULL)"
+        case (("in" | "not in"), _):
+            raise ValueError(f"operator {op!r} takes a list of values: {literal!r}")
+        case _, list() | tuple() | set():
+            raise ValueError(f"operator {op!r} takes a single value: {literal!r}")
+        case (("=" | "=="), None):
+            return f"{ident} IS NULL"
+        case "!=", None:
+            return f"{ident} IS NOT NULL"
+        case _, None:
+            return f"{ident} {op} NULL"
+        case "==", _:
+            return f"{ident} = {_sql_literal(value)}"
+        case _:
+            return f"{ident} {op} {_sql_literal(value)}"
+
+
+def _filters_to_sql_predicate(filters: FilterType) -> str:
+    """Compile tuple filters to a DataFusion SQL predicate: a flat list is a
+    conjunction (AND), a list of lists an OR across parenthesized ANDs."""
+    conjunctions: FilterDNFType
+    if all(isinstance(conjunction, list) for conjunction in filters):
+        conjunctions = cast(FilterDNFType, filters)
+    elif all(isinstance(literal, tuple) for literal in filters):
+        conjunctions = [cast(FilterConjunctionType, filters)]
+    else:
+        raise ValueError(
+            "filters must be a list of (column, op, value) tuples (a conjunction), "
+            "or a list of such lists (an OR across conjunctions), not a mix of both"
+        )
+    parts = []
+    for conjunction in conjunctions:
+        if not conjunction:
+            raise ValueError(
+                "empty conjunction in filters; pass no filter to match all rows"
+            )
+        parts.append(" AND ".join(_sql_filter_literal(lit) for lit in conjunction))
+    if len(parts) == 1:
+        return parts[0]
+    return " OR ".join(f"({part})" for part in parts)
 
 
 class _KeywordArgDefault:
@@ -200,6 +312,7 @@ class TableProperty(StrEnum):
     CHECKPOINT_INTERVAL = "delta.checkpointInterval"
     CHECKPOINT_WRITE_STATS_AS_JSON = "delta.checkpoint.writeStatsAsJson"
     CHECKPOINT_WRITE_STATS_AS_STRUCT = "delta.checkpoint.writeStatsAsStruct"
+    # Deprecated: ignored since 1.0.0, checkpoint encoding is not configurable.
     CHECKPOINT_USE_RUN_LENGTH_ENCODING = "delta-rs.checkpoint.useRunLengthEncoding"
     CHECKPOINT_POLICY = "delta.checkpointPolicy"
     COLUMN_MAPPING_MODE = "delta.columnMapping.mode"
@@ -905,6 +1018,7 @@ class DeltaTable:
     ) -> dict[str, Any]:
         """`UPDATE` records in the Delta Table that matches an optional predicate. Either updates or new_values needs
         to be passed for it to execute.
+        If a datetime object without a timezone is passed in `new_values`, the UTC timezone will be assumed.
 
         Args:
             updates: a mapping of column name to update SQL expression.
@@ -972,6 +1086,8 @@ class DeltaTable:
                 elif isinstance(value, str):
                     value = "'" + value.replace("'", "''") + "'"
                 elif isinstance(value, datetime):
+                    if value.tzinfo is None:
+                        value = value.replace(tzinfo=timezone.utc)
                     value = str(
                         int(value.timestamp() * 1000 * 1000)
                     )  # convert to microseconds
@@ -1232,7 +1348,14 @@ class DeltaTable:
                     "but these are not yet supported by the deltalake reader."
                 )
 
-        if (
+        # minReaderVersion 2 tables carry column mapping without a
+        # reader_features list, so the feature check alone misses them and the
+        # scanner reads logical column names against physical parquet columns,
+        # returning all nulls. Check the table configuration directly.
+        column_mapping_mode = self.metadata().configuration.get(
+            "delta.columnMapping.mode", "none"
+        )
+        if column_mapping_mode not in ("none",) or (
             table_protocol.reader_features
             and "columnMapping" in table_protocol.reader_features
         ):
@@ -1301,7 +1424,8 @@ class DeltaTable:
         partitions: FilterType | None = None,
         columns: list[str] | None = None,
         filesystem: str | pa_fs.FileSystem | None = None,
-        filters: FilterType | Expression | None = None,
+        filters: str | FilterType | Expression | None = None,
+        engine: Literal["pyarrow", "datafusion"] = "pyarrow",
     ) -> "pyarrow.Table":
         """
         Build a PyArrow Table using data from the DeltaTable.
@@ -1311,10 +1435,11 @@ class DeltaTable:
         files that cannot contain matching rows are never read, and the
         surviving rows are filtered exactly.
 
-        This method is a thin wrapper over `to_pyarrow_dataset`. The unrolled
-        chain is equivalent, and passing `file_pruning_predicate` there prunes
-        during log replay, before any per-file fragment setup, which can matter
-        on tables with very large file counts:
+        With `engine="pyarrow"` (the deprecated default), this method is a thin
+        wrapper over `to_pyarrow_dataset`. The unrolled chain is equivalent, and
+        passing `file_pruning_predicate` there prunes during log replay, before
+        any per-file fragment setup, which can matter on tables with very large
+        file counts:
 
         ```python
         dt.to_pyarrow_table(columns=cols, filters=[("year", "=", "2021")])
@@ -1326,12 +1451,50 @@ class DeltaTable:
         ).to_table(columns=cols)
         ```
 
+        With `engine="datafusion"`, the built-in engine reads the table instead;
+        it also reads tables the pyarrow engine cannot, such as those using
+        column mapping or deletion vectors. Row order is not guaranteed. The
+        engines differ in edge cases (NULL handling, duplicate projections); see
+        the "Choosing an engine" section of the Querying Delta Tables docs.
+
         Args:
             partitions: Deprecated. Use `filters`, or `to_pyarrow_dataset` with `file_pruning_predicate`
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
-            filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
-            filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression
+            filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem. `engine="pyarrow"` only
+            filters: A SQL predicate string (`engine="datafusion"` only) or a disjunctive normal form (DNF) tuple predicate for filtering rows. `engine="pyarrow"` also accepts a pyarrow.dataset.Expression
+            engine: The engine reading the table. The pyarrow engine is deprecated and will be removed in a future release
         """
+        match engine:
+            case "datafusion":
+                return self._to_pyarrow_table_datafusion(
+                    partitions=partitions,
+                    columns=columns,
+                    filesystem=filesystem,
+                    filters=filters,
+                )
+            case "pyarrow":
+                _warn_pyarrow_engine("to_pyarrow_table")
+                return self._to_pyarrow_table_pyarrow(
+                    partitions=partitions,
+                    columns=columns,
+                    filesystem=filesystem,
+                    filters=filters,
+                )
+            case _:
+                raise ValueError(
+                    f"unknown engine {engine!r}; expected 'pyarrow' or 'datafusion'"
+                )
+
+    def _to_pyarrow_table_pyarrow(
+        self,
+        *,
+        partitions: FilterType | None,
+        columns: list[str] | None,
+        filesystem: str | pa_fs.FileSystem | None,
+        filters: str | FilterType | Expression | None,
+    ) -> "pyarrow.Table":
+        if isinstance(filters, str):
+            raise ValueError('SQL string filters require engine="datafusion"')
         try:
             from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
         except ImportError:
@@ -1343,7 +1506,7 @@ class DeltaTable:
             warnings.warn(
                 "`partitions` is deprecated; use `filters` instead",
                 DeprecationWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
         if filters is not None:
             filters = filters_to_expression(filters)
@@ -1352,13 +1515,59 @@ class DeltaTable:
             filesystem=filesystem,
         ).to_table(columns=columns, filter=filters)
 
+    def _to_pyarrow_table_datafusion(
+        self,
+        *,
+        partitions: FilterType | None,
+        columns: list[str] | None,
+        filesystem: str | pa_fs.FileSystem | None,
+        filters: str | FilterType | Expression | None,
+    ) -> "pyarrow.Table":
+        if partitions is not None:
+            raise ValueError(
+                "`partitions` is deprecated and not supported with "
+                'engine="datafusion"; pass `filters` instead'
+            )
+        if filesystem is not None:
+            raise ValueError(
+                'filesystem is not supported with engine="datafusion"; pass '
+                "storage_options to DeltaTable instead"
+            )
+        try:
+            import pyarrow
+        except ImportError:
+            raise ImportError(
+                "Pyarrow is required, install deltalake[pyarrow] for pyarrow read functionality."
+            )
+
+        predicate: str | None = None
+        if isinstance(filters, str):
+            predicate = filters
+        elif isinstance(filters, list):
+            predicate = _filters_to_sql_predicate(filters) if filters else None
+        elif filters is not None:
+            raise ValueError(
+                'engine="datafusion" takes a SQL predicate string or tuple filters '
+                "(a list of (column, op, value) tuples, or a list of such lists); "
+                'pyarrow expressions require engine="pyarrow"'
+            )
+
+        reader = self._table.scan(columns=columns, predicate=predicate)
+        table = pyarrow.RecordBatchReader.from_stream(reader).read_all()
+        # the engine emits arrow view types; cast back to the table's logical schema
+        target = pyarrow.schema(self.schema().to_arrow())
+        if columns is not None:
+            target = pyarrow.schema([target.field(name) for name in columns])
+        return table.cast(target)
+
     def to_pandas(
         self,
         partitions: FilterType | None = None,
         columns: list[str] | None = None,
         filesystem: str | pa_fs.FileSystem | None = None,
-        filters: FilterType | Expression | None = None,
+        filters: str | FilterType | Expression | None = None,
         types_mapper: Callable[[pyarrow.DataType], Any] | None = None,
+        engine: Literal["pyarrow", "datafusion"] = "pyarrow",
     ) -> "pd.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
@@ -1368,10 +1577,11 @@ class DeltaTable:
         files that cannot contain matching rows are never read, and the
         surviving rows are filtered exactly.
 
-        This method is a thin wrapper over `to_pyarrow_dataset`. The unrolled
-        chain is equivalent, and passing `file_pruning_predicate` there prunes
-        during log replay, before any per-file fragment setup, which can matter
-        on tables with very large file counts:
+        With `engine="pyarrow"` (the deprecated default), this method is a thin
+        wrapper over `to_pyarrow_dataset`. The unrolled chain is equivalent, and
+        passing `file_pruning_predicate` there prunes during log replay, before
+        any per-file fragment setup, which can matter on tables with very large
+        file counts:
 
         ```python
         dt.to_pandas(columns=cols, filters=[("year", "=", "2021")])
@@ -1383,19 +1593,40 @@ class DeltaTable:
         ).to_table(columns=cols).to_pandas()
         ```
 
+        With `engine="datafusion"`, the built-in engine reads the table instead;
+        it also reads tables the pyarrow engine cannot, such as those using
+        column mapping or deletion vectors. Row order is not guaranteed. The
+        engines differ in edge cases (NULL handling, duplicate projections); see
+        the "Choosing an engine" section of the Querying Delta Tables docs.
+
         Args:
             partitions: Deprecated. Use `filters`, or `to_pyarrow_dataset` with `file_pruning_predicate`
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
-            filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
-            filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression
+            filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem. `engine="pyarrow"` only
+            filters: A SQL predicate string (`engine="datafusion"` only) or a disjunctive normal form (DNF) tuple predicate for filtering rows. `engine="pyarrow"` also accepts a pyarrow.dataset.Expression
             types_mapper: A function mapping a pyarrow DataType to a pandas ExtensionDtype
+            engine: The engine reading the table. The pyarrow engine is deprecated and will be removed in a future release
         """
-        return self.to_pyarrow_table(
-            partitions=partitions,
-            columns=columns,
-            filesystem=filesystem,
-            filters=filters,
-        ).to_pandas(types_mapper=types_mapper)
+        match engine:
+            case "datafusion":
+                return self._to_pyarrow_table_datafusion(
+                    partitions=partitions,
+                    columns=columns,
+                    filesystem=filesystem,
+                    filters=filters,
+                ).to_pandas(types_mapper=types_mapper)
+            case "pyarrow":
+                _warn_pyarrow_engine("to_pandas")
+                return self._to_pyarrow_table_pyarrow(
+                    partitions=partitions,
+                    columns=columns,
+                    filesystem=filesystem,
+                    filters=filters,
+                ).to_pandas(types_mapper=types_mapper)
+            case _:
+                raise ValueError(
+                    f"unknown engine {engine!r}; expected 'pyarrow' or 'datafusion'"
+                )
 
     def update_incremental(self) -> None:
         """

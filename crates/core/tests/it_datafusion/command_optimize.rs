@@ -14,11 +14,13 @@ use arrow_select::concat::concat_batches;
 use arrow_select::take::take;
 use bytes::Bytes;
 use datafusion::prelude::SessionContext;
-use deltalake_core::datafile::writer::ArrowWriterOptions;
+use deltalake_core::datafile::DeltaWriterProperties;
 use deltalake_core::delta_datafusion::DeltaSessionContext;
 use deltalake_core::ensure_table_uri;
 use deltalake_core::errors::DeltaTableError;
-use deltalake_core::kernel::transaction::{CommitBuilder, CommitProperties};
+use deltalake_core::kernel::transaction::{
+    CommitBuilder, CommitConflictError, CommitProperties, TransactionError,
+};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::parquet_reader::ParquetObjectReader;
 use deltalake_core::logstore::{
@@ -632,6 +634,46 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
+async fn test_optimize_preserves_int96_timestamps_outside_nanosecond_range()
+-> Result<(), Box<dyn Error>> {
+    let tmp_dir = tempfile::tempdir()?;
+    fs_extra::dir::copy(
+        "../test/tests/data/table_with_edge_timestamps",
+        tmp_dir.path(),
+        &Default::default(),
+    )?;
+    let table_dir = tmp_dir.path().join("table_with_edge_timestamps");
+    let table_url = url::Url::from_directory_path(table_dir.canonicalize()?).unwrap();
+    let table = open_table(table_url).await?;
+
+    let (table, metrics) = table.optimize().await?;
+    assert_eq!(metrics.num_files_added, 1);
+
+    let ctx: SessionContext = DeltaSessionContext::default().into();
+    table.update_datafusion_session(&ctx.state())?;
+    ctx.register_table("demo", table.table_provider().await?)?;
+    let batches = ctx
+        .sql("SELECT \"BIG_DATE\", \"SOME_VALUE\" FROM demo")
+        .await?
+        .collect()
+        .await?;
+
+    datafusion::assert_batches_sorted_eq!(
+        [
+            "+----------------------+------------+",
+            "| BIG_DATE             | SOME_VALUE |",
+            "+----------------------+------------+",
+            "| 9999-12-30T00:00:00Z | 2          |",
+            "| 9999-12-31T00:00:00Z | 1          |",
+            "+----------------------+------------+",
+        ],
+        &batches
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_write_default_writer_properties_include_delta_rs_created_by()
 -> Result<(), Box<dyn Error>> {
     let context = setup_test(false).await?;
@@ -855,8 +897,8 @@ async fn test_optimize_execute_reads_and_writes_through_given_log_store()
         tracked_table.snapshot()?.snapshot(),
         &[],
         Some(NonZeroU64::new(1_000_000).unwrap()),
-        WriterProperties::builder().build(),
-        ArrowWriterOptions::default(),
+        DeltaWriterProperties::default()
+            .with_parquet_properties(WriterProperties::builder().build()),
         df_context.state(),
     )
     .await?;
@@ -1001,8 +1043,8 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         dt.snapshot()?.snapshot(),
         &filter,
         None,
-        WriterProperties::builder().build(),
-        ArrowWriterOptions::default(),
+        DeltaWriterProperties::default()
+            .with_parquet_properties(WriterProperties::builder().build()),
         df_context.state(),
     )
     .await?;
@@ -1067,8 +1109,8 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
         dt.snapshot()?.snapshot(),
         &filter,
         None,
-        WriterProperties::builder().build(),
-        ArrowWriterOptions::default(),
+        DeltaWriterProperties::default()
+            .with_parquet_properties(WriterProperties::builder().build()),
         df_context.state(),
     )
     .await?;
@@ -1102,6 +1144,208 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
+/// Validate that optimize of one partition succeeds when files in another partition are removed
+async fn test_no_conflict_for_remove_actions_in_other_partition() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(1, 2), (1, 3), (1, 4)], "2022-05-22")?,
+    )
+    .await?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(2, 2), (2, 3), (2, 4)], "2022-05-22")?,
+    )
+    .await?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(3, 2), (3, 3), (3, 4)], "2022-05-23")?,
+    )
+    .await?;
+
+    let version = dt.version().unwrap();
+
+    let df_context: SessionContext = DeltaSessionContext::default().into();
+
+    let filter = vec![("date", FilterOp::Eq, FilterValue::Scalar("2022-05-22"))];
+    let plan = create_merge_plan(
+        &dt.log_store(),
+        OptimizeType::Compact,
+        dt.snapshot()?.snapshot(),
+        &filter,
+        None,
+        DeltaWriterProperties::default()
+            .with_parquet_properties(WriterProperties::builder().build()),
+        df_context.state(),
+    )
+    .await?;
+
+    let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
+    let table_url = ensure_table_uri(uri).unwrap();
+    let other_dt = deltalake_core::open_table(table_url).await?;
+    other_dt
+        .delete()
+        .with_predicate("date = '2022-05-23'")
+        .await?;
+
+    let metrics = plan
+        .execute(
+            dt.log_store(),
+            dt.snapshot()?.snapshot(),
+            1,
+            None,
+            CommitProperties::default(),
+        )
+        .await?;
+
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 2);
+
+    // the delete and the optimize both committed
+    dt.update_state().await.unwrap();
+    assert_eq!(dt.version().unwrap(), version + 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+/// Validate that optimize with multiple commits fails when files of a later commit are removed
+async fn test_conflict_for_remove_actions_with_commit_interval() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    for x in 1..=4 {
+        write(
+            &mut writer,
+            &mut dt,
+            tuples_to_batch(vec![(x, 2), (x, 3), (x, 4)], "2022-05-22")?,
+        )
+        .await?;
+    }
+
+    let version = dt.version().unwrap();
+
+    // two bins in one partition, which commit in snapshot file order (newest first):
+    // [x=4, x=3] then [x=2, x=1]
+    let sizes: Vec<u64> = dt
+        .snapshot()?
+        .log_data()
+        .into_iter()
+        .map(|add| u64::try_from(add.size()).unwrap())
+        .collect();
+    let target_size = NonZeroU64::new(sizes[0] + sizes[1] + 1).unwrap();
+
+    let df_context: SessionContext = DeltaSessionContext::default().into();
+
+    let plan = create_merge_plan(
+        &dt.log_store(),
+        OptimizeType::Compact,
+        dt.snapshot()?.snapshot(),
+        &[],
+        Some(target_size),
+        DeltaWriterProperties::default()
+            .with_parquet_properties(WriterProperties::builder().build()),
+        df_context.state(),
+    )
+    .await?;
+
+    let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
+    let table_url = ensure_table_uri(uri).unwrap();
+    let other_dt = deltalake_core::open_table(table_url).await?;
+    other_dt.delete().with_predicate("x = 1").await?;
+
+    // the first commit only removes x=4 and x=3, but must still see the delete of x=1
+    let result = plan
+        .execute(
+            dt.log_store(),
+            dt.snapshot()?.snapshot(),
+            1,
+            Some(Duration::from_secs(0)),
+            CommitProperties::default(),
+        )
+        .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(DeltaTableError::Transaction {
+                source: TransactionError::CommitConflict(CommitConflictError::ConcurrentDeleteRead)
+            })
+        ),
+        "{result:?}"
+    );
+    dt.update_state().await?;
+    assert_eq!(dt.version().unwrap(), version + 1);
+    Ok(())
+}
+
+#[tokio::test]
+/// Validate that z-order fails when a file it rewrites is removed concurrently
+async fn test_zorder_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    for x in 1..=2 {
+        write(
+            &mut writer,
+            &mut dt,
+            tuples_to_batch(vec![(x, 2), (x, 3), (x, 4)], "2022-05-22")?,
+        )
+        .await?;
+    }
+
+    let df_context: SessionContext = DeltaSessionContext::default().into();
+
+    let plan = create_merge_plan(
+        &dt.log_store(),
+        OptimizeType::ZOrder(vec!["x".to_string()]),
+        dt.snapshot()?.snapshot(),
+        &[],
+        None,
+        DeltaWriterProperties::default()
+            .with_parquet_properties(WriterProperties::builder().build()),
+        df_context.state(),
+    )
+    .await?;
+
+    let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
+    let table_url = ensure_table_uri(uri).unwrap();
+    let other_dt = deltalake_core::open_table(table_url).await?;
+    other_dt.delete().with_predicate("x = 2").await?;
+
+    let result = plan
+        .execute(
+            dt.log_store(),
+            dt.snapshot()?.snapshot(),
+            1,
+            None,
+            CommitProperties::default(),
+        )
+        .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(DeltaTableError::Transaction {
+                source: TransactionError::CommitConflict(CommitConflictError::ConcurrentDeleteRead)
+            })
+        ),
+        "{result:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 /// Validate that optimize creates multiple commits when min_commin_interval is set
 async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
     let context = setup_test(true).await?;
@@ -1130,8 +1374,8 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
         dt.snapshot()?.snapshot(),
         &[],
         None,
-        WriterProperties::builder().build(),
-        ArrowWriterOptions::default(),
+        DeltaWriterProperties::default()
+            .with_parquet_properties(WriterProperties::builder().build()),
         context.state(),
     )
     .await?;
@@ -2251,6 +2495,23 @@ async fn test_optimize_spark_written_nullable_nested_field() -> Result<(), Box<d
     actual.sort_unstable();
     assert_eq!(actual, vec!["t1", "t2", "t3", "t4"]);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_optimize_partition_values_with_special_characters() -> Result<(), Box<dyn Error>> {
+    for value in ["a~b", "a b", "a%b", "a%20b", "a/b"] {
+        let context = setup_test(true).await?;
+        let mut dt = context.table;
+        let mut writer = RecordBatchWriter::for_table(&dt)?;
+        write(&mut writer, &mut dt, tuples_to_batch(vec![(1, 2)], value)?).await?;
+        write(&mut writer, &mut dt, tuples_to_batch(vec![(2, 3)], value)?).await?;
+
+        let (dt, metrics) = dt.optimize().await?;
+        assert_eq!(metrics.num_files_removed, 2, "partition value {value:?}");
+        assert_eq!(metrics.num_files_added, 1, "partition value {value:?}");
+        assert_eq!(dt.get_file_uris()?.count(), 1, "partition value {value:?}");
+    }
     Ok(())
 }
 

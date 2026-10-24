@@ -1,8 +1,6 @@
-pub(crate) use self::to_datafusion::*;
 pub(crate) use self::to_kernel::*;
+pub(crate) use deltalake_kernel_executor::expressions::*;
 
-mod to_datafusion;
-mod to_json;
 mod to_kernel;
 
 #[cfg(test)]

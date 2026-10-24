@@ -10,6 +10,7 @@ from deltalake import (
     WriterProperties,
     write_deltalake,
 )
+from deltalake.exceptions import DeltaError
 
 
 def test_writer_properties_all_filled():
@@ -21,6 +22,7 @@ def test_writer_properties_all_filled():
         max_row_group_size=500,
         compression="SNAPPY",
         statistics_truncate_length=600,
+        writer_version="PARQUET_2_0",
         default_column_properties=ColumnProperties(
             dictionary_enabled=False,
         ),
@@ -45,6 +47,7 @@ def test_writer_properties_all_filled():
 
     assert wp.default_column_properties.bloom_filter_properties is None
     assert wp.column_properties["a"].bloom_filter_properties.fpp == 0.2
+    assert wp.writer_version == "PARQUET_2_0"
 
 
 def test_writer_properties_lower_case_compression():
@@ -102,6 +105,40 @@ def test_write_with_writerproperties(
     metadata = pq.read_metadata(parquet_path)
 
     assert metadata.to_dict()["row_groups"][0]["columns"][0]["compression"] == "GZIP"
+
+
+@pytest.mark.pyarrow
+def test_write_with_writerproperties_keeps_delta_rs_defaults(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    import pyarrow.parquet as pq
+
+    # Setting one knob must not reset compression or the created_by tag.
+    writer_properties = WriterProperties(max_row_group_size=1000)
+    write_deltalake(tmp_path, sample_table, writer_properties=writer_properties)
+
+    parquet_path = DeltaTable(tmp_path).file_uris()[0]
+    metadata = pq.read_metadata(parquet_path)
+
+    assert metadata.created_by.startswith("delta-rs")
+    assert metadata.to_dict()["row_groups"][0]["columns"][0]["compression"] == "SNAPPY"
+
+
+@pytest.mark.pyarrow
+def test_optimize_with_writerproperties_keeps_optimize_default(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    import pyarrow.parquet as pq
+
+    write_deltalake(tmp_path, sample_table)
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+    dt.optimize.compact(writer_properties=WriterProperties(max_row_group_size=1000))
+
+    metadata = pq.read_metadata(DeltaTable(tmp_path).file_uris()[0])
+    compression = metadata.to_dict()["row_groups"][0]["columns"][0]["compression"]
+    assert compression == "ZSTD"
 
 
 @pytest.mark.pyarrow
@@ -212,3 +249,34 @@ def test_write_invalid_encoding_configuration():
                 "price": ColumnProperties(encoding="RLE", dictionary_enabled=True)
             },
         )
+
+
+def test_write_with_invalid_writer_version(tmp_path: pathlib.Path, sample_table: Table):
+    with pytest.raises(DeltaError):
+        write_deltalake(
+            tmp_path,
+            sample_table,
+            writer_properties=WriterProperties(writer_version="PARQUET_3_0"),  # type: ignore
+        )
+
+
+@pytest.mark.pyarrow
+def test_write_with_writerproperties_writer_version(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    import pyarrow.parquet as pq
+
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        writer_properties=WriterProperties(writer_version="PARQUET_2_0"),
+    )
+
+    parquet_path = DeltaTable(tmp_path).file_uris()[0]
+    metadata = pq.read_metadata(parquet_path)
+    # parquet-rs records the WriterVersion in the file metadata; pyarrow surfaces
+    # PARQUET_2_0 as format version 2.6 (vs 1.0 for the PARQUET_1_0 default).
+    assert metadata.format_version == "2.6"
+
+    read = DeltaTable(tmp_path).to_pyarrow_table()
+    assert read.num_rows == 5

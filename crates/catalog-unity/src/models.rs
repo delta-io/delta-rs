@@ -272,8 +272,6 @@ pub struct Schema {
 /// Possible data source formats for unity tables
 #[derive(Clone, PartialEq)]
 pub enum DataSourceFormat {
-    #[default]
-    Undefined,
     Delta,
     Csv,
     Json,
@@ -297,6 +295,10 @@ pub enum DataSourceFormat {
     HiveSerde,
     HiveCustom,
     VectorIndexFormat,
+    /// Unspecified or any value this crate does not know yet
+    #[default]
+    #[serde(other)]
+    Undefined,
 }
 
 #[derive(Deserialize, Default, Debug, PartialEq, Clone)]
@@ -304,13 +306,19 @@ pub enum DataSourceFormat {
 #[allow(missing_docs)]
 /// Possible data source formats for unity tables
 pub enum TableType {
-    #[default]
-    Undefined,
     Managed,
     External,
     View,
     MaterializedView,
     StreamingTable,
+    Foreign,
+    ExternalShallowClone,
+    ManagedShallowClone,
+    MetricView,
+    /// Unspecified or any value this crate does not know yet
+    #[default]
+    #[serde(other)]
+    Undefined,
 }
 
 impl Display for TableType {
@@ -322,6 +330,10 @@ impl Display for TableType {
             TableType::View => write!(f, "View"),
             TableType::MaterializedView => write!(f, "MaterializedView"),
             TableType::StreamingTable => write!(f, "StreamingTable"),
+            TableType::Foreign => write!(f, "Foreign"),
+            TableType::ExternalShallowClone => write!(f, "ExternalShallowClone"),
+            TableType::ManagedShallowClone => write!(f, "ManagedShallowClone"),
+            TableType::MetricView => write!(f, "MetricView"),
         }
     }
 }
@@ -422,6 +434,7 @@ pub enum ColumnTypeName {
     Null,
     UserDefinedType,
     TableType,
+    Variant,
 }
 
 #[derive(Deserialize, Default, Debug)]
@@ -436,8 +449,9 @@ pub struct TemporaryTableCredentials {
     pub azure_user_delegation_sas: Option<AzureUserDelegationSas>,
     pub gcp_oauth_token: Option<GcpOauthToken>,
     pub r2_temp_credentials: Option<R2TempCredentials>,
-    #[serde(with = "chrono::serde::ts_milliseconds")]
-    pub expiration_time: DateTime<Utc>,
+    /// `None` when the catalog does not vend an expiry (OSS UC returns `null`).
+    #[serde(default, with = "chrono::serde::ts_milliseconds_option")]
+    pub expiration_time: Option<DateTime<Utc>>,
     pub url: String,
 }
 
@@ -815,6 +829,19 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_variant_table_response() {
+        let body = GET_TABLE_RESPONSE.replace(r#""BOOLEAN""#, r#""VARIANT""#);
+        let response: GetTableResponse = serde_json::from_str(&body).unwrap();
+        let GetTableResponse::Success(table) = response else {
+            panic!("expected a successful table response");
+        };
+        assert_eq!(
+            serde_json::to_value(table.columns[0].type_name).unwrap(),
+            serde_json::json!("VARIANT")
+        );
+    }
+
+    #[test]
     fn test_response_errors() {
         let list_schemas: Result<ListSchemasResponse, _> = serde_json::from_str(ERROR_RESPONSE);
         assert!(list_schemas.is_ok());
@@ -825,7 +852,50 @@ pub(crate) mod tests {
 
         let get_table: Result<GetTableResponse, _> = serde_json::from_str(ERROR_RESPONSE);
         assert!(get_table.is_ok());
-        dbg!(&get_table);
         assert!(matches!(get_table.unwrap(), GetTableResponse::Error(_)))
+    }
+
+    #[test]
+    fn test_temp_credentials_without_expiration_time() {
+        // OSS Unity Catalog returns empty credential for file:// tables (#3966)
+        for body in [
+            r#"{"expiration_time":null, "url":"file:///tmp/t"}"#,
+            r#"{"url":"file:///tmp/t"}"#,
+        ] {
+            let resp: TableTempCredentialsResponse = serde_json::from_str(body).unwrap();
+            let TableTempCredentialsResponse::Success(creds) = resp else {
+                panic!("expected Success, got {resp:?}");
+            };
+            assert!(creds.expiration_time.is_none());
+        }
+
+        let resp: TableTempCredentialsResponse =
+            serde_json::from_str(r#"{"expiration_time":1765000000000, "url":"file:///tmp/t"}"#)
+                .unwrap();
+        assert!(matches!(
+            resp,
+            TableTempCredentialsResponse::Success(TemporaryTableCredentials {
+                expiration_time: Some(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_unknown_enum_values_fall_back_to_undefined() {
+        let resp: ListTableSummariesResponse = serde_json::from_str(
+            r#"{"tables": [{"full_name": "c.s.t", "table_type": "SOMETHING_NEW"}]}"#,
+        )
+        .unwrap();
+        let ListTableSummariesResponse::Success { tables, .. } = resp else {
+            panic!("expected Success, got {resp:?}");
+        };
+        assert_eq!(tables[0].table_type, TableType::Undefined);
+
+        let body = GET_TABLE_RESPONSE.replace(r#""DELTA""#, r#""SOMETHING_NEW""#);
+        let GetTableResponse::Success(t) = serde_json::from_str(&body).unwrap() else {
+            panic!("expected Success");
+        };
+        assert_eq!(t.data_source_format, Some(DataSourceFormat::Undefined));
     }
 }
