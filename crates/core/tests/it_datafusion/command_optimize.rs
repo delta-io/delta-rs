@@ -634,6 +634,49 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
+async fn test_optimize_respects_min_file_size() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(false).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(1, 2), (1, 3), (1, 4)], "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(2, 1), (2, 3), (2, 3)], "2022-05-23")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(4_000_000), "2022-05-22")?,
+    )
+    .await?;
+
+    assert_eq!(dt.snapshot().unwrap().log_data().num_files(), 3);
+
+    // 1 MiB sits between the tiny files and the ~4 MB one, so the large file is
+    // left in place while the two small files are compacted together.
+    let (dt, metrics) = dt
+        .optimize()
+        .with_min_file_size(NonZeroU64::new(1_048_576).unwrap())
+        .await?;
+
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 2);
+    assert_eq!(metrics.total_considered_files, 3);
+    assert_eq!(metrics.total_files_skipped, 1);
+    assert_eq!(dt.snapshot().unwrap().log_data().num_files(), 2);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_optimize_preserves_int96_timestamps_outside_nanosecond_range()
 -> Result<(), Box<dyn Error>> {
     let tmp_dir = tempfile::tempdir()?;
@@ -897,6 +940,7 @@ async fn test_optimize_execute_reads_and_writes_through_given_log_store()
         tracked_table.snapshot()?.snapshot(),
         &[],
         Some(NonZeroU64::new(1_000_000).unwrap()),
+        None,
         DeltaWriterProperties::default()
             .with_parquet_properties(WriterProperties::builder().build()),
         df_context.state(),
@@ -1043,6 +1087,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         dt.snapshot()?.snapshot(),
         &filter,
         None,
+        None,
         DeltaWriterProperties::default()
             .with_parquet_properties(WriterProperties::builder().build()),
         df_context.state(),
@@ -1108,6 +1153,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
         OptimizeType::Compact,
         dt.snapshot()?.snapshot(),
         &filter,
+        None,
         None,
         DeltaWriterProperties::default()
             .with_parquet_properties(WriterProperties::builder().build()),
@@ -1182,6 +1228,7 @@ async fn test_no_conflict_for_remove_actions_in_other_partition() -> Result<(), 
         dt.snapshot()?.snapshot(),
         &filter,
         None,
+        None,
         DeltaWriterProperties::default()
             .with_parquet_properties(WriterProperties::builder().build()),
         df_context.state(),
@@ -1252,6 +1299,7 @@ async fn test_conflict_for_remove_actions_with_commit_interval() -> Result<(), B
         dt.snapshot()?.snapshot(),
         &[],
         Some(target_size),
+        None,
         DeltaWriterProperties::default()
             .with_parquet_properties(WriterProperties::builder().build()),
         df_context.state(),
@@ -1311,6 +1359,7 @@ async fn test_zorder_conflict_for_remove_actions() -> Result<(), Box<dyn Error>>
         OptimizeType::ZOrder(vec!["x".to_string()]),
         dt.snapshot()?.snapshot(),
         &[],
+        None,
         None,
         DeltaWriterProperties::default()
             .with_parquet_properties(WriterProperties::builder().build()),
@@ -1373,6 +1422,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
         OptimizeType::Compact,
         dt.snapshot()?.snapshot(),
         &[],
+        None,
         None,
         DeltaWriterProperties::default()
             .with_parquet_properties(WriterProperties::builder().build()),

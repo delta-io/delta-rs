@@ -284,6 +284,68 @@ def test_zorder_rejects_target_size_larger_than_i64_max(
         dt.optimize.z_order(["sold"], target_size=2**63)
 
 
+def test_compact_respects_min_file_size(tmp_path: pathlib.Path):
+    write_deltalake(tmp_path, ordered_range_table(0, 2), mode="append")
+    write_deltalake(tmp_path, ordered_range_table(2, 2), mode="append")
+    write_deltalake(tmp_path, ordered_range_table(100, 5_000), mode="append")
+
+    dt = DeltaTable(tmp_path)
+    sizes = sorted(dt.get_add_actions(flatten=True)["size_bytes"].to_pylist())
+    assert len(sizes) == 3
+    large = sizes[-1]
+
+    # The file at the threshold is skipped; only the two small files are compacted.
+    metrics = dt.optimize.compact(min_file_size=large)
+    assert metrics["numFilesRemoved"] == 2
+    assert metrics["numFilesAdded"] == 1
+    assert metrics["totalFilesSkipped"] == 1
+
+    dt = DeltaTable(tmp_path)
+    remaining = sorted(dt.get_add_actions(flatten=True)["size_bytes"].to_pylist())
+    assert len(remaining) == 2
+    assert large in remaining
+
+
+def test_z_order_respects_min_file_size(tmp_path: pathlib.Path):
+    write_deltalake(tmp_path, ordered_range_table(0, 2), mode="append")
+    write_deltalake(tmp_path, ordered_range_table(2, 2), mode="append")
+    write_deltalake(tmp_path, ordered_range_table(100, 5_000), mode="append")
+
+    dt = DeltaTable(tmp_path)
+    large = max(dt.get_add_actions(flatten=True)["size_bytes"].to_pylist())
+
+    metrics = dt.optimize.z_order(["x"], min_file_size=large)
+    assert metrics["totalFilesSkipped"] == 1
+
+    dt = DeltaTable(tmp_path)
+    remaining = sorted(dt.get_add_actions(flatten=True)["size_bytes"].to_pylist())
+    assert len(remaining) == 2
+    assert large in remaining
+
+
+def test_compact_min_file_size_skips_all_files(tmp_path: pathlib.Path):
+    write_deltalake(tmp_path, ordered_range_table(0, 2), mode="append")
+    write_deltalake(tmp_path, ordered_range_table(2, 2), mode="append")
+
+    dt = DeltaTable(tmp_path)
+    metrics = dt.optimize.compact(min_file_size=1)
+
+    assert metrics["numFilesAdded"] == 0
+    assert metrics["numFilesRemoved"] == 0
+    assert metrics["totalFilesSkipped"] == 2
+
+
+def test_compact_rejects_zero_min_file_size(
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+    dt = DeltaTable(tmp_path)
+
+    with pytest.raises(ValueError, match="min_file_size must be greater than 0"):
+        dt.optimize.compact(min_file_size=0)
+
+
 def test_compact_preserves_tail_locality_after_small_recent_appends(
     tmp_path: pathlib.Path,
 ):

@@ -2771,6 +2771,7 @@ class TableOptimizer:
         *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
+        min_file_size: int | None = None,
     ) -> dict[str, Any]:
         """
         Compacts small files to reduce read overhead.
@@ -2789,6 +2790,9 @@ class TableOptimizer:
             partition_filters: partition filters used to match files
             target_size: approximate target file size in bytes.
                             If not provided, this uses ``delta.targetFileSize`` or 100MB.
+            min_file_size: files at or above this size are skipped, mirroring Spark's
+                            ``spark.databricks.delta.optimize.minFileSize``. If not provided,
+                            every file that is not larger than the target size is considered.
             max_concurrent_tasks: the maximum number of concurrent tasks to use for
                                     file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
                                     faster, but will also use more memory.
@@ -2844,6 +2848,7 @@ class TableOptimizer:
             writer_properties,
             commit_properties,
             post_commithook_properties,
+            min_file_size,
         )
         self.table.update_incremental()
         return json.loads(metrics)
@@ -2861,6 +2866,7 @@ class TableOptimizer:
         *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
+        min_file_size: int | None = None,
     ) -> dict[str, Any]:
         """
         Reorders the data using a Z-order curve to improve data skipping.
@@ -2873,6 +2879,9 @@ class TableOptimizer:
             partition_filters: partition filters used to match files
             target_size: approximate target file size in bytes.
                             If not provided, this uses ``delta.targetFileSize`` or 100MB.
+            min_file_size: files at or above this size are skipped, mirroring Spark's
+                            ``spark.databricks.delta.optimize.minFileSize``. If not provided,
+                            every file that is not larger than the target size is considered.
             max_concurrent_tasks: the maximum number of concurrent tasks to use for
                                     file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
                                     faster, but will also use more memory.
@@ -2929,6 +2938,7 @@ class TableOptimizer:
             writer_properties,
             commit_properties,
             post_commithook_properties,
+            min_file_size,
         )
         self.table.update_incremental()
         return json.loads(metrics)

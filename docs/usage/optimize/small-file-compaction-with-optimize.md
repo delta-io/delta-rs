@@ -499,6 +499,17 @@ All the partitions only contain a single file now, except for the `date=2021-01-
 
 An entire partition won’t necessarily get compacted to a single data file when optimize is run.  Each partition has data files that are condensed to the target file size.
 
+By default the target is 100 MB, configurable with the `target_size` argument or the
+`delta.targetFileSize` table property. To stop optimize from rewriting files that are
+already large enough, pass `min_file_size`: files at or above that size are skipped and
+left in place, mirroring Spark's `spark.databricks.delta.optimize.minFileSize`. This is
+useful for tables that are compacted repeatedly, where the files written by a previous
+run sit just below the target and would otherwise be rewritten on every run.
+
+```python
+dt.optimize.compact(min_file_size=80 * 1024 * 1024)
+```
+
 ## What causes the small file problem?
 
 Delta tables can accumulate small files for a variety of reasons:

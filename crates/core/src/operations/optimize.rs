@@ -285,6 +285,8 @@ pub struct OptimizeBuilder<'a> {
     filters: &'a [FilterLiteral<'a>],
     /// Desired file size after bin-packing files
     target_size: Option<NonZeroU64>,
+    /// Files at or above this size are skipped when planning the rewrite
+    min_file_size: Option<NonZeroU64>,
     /// How the rewritten data files are encoded
     writer_properties: DeltaWriterProperties,
     /// Commit properties and configuration
@@ -307,6 +309,7 @@ impl<'a> OptimizeBuilder<'a> {
             log_store,
             filters: &[],
             target_size: None,
+            min_file_size: None,
             writer_properties: DeltaWriterProperties::default(),
             commit_properties: CommitProperties::default(),
             max_concurrent_tasks: std::thread::available_parallelism()
@@ -335,6 +338,17 @@ impl<'a> OptimizeBuilder<'a> {
     /// Set the target file size
     pub fn with_target_size(mut self, target: NonZeroU64) -> Self {
         self.target_size = Some(target);
+        self
+    }
+
+    /// Skip files that are at least this large when planning the rewrite.
+    ///
+    /// Mirrors Spark's `spark.databricks.delta.optimize.minFileSize`: only files
+    /// smaller than `min_file_size` are considered for rewriting, so files already
+    /// at or above the threshold are left in place. When unset (the default) every
+    /// file that is not larger than the target size is a candidate.
+    pub fn with_min_file_size(mut self, min_file_size: NonZeroU64) -> Self {
+        self.min_file_size = Some(min_file_size);
         self
     }
 
@@ -452,6 +466,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 &snapshot,
                 this.filters,
                 this.target_size.to_owned(),
+                this.min_file_size.to_owned(),
                 writer_properties,
                 session,
             )
@@ -1014,6 +1029,7 @@ pub async fn create_merge_plan(
     snapshot: &EagerSnapshot,
     filters: &[FilterLiteral<'_>],
     target_size: Option<NonZeroU64>,
+    min_file_size: Option<NonZeroU64>,
     writer_properties: DeltaWriterProperties,
     session: SessionState,
 ) -> Result<MergePlan, DeltaTableError> {
@@ -1028,7 +1044,7 @@ pub async fn create_merge_plan(
     let (operations, metrics, planner_stats) = match optimize_type {
         OptimizeType::Compact => {
             info!("building compaction plan");
-            build_compaction_plan(log_store, snapshot, filters, target_size).await?
+            build_compaction_plan(log_store, snapshot, filters, target_size, min_file_size).await?
         }
         OptimizeType::ZOrder(zorder_columns) => {
             info!("building z-order plan");
@@ -1038,6 +1054,7 @@ pub async fn create_merge_plan(
                 snapshot,
                 partitions_keys,
                 filters,
+                min_file_size,
             )
             .await?
         }
@@ -1206,6 +1223,7 @@ async fn build_compaction_plan(
     snapshot: &EagerSnapshot,
     filters: &[FilterLiteral<'_>],
     target_size: NonZeroU64,
+    min_file_size: Option<NonZeroU64>,
 ) -> Result<(OptimizeOperations, Metrics, PlannerStats), DeltaTableError> {
     type PartitionFileEntry = (IndexMap<String, Scalar>, usize, Vec<OrderedFileCandidate>);
 
@@ -1241,6 +1259,11 @@ async fn build_compaction_plan(
         entry.1 += 1;
 
         if object_meta.size > target_size.get() {
+            metrics.total_files_skipped += 1;
+            continue;
+        }
+
+        if min_file_size.is_some_and(|min| object_meta.size >= min.get()) {
             metrics.total_files_skipped += 1;
             continue;
         }
@@ -1321,6 +1344,7 @@ async fn build_zorder_plan(
     snapshot: &EagerSnapshot,
     partition_keys: &[String],
     filters: &[FilterLiteral<'_>],
+    min_file_size: Option<NonZeroU64>,
 ) -> Result<(OptimizeOperations, Metrics, PlannerStats), DeltaTableError> {
     if zorder_columns.is_empty() {
         return Err(DeltaTableError::Generic(
@@ -1358,8 +1382,13 @@ async fn build_zorder_plan(
     let mut file_stream = snapshot.file_views(log_store, predicate);
     while let Some(file) = file_stream.next().await {
         let file = file?;
-        let partition_values = file.full_partition_values(partition_keys, table_schema.as_ref())?;
         metrics.total_considered_files += 1;
+        let object_meta = ObjectMeta::try_from(&file)?;
+        if min_file_size.is_some_and(|min| object_meta.size >= min.get()) {
+            metrics.total_files_skipped += 1;
+            continue;
+        }
+        let partition_values = file.full_partition_values(partition_keys, table_schema.as_ref())?;
         partition_files
             .entry(partition_values.hive_partition_path())
             .or_insert_with(|| (partition_values, MergeBin::new()))

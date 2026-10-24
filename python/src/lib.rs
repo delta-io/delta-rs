@@ -249,6 +249,11 @@ fn parse_optimize_target_size(target_size: u64) -> PyResult<NonZeroU64> {
     Ok(target_size)
 }
 
+fn parse_optimize_min_file_size(min_file_size: u64) -> PyResult<NonZeroU64> {
+    NonZeroU64::new(min_file_size)
+        .ok_or_else(|| PyValueError::new_err("min_file_size must be greater than 0"))
+}
+
 fn build_deletion_vector_batches(
     vectors: Vec<DeletionVectorSelection>,
     batch_size: usize,
@@ -836,7 +841,8 @@ impl RawDeltaTable {
         min_commit_interval = None,
         writer_properties=None,
         commit_properties=None,
-        post_commithook_properties=None
+        post_commithook_properties=None,
+        min_file_size = None
     ))]
     #[allow(clippy::too_many_arguments)]
     pub fn compact_optimize(
@@ -851,6 +857,7 @@ impl RawDeltaTable {
         writer_properties: Option<PyWriterProperties>,
         commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
+        min_file_size: Option<u64>,
     ) -> PyResult<String> {
         let (table, metrics) = py.detach(|| {
             let table = self._table.lock().map_err(to_rt_err)?.clone();
@@ -872,6 +879,9 @@ impl RawDeltaTable {
             if let Some(target_size) = target_size {
                 let target_size = parse_optimize_target_size(target_size)?;
                 cmd = cmd.with_target_size(target_size);
+            }
+            if let Some(min_file_size) = min_file_size {
+                cmd = cmd.with_min_file_size(parse_optimize_min_file_size(min_file_size)?);
             }
             if let Some(commit_interval) = min_commit_interval {
                 cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));
@@ -915,6 +925,7 @@ impl RawDeltaTable {
         writer_properties=None,
         commit_properties=None,
         post_commithook_properties=None,
+        min_file_size = None,
     ))]
     pub fn z_order_optimize(
         &self,
@@ -929,6 +940,7 @@ impl RawDeltaTable {
         writer_properties: Option<PyWriterProperties>,
         commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
+        min_file_size: Option<u64>,
     ) -> PyResult<String> {
         let (table, metrics) = py.detach(|| {
             let table = self._table.lock().map_err(to_rt_err)?.clone();
@@ -951,6 +963,9 @@ impl RawDeltaTable {
             if let Some(target_size) = target_size {
                 let target_size = parse_optimize_target_size(target_size)?;
                 cmd = cmd.with_target_size(target_size);
+            }
+            if let Some(min_file_size) = min_file_size {
+                cmd = cmd.with_min_file_size(parse_optimize_min_file_size(min_file_size)?);
             }
             if let Some(commit_interval) = min_commit_interval {
                 cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));

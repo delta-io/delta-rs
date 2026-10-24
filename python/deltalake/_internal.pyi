@@ -140,6 +140,7 @@ class RawDeltaTable:
         writer_properties: WriterProperties | None,
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
+        min_file_size: int | None,
     ) -> str: ...
     def z_order_optimize(
         self,
@@ -153,6 +154,7 @@ class RawDeltaTable:
         writer_properties: WriterProperties | None,
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
+        min_file_size: int | None,
     ) -> str: ...
     def add_columns(
         self,
