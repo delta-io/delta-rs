@@ -331,54 +331,51 @@ impl ProtocolInner {
 
     /// Moves a legacy reader protocol to reader version 3, listing the reader features that its
     /// version implied, so that moving to table features keeps them supported
-    fn upgrade_to_reader_features(mut self) -> Self {
+    fn upgrade_to_reader_features(&mut self) {
         if self.min_reader_version >= 3 {
-            return self;
+            return;
         }
-        let supports_column_mapping = self.min_reader_version >= 2
-            && match self.min_writer_version {
-                ..=6 => self.min_writer_version >= 5,
-                _ => self
-                    .writer_features
-                    .as_ref()
-                    .is_some_and(|features| features.contains(&TableFeature::ColumnMapping)),
-            };
+        let supports_column_mapping = if self.min_reader_version < 2 {
+            false
+        } else if self.min_writer_version < 7 {
+            self.min_writer_version >= 5
+        } else {
+            self.writer_features
+                .as_ref()
+                .is_some_and(|features| features.contains(&TableFeature::ColumnMapping))
+        };
         let reader_features = self.reader_features.get_or_insert_with(HashSet::new);
         if supports_column_mapping {
             reader_features.insert(TableFeature::ColumnMapping);
         }
         self.min_reader_version = 3;
-        self
     }
 
     /// Moves a legacy writer protocol to writer version 7, listing the writer features that its
     /// versions implied, so that moving to table features keeps them supported
-    fn upgrade_to_writer_features(mut self) -> Self {
+    fn upgrade_to_writer_features(&mut self) {
         if self.min_writer_version >= 7 {
-            return self;
+            return;
         }
-        let implied_features = LEGACY_IMPLIED_FEATURES
-            .iter()
-            .filter(|(reader, writer, feature)| {
-                let reader_supports = match self.min_reader_version {
-                    ..=2 => self.min_reader_version >= *reader,
-                    _ => {
-                        *reader == 1
-                            || self
-                                .reader_features
-                                .as_ref()
-                                .is_some_and(|features| features.contains(feature))
-                    }
-                };
-                reader_supports && self.min_writer_version >= *writer
-            })
-            .map(|(_, _, feature)| feature.clone())
-            .collect::<Vec<_>>();
-        self.writer_features
-            .get_or_insert_with(HashSet::new)
-            .extend(implied_features);
+        let writer_features = self.writer_features.get_or_insert_with(HashSet::new);
+        for (min_reader_version, min_writer_version, feature) in &LEGACY_IMPLIED_FEATURES {
+            if self.min_writer_version < *min_writer_version {
+                continue;
+            }
+            let reader_supports = if self.min_reader_version < 3 {
+                self.min_reader_version >= *min_reader_version
+            } else if *min_reader_version == 1 {
+                true
+            } else {
+                self.reader_features
+                    .as_ref()
+                    .is_some_and(|features| features.contains(feature))
+            };
+            if reader_supports {
+                writer_features.insert(feature.clone());
+            }
+        }
         self.min_writer_version = 7;
-        self
     }
 
     /// Append the reader features in the protocol action, automatically bumps min_reader_version
@@ -391,7 +388,7 @@ impl ProtocolInner {
             .map(Into::into)
             .collect::<HashSet<_>>();
         if !all_reader_features.is_empty() {
-            self = self.upgrade_to_reader_features();
+            self.upgrade_to_reader_features();
             match self.reader_features {
                 Some(mut features) => {
                     features.extend(all_reader_features);
@@ -413,7 +410,7 @@ impl ProtocolInner {
             .map(|c| c.into())
             .collect::<HashSet<_>>();
         if !all_writer_features.is_empty() {
-            self = self.upgrade_to_writer_features();
+            self.upgrade_to_writer_features();
             match self.writer_features {
                 Some(mut features) => {
                     features.extend(all_writer_features);
@@ -553,7 +550,7 @@ impl ProtocolInner {
             let new_min_writer_version = min_writer_version.parse::<i32>();
             match new_min_writer_version {
                 Ok(version) => match version {
-                    7 => self = self.upgrade_to_writer_features(),
+                    7 => self.upgrade_to_writer_features(),
                     2..=6 => {
                         if version > self.min_writer_version {
                             self.min_writer_version = version
@@ -578,7 +575,7 @@ impl ProtocolInner {
             let new_min_reader_version = min_reader_version.parse::<i32>();
             match new_min_reader_version {
                 Ok(version) => match version {
-                    3 => self = self.upgrade_to_reader_features(),
+                    3 => self.upgrade_to_reader_features(),
                     1..=2 => {
                         if version > self.min_reader_version {
                             self.min_reader_version = version
@@ -651,9 +648,8 @@ impl ProtocolInner {
             let if_enable_dv = enable_dv.to_ascii_lowercase().parse::<bool>();
             match if_enable_dv {
                 Ok(true) => {
-                    self = self
-                        .upgrade_to_reader_features()
-                        .upgrade_to_writer_features();
+                    self.upgrade_to_reader_features();
+                    self.upgrade_to_writer_features();
                     self.reader_features
                         .get_or_insert_with(HashSet::new)
                         .insert(TableFeature::DeletionVectors);
@@ -1714,6 +1710,8 @@ mod tests {
         );
     }
 
+    /// Builds the reader 3 / writer 7 protocol that lists exactly the given features, to spell out
+    /// the protocol an upgrade to table features is expected to produce
     fn table_features_protocol(
         reader_features: impl IntoIterator<Item = TableFeature>,
         writer_features: impl IntoIterator<Item = TableFeature>,
@@ -1726,6 +1724,8 @@ mod tests {
         }
     }
 
+    /// Table properties that enable deletion vectors, the most common way a legacy protocol is
+    /// moved to table features, for passing to `apply_properties_to_protocol`
     fn enable_deletion_vectors() -> HashMap<String, String> {
         HashMap::from([(
             "delta.enableDeletionVectors".to_string(),
