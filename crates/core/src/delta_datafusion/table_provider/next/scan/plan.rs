@@ -19,7 +19,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow_schema::{DataType, Field, FieldRef, SchemaBuilder};
 use datafusion::common::error::Result;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{HashMap, HashSet, plan_err};
+use datafusion::common::{DataFusionError, HashMap, HashSet, plan_err};
 use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::prelude::Expr;
@@ -754,12 +754,18 @@ fn rewrite_expression(expr: Expr, config: &TableConfiguration) -> Result<Expr> {
             let col_name = to_delta_expression(&node)?;
             if let Expression::Column(name) = &col_name {
                 if let Some(physical_name) = name_mapping.get(name) {
-                    return Ok(Transformed::yes(to_datafusion_expr(
-                        &Expression::Column((*physical_name).clone()),
-                        // This is just a dummy datatype, since column re-writes
-                        // do not require datatype information
-                        &KernelDataType::BOOLEAN,
-                    )?));
+                    return Ok(Transformed::yes(
+                        to_datafusion_expr(
+                            &Expression::Column((*physical_name).clone()),
+                            config.physical_schema().as_ref(),
+                            None,
+                        )
+                        .map_err(|e| {
+                            DataFusionError::External(Box::new(e)).context(format!(
+                                "failure during planning, when translating column '{name}' to its physical name '{physical_name}'"
+                            ))
+                        })?,
+                    ));
                 } else {
                     return plan_err!("Column '{name}' not found in physical schema");
                 }
