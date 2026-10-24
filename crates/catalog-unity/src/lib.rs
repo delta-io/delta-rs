@@ -143,6 +143,10 @@ pub enum UnityCatalogError {
     #[error("{0} is not a table and doesn't have an included storage location. Type: {1}")]
     NotATable(String, TableType),
 
+    /// Error returned by the Unity Catalog Delta REST client.
+    ///
+    /// Surfaced by the catalog-managed commits read path (see [`catalog_managed`]), which
+    /// talks to the UC Delta REST API rather than the classic UC tables API.
     #[error("Error received from Unity Catalog: {0}")]
     UnityCatalogClientError(#[from] Error),
 }
@@ -893,6 +897,13 @@ impl UnityCatalog {
         Ok(table)
     }
 
+    /// Return the Unity Catalog Delta REST client used by the catalog-managed commits read
+    /// path.
+    ///
+    /// The client is created once when the [`UnityCatalog`] is built, but only when the
+    /// credential provider is a bearer token; other credential kinds do not support the Delta
+    /// REST API and this returns [`UnityCatalogError::MissingCredential`]. The returned client
+    /// is a clone of the cached instance.
     pub fn delta_rest_client(&self) -> Result<UCDeltaTableClient, UnityCatalogError> {
         if let Some(cc_client) = self.cc_client.as_ref() {
             return Ok(cc_client.clone());
@@ -961,6 +972,12 @@ impl UnityCatalog {
 pub struct UnityCatalogFactory {}
 
 impl UnityCatalogFactory {
+    /// Build a [`UnityCatalog`] client from raw storage configuration options.
+    ///
+    /// Environment-derived defaults are overlaid with the entries of `config.raw`, so the
+    /// factories can construct a client from the same option map used to open the table.
+    /// Keys not recognized as Unity Catalog options are ignored, allowing mixed maps that
+    /// also carry object-store options (regions, timeouts, vendored credentials, ...).
     pub fn new_delta_client(config: &StorageConfig) -> DeltaResult<UnityCatalog> {
         UnityCatalogBuilder::from_env()
             .try_with_options(config.raw.iter().map(|(k, v)| (k.as_str(), v.as_str())))
@@ -1051,6 +1068,13 @@ impl LogStoreFactory for UnityCatalogFactory {
     }
 }
 
+/// Resolve a catalog-managed table's storage location and vend temporary read credentials.
+///
+/// Goes through the UC Delta REST API: `load_table` yields the table's storage location, and
+/// `get_table_credentials` with [`Operation::Read`] vends short-lived storage credentials,
+/// which [`storage_credentials_to_options`] translates into delta-rs storage options.
+///
+/// Returns `(storage_location, storage_options)`.
 async fn catalog_managed_location_and_token(
     uc: &UnityCatalog,
     catalog: &str,
@@ -1077,6 +1101,22 @@ async fn catalog_managed_location_and_token(
     ))
 }
 
+/// Translate the config keys of UC-vended [`StorageCredential`]s into delta-rs / object_store
+/// storage option keys.
+///
+/// Only the **first** credential is used (a warning is logged when UC returns several, e.g. a
+/// primary and a fallback). Supported mappings:
+///
+/// | UC key                  | delta-rs option           |
+/// |-------------------------|---------------------------|
+/// | `s3.access-key-id`      | `aws_access_key_id`       |
+/// | `s3.secret-access-key`  | `aws_secret_access_key`   |
+/// | `s3.session-token`      | `aws_session_token`       |
+/// | `azure.sas-token`       | `azure_storage_sas_key`   |
+///
+/// `gcs.oauth-token` is intentionally skipped: UC credential vending returns a raw OAuth
+/// bearer token, while `google_application_credentials` expects a *file path* to a service
+/// account JSON key. Unrecognized keys are skipped as well.
 fn storage_credentials_to_options(creds: &[StorageCredential]) -> HashMap<String, String> {
     let mut out = HashMap::new();
     if creds.len() > 1 {
@@ -1106,6 +1146,11 @@ fn storage_credentials_to_options(creds: &[StorageCredential]) -> HashMap<String
     out
 }
 
+/// Whether catalog-managed reads were requested via the `catalog_managed` storage option.
+///
+/// Catalog-managed mode is opt-in: detecting it automatically would require a catalog RPC for
+/// every table open, which most users do not want yet. The detection may be relaxed to happen
+/// automatically in the future.
 fn is_catalog_managed_requested(options: &StorageConfig) -> bool {
     options
         .raw
@@ -1114,6 +1159,14 @@ fn is_catalog_managed_requested(options: &StorageConfig) -> bool {
         .unwrap_or(false)
 }
 
+/// Parse a `uc://catalog.schema.table` URL into its `(catalog, schema, table)` identity.
+///
+/// Returns `None` for non-`uc` URLs and, after logging a warning, for identities that do not
+/// have exactly three dot-separated parts.
+///
+/// This is a best-effort parse: Unity Catalog permits `.` inside backtick-quoted identifiers,
+/// and the dotted string form carries no backtick information to recover such names. Tables
+/// named that way are not supported by the catalog-managed read path yet.
 fn parse_uc_identity(location: &Url) -> Option<(String, String, String)> {
     let parts: Vec<&str> = location
         .as_str()

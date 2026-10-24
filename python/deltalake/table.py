@@ -385,6 +385,28 @@ class DeltaTable:
             log_buffer_size: Deprecated and ignored. Log buffering is managed internally.
             skip_stats: Deprecated and ignored. Table loading retains file statistics.
 
+        Note:
+            **Catalog-managed commits (Unity Catalog, read path):** to read a
+            catalog-managed table through Unity Catalog, open it by its
+            ``uc://<catalog>.<schema>.<table>`` URI and pass
+            ``{"catalog_managed": "true"}`` in ``storage_options``. The table
+            is then resolved against the catalog — which supplies the ratified
+            commit history and vends temporary storage credentials — instead of
+            the filesystem, so reads reflect only commits the catalog has
+            ratified (the filesystem may contain newer, not-yet-published
+            commits). Requires a Unity Catalog access token via the
+            ``DATABRICKS_ACCESS_TOKEN`` / ``UNITY_ACCESS_TOKEN`` environment
+            variables. This mode is opt-in and read-only for now; catalog-managed
+            writes are not yet supported. See
+            https://docs.databricks.com/aws/en/tables/features/catalog-commits
+
+            ```python
+            dt = DeltaTable(
+                "uc://main.sales.orders",
+                storage_options={"catalog_managed": "true"},
+            )
+            ```
+
         """
         if without_files:
             warnings.warn(
