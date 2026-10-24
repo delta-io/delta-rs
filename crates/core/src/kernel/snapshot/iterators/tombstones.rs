@@ -7,7 +7,8 @@ use arrow::{
 use delta_kernel::{actions::Remove, schema::ToSchema};
 use percent_encoding::percent_decode_str;
 
-use crate::kernel::snapshot::iterators::get_string_value;
+use crate::kernel::DeletionVectorDescriptor;
+use crate::kernel::snapshot::iterators::{DeletionVectorView, get_string_value};
 
 /// A lightweight, cloneable view over a single tombstone (`Remove` action) row.
 ///
@@ -70,5 +71,17 @@ impl TombstoneView {
             .column(*FIELD_INDEX)
             .as_primitive_opt::<Int64Type>()
             .map(|a| a.value(self.index))
+    }
+
+    /// Returns the deletion vector of the removed file, if it had one.
+    pub fn deletion_vector_descriptor(&self) -> Option<DeletionVectorDescriptor> {
+        static FIELD_INDEX: LazyLock<usize> = LazyLock::new(|| {
+            Remove::to_schema()
+                .field_with_index("deletionVector")
+                .unwrap()
+                .0
+        });
+        let dv_col = self.data.column(*FIELD_INDEX).as_struct_opt()?;
+        DeletionVectorView::try_new(dv_col, self.index).map(|dv| dv.descriptor())
     }
 }
