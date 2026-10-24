@@ -2900,6 +2900,43 @@ mod tests {
         Ok(())
     }
 
+    /// A full delete loaded before a compaction must not commit after it: it would remove
+    /// only the pre-compaction files and leave the compacted file's rows in the table.
+    /// <https://github.com/delta-io/delta-rs/issues/4851>
+    #[tokio::test]
+    async fn test_stale_full_delete_conflicts_with_compaction() -> DeltaResult<()> {
+        use crate::kernel::transaction::{CommitConflictError, TransactionError};
+
+        let mut table = setup_table(None).await;
+        for _ in 0..3 {
+            table = write_batch(table, get_record_batch(None, false)).await;
+        }
+        let stale = table.clone();
+        let (compacted, _) = table.optimize().await?;
+        let rows_after_compaction: usize =
+            get_data(&compacted).await.iter().map(|b| b.num_rows()).sum();
+
+        let result = stale.delete().await;
+        assert!(
+            matches!(
+                result,
+                Err(DeltaTableError::Transaction {
+                    source: TransactionError::CommitConflict(
+                        CommitConflictError::ConcurrentDeleteDelete
+                    )
+                })
+            ),
+            "stale full delete should conflict with the compaction: {result:?}"
+        );
+
+        let mut reloaded = compacted;
+        reloaded.update_state().await?;
+        let rows_now: usize = get_data(&reloaded).await.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows_now, rows_after_compaction);
+
+        Ok(())
+    }
+
     #[rstest]
     #[case::arithmetic_plus("p + 1 = 2", true, &[0, 2, 3])]
     #[case::arithmetic_times("p * 2 = 2", true, &[0, 2, 3])]

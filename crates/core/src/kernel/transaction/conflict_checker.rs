@@ -637,7 +637,6 @@ impl<'a> ConflictChecker<'a> {
             .winning_commit_summary
             .removed_files()
             .iter()
-            .filter(|r| r.data_change)
             .map(|r| r.path.clone())
             .collect();
         let intersection: HashSet<&String> = txn_deleted_files
@@ -1292,21 +1291,20 @@ mod tests {
             false,
         )
         .await;
-        // Should succeed because two compaction removes (data_change=false) on the same file
-        // are physical-layout-only and do not logically delete anything — mirroring the filter
-        // on the read-delete check and matching the Spark reference implementation.
+        // Must conflict: both compactions rewrite the file's rows into their own new file, so
+        // letting both commit duplicates those rows. Spark checks every RemoveFile here too.
         assert!(
-            result.is_ok(),
-            "Concurrent compaction removes (data_change=false) on the same file should not raise ConcurrentDeleteDelete: {result:?}"
+            matches!(result, Err(CommitConflictError::ConcurrentDeleteDelete)),
+            "Concurrent compaction removes (data_change=false) on the same file should raise ConcurrentDeleteDelete: {result:?}"
         );
     }
 
     #[tokio::test]
     #[cfg(feature = "datafusion")]
-    async fn test_compaction_remove_does_not_conflict_with_real_delete() {
-        // OPTIMIZE compaction removed file F (data_change=false).
+    async fn test_compaction_remove_conflicts_with_real_delete() {
+        // OPTIMIZE compaction removed file F (data_change=false) and moved its rows into a new file.
         // Current transaction also wants to delete F (data_change=true, real logical delete).
-        // With the old unfiltered check this raised ConcurrentDeleteDelete spuriously.
+        // Removing F again would not delete those rows, so this must conflict.
         let file = simple_add(true, "1", "10");
         let mut setup_actions = init_table_actions();
         setup_actions.push(file.clone().into());
@@ -1325,11 +1323,9 @@ mod tests {
             false,
         )
         .await;
-        // The compaction removed the file physically but not logically; our real delete
-        // should be allowed through (idempotent — the file is gone either way).
         assert!(
-            result.is_ok(),
-            "Compaction remove (data_change=false) should not conflict with a concurrent real delete: {result:?}"
+            matches!(result, Err(CommitConflictError::ConcurrentDeleteDelete)),
+            "Compaction remove (data_change=false) should conflict with a concurrent real delete: {result:?}"
         );
     }
 
