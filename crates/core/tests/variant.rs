@@ -197,6 +197,8 @@ async fn test_write_variant_data_end_to_end() -> Result<()> {
 
 #[tokio::test]
 async fn test_read_stable_shredded_variant_values() -> Result<()> {
+    // Databricks output after REORG TABLE ... APPLY (SHRED VARIANT),
+    // with a minimal Delta log describing the synthetic body column.
     let url = ensure_table_uri("../test/tests/data/variant-shredded")?;
     let table = deltalake_core::open_table(url).await?;
     let ctx = SessionContext::new();

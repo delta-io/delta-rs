@@ -4,4 +4,3 @@ mod dat;
 mod eager_snapshot;
 mod exotic_tables;
 mod time_travel;
-mod variant_shredding;
