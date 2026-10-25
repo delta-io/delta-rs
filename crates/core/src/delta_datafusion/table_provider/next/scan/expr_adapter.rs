@@ -4,12 +4,11 @@ use std::sync::Arc;
 
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::common::Result;
-use datafusion_physical_expr_adapter::{
-    DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
-};
+use datafusion_physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 
 /// A [`PhysicalExprAdapterFactory`] that relaxes nested-field nullability on the
-/// logical (table) schema before delegating to DataFusion's default adapter.
+/// logical (table) schema and reconstructs file-level Variant storage before
+/// delegating ordinary schema evolution to DataFusion's default adapter.
 ///
 /// In Delta, `nullable = false` is a write-time invariant: engines such as Spark
 /// write parquet files whose nested fields are physically optional even when the
@@ -27,7 +26,7 @@ impl PhysicalExprAdapterFactory for DeltaPhysicalExprAdapterFactory {
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
     ) -> Result<Arc<dyn PhysicalExprAdapter>> {
-        DefaultPhysicalExprAdapterFactory.create(
+        super::variant::VariantSchemaAdapter::create(
             Arc::new(relax_schema_nested_nullability(&logical_file_schema)),
             physical_file_schema,
         )
