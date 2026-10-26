@@ -297,6 +297,7 @@ jobs:
             exit 1
           fi
 
+      # Not enable in Windows arm64 because PyArrow has no Windows ARM64 wheels.
       - name: Install minimum PyArrow version
         if: matrix.architecture == 'x64'
         run: uv pip install pyarrow==21.0.0
