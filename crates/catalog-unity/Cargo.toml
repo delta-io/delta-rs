@@ -40,7 +40,7 @@ moka = { version = "0.12", optional = true, features = ["future"] }
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = { workspace = true }
-httpmock = { version = "0.8.3" }
+httpmock = { version = "0.9.0" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
