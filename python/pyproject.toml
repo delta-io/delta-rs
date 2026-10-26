@@ -138,5 +138,8 @@ bench = [
 ]
 
 [tool.uv]
+# uv 0.13.4 drops the distrusted eMudhra emSign CA certificates.
+# https://discuss.python.org/t/information-for-python-users-regarding-emudhra-emsign-ca-certificate-security-incident/109576
+required-version = ">=0.13.4"
 # Re-enable a Python DataFusion dependency group once DataFusion 55 wheels are published.
 default-groups = ["dev", "opentelemetry", "polars", "lakefs", "other"]
