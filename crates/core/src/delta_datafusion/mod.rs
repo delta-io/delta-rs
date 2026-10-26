@@ -1450,6 +1450,8 @@ mod tests {
 
         let actual = drain_recorded_ops(&mut operations).await;
 
+        // Footer reads end at the end of the file, and with the metadata size hint
+        // they can span this whole small file, so they are left out of the checks.
         let data_ranges = actual
             .iter()
             .flat_map(|operation| match operation {
@@ -1457,6 +1459,7 @@ mod tests {
                 ObjectStoreOperation::GetRanges(PathKind::Data, ranges) => ranges.clone(),
                 _ => Vec::new(),
             })
+            .filter(|range| range.end != file_meta.size)
             .collect::<Vec<_>>();
 
         let overlaps = |left: &Range<u64>, right: &Range<u64>| {
@@ -1486,6 +1489,64 @@ mod tests {
                     | ObjectStoreOperation::GetOpts(PathKind::Data)
             )),
             "expected no full data file reads, saw {actual:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delta_scan_uses_parquet_metadata_size_hint() {
+        let ids: Arc<dyn Array> = Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3]));
+        let batch = RecordBatch::try_from_iter(vec![("id", ids)]).unwrap();
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let config = DeltaScanConfigBuilder::new()
+            .build(table.snapshot().unwrap().snapshot())
+            .unwrap();
+        let (log_store, mut operations) = recording_log_store(table.log_store());
+        let provider = DeltaScanNext::new(table.snapshot().unwrap().snapshot().clone(), config)
+            .unwrap()
+            .with_log_store(log_store);
+
+        let metadata_size_hint = 64 * 1024;
+        let mut session_config = SessionConfig::new();
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .metadata_size_hint = Some(metadata_size_hint);
+        let ctx = SessionContext::new_with_config(session_config);
+        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.sql("select id from test")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let files = table.get_files_by_partitions(&[]).await.unwrap();
+        assert_eq!(1, files.len());
+        let file_size = table.object_store().head(&files[0]).await.unwrap().size;
+
+        let actual = drain_recorded_ops(&mut operations).await;
+        let data_ranges = actual
+            .iter()
+            .flat_map(|operation| match operation {
+                ObjectStoreOperation::GetRange(PathKind::Data, range) => vec![range.clone()],
+                ObjectStoreOperation::GetRanges(PathKind::Data, ranges) => ranges.clone(),
+                _ => Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        let footer_read = file_size.saturating_sub(metadata_size_hint as u64)..file_size;
+        assert!(
+            data_ranges.contains(&footer_read),
+            "expected the footer to be read in one {footer_read:?} request, saw {actual:?}"
+        );
+        assert!(
+            !data_ranges.contains(&(file_size - 8..file_size)),
+            "expected no separate read of the 8-byte footer length, saw {actual:?}"
         );
     }
 
