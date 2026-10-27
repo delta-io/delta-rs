@@ -116,3 +116,35 @@ from deltalake import write_deltalake
 
 write_deltalake("s3://bucket/my_table", data, mode="append")
 ```
+
+## Tuning writer concurrency with environment variables
+
+Beyond the upload-bytes cap above, the writer reads several `DELTARS_*`
+environment variables that bound how much work a write does at once. They are
+tuning knobs, not API parameters: there is no `write_deltalake` argument or
+`WriterProperties` field for them, and an unknown or misspelled name is silently
+ignored, so the default applies.
+
+All of them except `DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES` are read once per
+process and cached. Set them before the first write in the process; changing one
+after a write has started has no effect on that process.
+`DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES`, covered above, is the exception: it is
+read when each write starts.
+
+| Variable | What it bounds | Default |
+| --- | --- | --- |
+| `DELTARS_MAX_CONCURRENT_WRITERS` | Concurrent writer tasks in a write. Each writer holds open multipart uploads and in-memory buffers, so more writers means higher memory and file descriptor usage. | Number of available CPU cores, clamped to 1-128 |
+| `DELTARS_WRITER_BATCH_CHANNEL_SIZE` | Record batches that may be in flight between the producer and the writers (channel backpressure). | 10 |
+| `DELTARS_MAX_CONCURRENCY_TASKS` | Multipart upload parallelism within a single file. | 10 |
+| `DELTARS_UPLOAD_PART_SIZE` | Multipart upload part size in bytes. Values below 5 MiB fall back to 5 MiB, and values above 5 GiB are capped at 5 GiB, matching S3 and GCS part limits. | 5 MiB |
+| `DELTARS_ROLL_ON_ROW_GROUP_BOUNDARY` | Whether files roll on row group boundaries. Set to `1`, `true`, or `yes` (case-insensitive) to enable. | `false` |
+| `DELTARS_VACUUM_LIST_CONCURRENCY` | Concurrent LIST calls during vacuum. This one applies to vacuum, not writes; per-operation control is available through `VacuumBuilder::with_scan_concurrency`. | 10 |
+
+The three concurrency knobs bound different stages, so they do not substitute for
+each other: `DELTARS_MAX_CONCURRENT_WRITERS` caps how many writer tasks run at
+once, `DELTARS_WRITER_BATCH_CHANNEL_SIZE` caps how many record batches wait
+between the producer and those writers, and `DELTARS_MAX_CONCURRENCY_TASKS` caps
+the multipart upload parallelism inside one file. If peak memory during a write
+stays high after tuning the upload-bytes cap, lowering
+`DELTARS_MAX_CONCURRENT_WRITERS` is the next knob to try, since each writer
+holds its own buffers outside that cap.
