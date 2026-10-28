@@ -447,6 +447,7 @@ async fn assert_optimize_preserves_live_rows_with_deletion_vectors(
                 .with_type(OptimizeType::ZOrder(columns))
                 .await?
         }
+        other => unreachable!("unexpected optimize type: {other:?}"),
     };
 
     assert_eq!(metrics.num_files_added, 1);
