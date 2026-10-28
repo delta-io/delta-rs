@@ -906,10 +906,15 @@ class DeltaTable:
             The approximate number of rows for this specific table
         """
         actions = self.get_add_actions(flatten=True)
-        num_records: list[int | None] = actions.column("num_records").to_pylist()
+        # arro3's stubs incorrectly type to_pylist() as returning a NumPy array.
+        # See https://github.com/kylebarron/arro3/issues/550
+        num_records = cast(list[int | None], actions.column("num_records").to_pylist())
         deleted_rows: list[int | None]
         if "deletion_vector.cardinality" in actions.column_names:
-            deleted_rows = actions.column("deletion_vector.cardinality").to_pylist()
+            deleted_rows = cast(
+                list[int | None],
+                actions.column("deletion_vector.cardinality").to_pylist(),
+            )
         else:
             deleted_rows = [None] * len(num_records)
 
