@@ -683,21 +683,11 @@ pub(crate) fn object_store_path(table_root: &Url) -> DeltaResult<Path> {
 pub fn to_uri(root: &Url, location: &Path) -> String {
     match root.scheme() {
         "file" => {
+            let root = root.to_file_path().expect("Invalid local table URL");
+            let root = root.to_string_lossy();
             #[cfg(windows)]
-            let uri = format!(
-                "{}/{}",
-                root.as_ref().trim_end_matches('/'),
-                location.as_ref()
-            )
-            .replace("file:///", "");
-            #[cfg(unix)]
-            let uri = format!(
-                "{}/{}",
-                root.as_ref().trim_end_matches('/'),
-                location.as_ref()
-            )
-            .replace("file://", "");
-            uri
+            let root = root.replace('\\', "/");
+            format!("{}/{}", root.trim_end_matches('/'), location.as_ref())
         }
         #[cfg(target_os = "windows")]
         DELTA_UNC_SCHEME => {
@@ -973,6 +963,41 @@ pub(crate) mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[test]
+    fn to_uri_local_paths() {
+        let (url_prefix, path_prefix) = if cfg!(windows) {
+            ("file:///C:/", "C:/")
+        } else {
+            ("file:///", "/")
+        };
+        for (encoded, decoded, relative) in [
+            ("table", "table", "part.parquet"),
+            ("with%20space", "with space", "part.parquet"),
+            ("%E4%B8%AD%E6%96%87", "中文", "part.parquet"),
+            ("literal%2520", "literal%20", "part.parquet"),
+            ("hash%23tag", "hash#tag", "part.parquet"),
+            ("with%20space", "with space", ""),
+            ("with%20space", "with space", "p=a%2Fb/part%20file.parquet"),
+        ] {
+            let root = Url::parse(&format!("{url_prefix}{encoded}/")).unwrap();
+            let location = Path::parse(relative).unwrap();
+            assert_eq!(
+                to_uri(&root, &location),
+                format!("{path_prefix}{decoded}/{relative}")
+            );
+        }
+    }
+
+    #[test]
+    fn to_uri_remote_paths_remain_encoded() {
+        let root = Url::parse("s3://bucket/with%20space/").unwrap();
+        let location = Path::parse("p=a%2Fb/part.parquet").unwrap();
+        assert_eq!(
+            to_uri(&root, &location),
+            "s3://bucket/with%20space/p=a%2Fb/part.parquet"
+        );
+    }
 
     #[test]
     fn test_logstore_config_ctor() {
