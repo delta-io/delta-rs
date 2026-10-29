@@ -155,6 +155,104 @@ async fn column_mapping_append_roundtrip() -> TestResult {
     Ok(())
 }
 
+/// Dropping a column on a column-mapped table is a metadata-only operation: the field leaves
+/// the logical schema while every data file is left exactly as it was.
+#[cfg(feature = "datafusion")]
+#[tokio::test]
+async fn column_mapping_drop_column_is_metadata_only() -> TestResult {
+    let (_temp_dir, table_path, table) = copied_column_mapping_table().await?;
+    let before = collect_data_files(&table_path)?;
+    let max_column_id_before = table
+        .snapshot()?
+        .metadata()
+        .configuration()
+        .get("delta.columnMapping.maxColumnId")
+        .cloned();
+
+    let table = table.drop_columns().with_columns(["Super Name"]).await?;
+
+    // Nothing was rewritten, added, or removed on disk - this is the whole point of doing the
+    // drop on a column-mapped table.
+    assert_eq!(
+        collect_data_files(&table_path)?,
+        before,
+        "dropping a column must not touch any data file"
+    );
+
+    // The dropped field is gone and the survivor keeps its original physical name.
+    let schema = table.snapshot()?.schema();
+    assert!(
+        schema.field("Super Name").is_none(),
+        "dropped column should be absent from the logical schema"
+    );
+    let survivor = schema.field("Company Very Short").unwrap();
+    assert_eq!(
+        survivor
+            .metadata
+            .get(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref()),
+        Some(&MetadataValue::String(PHYSICAL_PARTITION_NAME.to_string())),
+        "surviving columns must keep their physical name"
+    );
+
+    // Column id 2 is now unused, but the high-water mark must not be lowered or reused.
+    assert_eq!(
+        table
+            .snapshot()?
+            .metadata()
+            .configuration()
+            .get("delta.columnMapping.maxColumnId")
+            .cloned(),
+        max_column_id_before,
+        "maxColumnId must never be decremented or reused"
+    );
+
+    // The surviving column still resolves through column mapping and returns every row.
+    let batches = read_all(&table).await?;
+    assert_batches_sorted_eq! {
+        [
+            "+--------------------+",
+            "| Company Very Short |",
+            "+--------------------+",
+            "| BME                |",
+            "| BMS                |",
+            "| BMS                |",
+            "| BMS                |",
+            "| BMS                |",
+            "+--------------------+",
+        ],
+        &batches
+    };
+
+    Ok(())
+}
+
+/// A partition column is encoded in the data file layout, so it cannot be dropped even on a
+/// column-mapped table.
+#[cfg(feature = "datafusion")]
+#[tokio::test]
+async fn column_mapping_drop_partition_column_is_rejected() -> TestResult {
+    let (_temp_dir, table_path, table) = copied_column_mapping_table().await?;
+    let before = collect_data_files(&table_path)?;
+
+    let err = table
+        .drop_columns()
+        .with_columns(["Company Very Short"])
+        .await
+        .unwrap_err();
+
+    assert!(
+        err.to_string().contains("partition column"),
+        "expected a partition column rejection, got: {err}"
+    );
+    assert_eq!(
+        collect_data_files(&table_path)?,
+        before,
+        "a rejected drop must not touch any data file"
+    );
+
+    Ok(())
+}
+
 /// Schema evolution on a column-mapped table is rejected for now (handled in a follow-up).
 #[cfg(feature = "datafusion")]
 #[tokio::test]
