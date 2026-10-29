@@ -338,6 +338,14 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
         writer_features.insert(TableFeature::ColumnMapping);
     }
     writer_features.insert(TableFeature::DeletionVectors);
+    writer_features.insert(TableFeature::CatalogManaged);
+    writer_features.insert(TableFeature::VacuumProtocolCheck);
+    // Appends neither emit nor drop domain-metadata actions, so writing to a table that carries
+    // them is compliant; the row-id high-water-mark upkeep that RowTracking would need is a
+    // separate (still unsupported) feature.
+    writer_features.insert(TableFeature::DomainMetadata);
+    // Populated on commit by `maybe_set_in_commit_timestamp`.
+    writer_features.insert(TableFeature::InCommitTimestamp);
     // writer_features.insert(TableFeature::IdentityColumns);
     // `checkpointProtection` is a writer-only feature which constrains checkpoint
     // creation and metadata cleanup, neither of which this crate performs when
