@@ -1955,6 +1955,68 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_vacuum_keeps_restored_file_removed_again_within_retention() -> DeltaResult<()> {
+        async fn commit(table: &mut DeltaTable, actions: Vec<Action>) -> DeltaResult<()> {
+            let operation = DeltaOperation::Delete { predicate: None };
+            CommitBuilder::default()
+                .with_actions(actions)
+                .build(Some(table.snapshot()?), table.log_store(), operation)
+                .await?;
+            table.update_state().await
+        }
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut table = create_initialized_table(temp_dir.path().to_str().unwrap(), &[]).await;
+        let now = SystemTime::now();
+        let now_millis = now.duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
+        let day_millis = 24 * 60 * 60 * 1000;
+
+        let mut writer = JsonWriter::for_table(&table)?;
+        writer
+            .write(vec![
+                json!({"id": "A", "value": 1, "modified": "2021-02-01"}),
+            ])
+            .await?;
+        writer.flush_and_commit(&mut table).await?;
+        let file = table.snapshot()?.log_data().into_iter().next().unwrap();
+        let remove = file.remove_action(true);
+        let path = file.object_store_path().to_string();
+        set_last_modified(
+            &temp_dir.path().join(&path),
+            now - StdDuration::from_secs(2 * 86400),
+        );
+
+        let remove_at = |deletion_timestamp| {
+            let mut remove = remove.clone();
+            remove.deletion_timestamp = Some(deletion_timestamp);
+            Action::Remove(remove)
+        };
+        commit(&mut table, vec![remove_at(now_millis - 2 * day_millis)]).await?;
+        let version_with_file = table.version().unwrap() - 1;
+        let (mut table, _) = table
+            .restore()
+            .with_version_to_restore(version_with_file)
+            .await?;
+        commit(&mut table, vec![remove_at(now_millis)]).await?;
+
+        for mode in [VacuumMode::Lite, VacuumMode::Full] {
+            let (_table, result) =
+                VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                    .with_retention_period(Duration::days(1))
+                    .with_enforce_retention_duration(false)
+                    .with_dry_run(true)
+                    .with_mode(mode.clone())
+                    .with_clock(Arc::new(MockClock::new(now_millis)))
+                    .await?;
+            assert!(
+                !result.files_deleted.contains(&path),
+                "{mode:?} vacuum deleted a file whose newest tombstone is within retention"
+            );
+        }
+        Ok(())
+    }
+
     /// Test that recently written uncommitted files are protected from deletion in Full mode
     /// This tests the fix for the race condition where concurrent writer's files could be deleted
     #[tokio::test]
