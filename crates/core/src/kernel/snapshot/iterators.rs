@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use delta_kernel::engine::arrow_expression::evaluate_expression::to_json;
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::scan::scan_row_schema;
-use delta_kernel::schema::DataType;
+use delta_kernel::schema::{DataType, PrimitiveType};
 #[cfg(any(test, feature = "datafusion"))]
 use indexmap::IndexMap;
 use object_store::ObjectMeta;
@@ -415,6 +415,13 @@ fn typed_partition_values_from_raw_map(
             }
         })?;
         let scalar = match raw_partition_values.get(column) {
+            // The write path stores an empty-string partition value verbatim, and
+            // the scan path reads it back as '' (PROTOCOL.md's "" = NULL encoding
+            // applies only to types that cannot represent an empty value). Keep ""
+            // as an empty string here so rewrites (e.g. OPTIMIZE) preserve it.
+            Some(Some(raw)) if raw.is_empty() && primitive_type == &PrimitiveType::String => {
+                Scalar::String(String::new())
+            }
             Some(Some(raw)) => primitive_type.parse_scalar(raw.as_str())?,
             Some(None) => Scalar::Null(field.data_type().clone()),
             None => {
