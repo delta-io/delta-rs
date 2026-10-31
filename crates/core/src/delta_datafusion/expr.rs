@@ -606,6 +606,7 @@ fn spark_sql_identifier(name: &str) -> String {
         match chars.next() {
             Some(first) if first.is_ascii_alphabetic() || first == '_' => {
                 !chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    || is_reserved_identifier(name)
             }
             // Empty or leading non-letter: must quote.
             _ => true,
@@ -616,6 +617,15 @@ fn spark_sql_identifier(name: &str) -> String {
     } else {
         name.to_string()
     }
+}
+
+/// Whether `name` cannot be parsed as a bare identifier. Asks the SQL parser directly, so the
+/// answer tracks the parser's reserved-word rules instead of a hand-kept list.
+fn is_reserved_identifier(name: &str) -> bool {
+    Parser::new(&GenericDialect {})
+        .try_with_sql(&format!("{name} > 0"))
+        .and_then(|mut parser| parser.parse_expr())
+        .is_err()
 }
 
 impl Display for SqlFormat<'_> {
