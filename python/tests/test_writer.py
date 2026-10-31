@@ -2611,6 +2611,20 @@ def test_write_timestamp(tmp_path: pathlib.Path):
     assert protocol.min_writer_version == 2
 
 
+@pytest.mark.pyarrow
+def test_write_naive_timestamp_into_utc_timestamp_column(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    utc = pa.table({"t": pa.array([0], pa.timestamp("us", tz="UTC"))})
+    naive = pa.table({"t": pa.array([0], pa.timestamp("us"))})
+    write_deltalake(tmp_path, utc)
+
+    with pytest.raises(SchemaMismatchError, match="column `t` is timestamp_ntz"):
+        write_deltalake(tmp_path, naive, mode="append")
+
+    write_deltalake(tmp_path, naive, mode="append", schema_mode="merge")
+
+
 def test_write_transactions(tmp_path: pathlib.Path, sample_table: Table):
     expected_transactions = [
         Transaction(app_id="app_1", version=1),
