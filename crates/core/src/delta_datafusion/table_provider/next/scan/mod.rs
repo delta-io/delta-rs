@@ -805,8 +805,9 @@ fn intern_scan_transforms(files: &mut [ScanFileContext]) -> HashMap<String, Arc<
         .enumerate()
         .filter_map(|(file_index, file)| {
             let transform = file.transform.take()?;
-            let shared = if let Some(existing) =
-                unique.iter().find(|candidate| candidate.as_ref() == transform.as_ref())
+            let shared = if let Some(existing) = unique
+                .iter()
+                .find(|candidate| candidate.as_ref() == transform.as_ref())
             {
                 Arc::clone(existing)
             } else {
@@ -1638,7 +1639,10 @@ mod tests {
         let t1 = transforms.get("1").expect("file 1 transform");
         let t2 = transforms.get("2").expect("file 2 transform");
         assert!(Arc::ptr_eq(t0, t1), "equal transforms must share one Arc");
-        assert!(!Arc::ptr_eq(t0, t2), "distinct transforms must stay distinct");
+        assert!(
+            !Arc::ptr_eq(t0, t2),
+            "distinct transforms must stay distinct"
+        );
         assert_eq!(t0.as_ref(), &Expression::literal(Scalar::Integer(7)));
         assert_eq!(t2.as_ref(), &Expression::literal(Scalar::Integer(8)));
     }
