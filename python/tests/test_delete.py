@@ -326,3 +326,23 @@ def test_delete_without_predicate_conflicts_with_concurrent_merge(
 
 
 @pytest.mark.pyarrow
+def test_delete_is_distinct_from_binds_tighter_than_and(tmp_path: pathlib.Path):
+    """https://github.com/delta-io/delta-rs/issues/4987
+
+    `f IS DISTINCT FROM TRUE AND id = 2` must parse as
+    `(f IS DISTINCT FROM TRUE) AND id = 2` so only id 2 is deleted.
+    """
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, pa.table({"id": [1, 2, 3], "f": [True, False, None]}))
+
+    DeltaTable(tmp_path).delete("f IS DISTINCT FROM TRUE AND id = 2")
+
+    remaining = (
+        QueryBuilder()
+        .register("tbl", DeltaTable(tmp_path))
+        .execute("select id from tbl")
+        .read_all()["id"]
+        .to_pylist()
+    )
+    assert sorted(remaining) == [1, 3]
