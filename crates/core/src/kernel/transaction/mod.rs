@@ -1076,7 +1076,9 @@ impl PostCommit {
                 // File-only work runs in a sibling scope. The operation-scoped store forwards
                 // `begin_operation` to its parent, so on an isolating backend this is a second
                 // isolated write set that is published on success and discarded on error.
-                let (checkpoint_created, files_cleaned_up) =
+                // Checkpoint creation and log cleanup are best-effort maintenance: the commit
+                // itself is already durable, so a failure here must not fail the write.
+                let maintenance =
                     with_operation(&self.log_store, |log_store| async move {
                         let mut checkpoint_created = false;
                         if create_checkpoint {
@@ -1095,10 +1097,20 @@ impl PostCommit {
                         }
                         Ok((checkpoint_created, files_cleaned_up))
                     })
-                    .await?;
+                    .await;
 
-                new_checkpoint_created = checkpoint_created;
-                num_log_files_cleaned_up = files_cleaned_up;
+                match maintenance {
+                    Ok((checkpoint_created, files_cleaned_up)) => {
+                        new_checkpoint_created = checkpoint_created;
+                        num_log_files_cleaned_up = files_cleaned_up;
+                    }
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            "post-commit checkpoint or log cleanup failed; the commit itself is durable, continuing"
+                        );
+                    }
+                }
                 if num_log_files_cleaned_up > 0 {
                     state = DeltaTableState::try_new(&self.log_store, Some(self.version)).await?;
                 }

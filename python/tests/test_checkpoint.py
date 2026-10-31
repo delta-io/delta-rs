@@ -634,4 +634,4 @@ def test_failed_post_commit_checkpoint_does_not_fail_write(
         .execute("select x from tbl order by x")
         .read_all()
     )
-    assert result.to_struct_array().column("x").to_pylist() == [1, 2]
+    assert result["x"].to_pylist() == [1, 2]
