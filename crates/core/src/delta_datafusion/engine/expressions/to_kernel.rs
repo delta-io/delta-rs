@@ -346,20 +346,22 @@ fn to_binary_op(op: Operator) -> Result<BinaryExpressionOp> {
     }
 }
 
-/// Helper function to flatten nested AND/OR expressions into a single junction expression
+/// Helper function to flatten nested AND/OR expressions into a single junction expression.
+/// Iterative, so a long `a OR b OR ...` chain does not overflow the stack.
 fn flatten_junction_expr(expr: &Expr, target_op: Operator) -> Result<Vec<Predicate>> {
-    match expr {
-        Expr::BinaryExpr(BinaryExpr { op, left, right }) if *op == target_op => {
-            let mut left_exprs = flatten_junction_expr(left.as_ref(), target_op)?;
-            let mut right_exprs = flatten_junction_expr(right.as_ref(), target_op)?;
-            left_exprs.append(&mut right_exprs);
-            Ok(left_exprs)
-        }
-        _ => {
-            let delta_expr = to_delta_predicate(expr)?;
-            Ok(vec![delta_expr])
+    let mut preds = Vec::new();
+    let mut pending = vec![expr];
+    while let Some(expr) = pending.pop() {
+        match expr {
+            Expr::BinaryExpr(BinaryExpr { op, left, right }) if *op == target_op => {
+                // Push right first so terms come out left to right.
+                pending.push(right.as_ref());
+                pending.push(left.as_ref());
+            }
+            _ => preds.push(to_delta_predicate(expr)?),
         }
     }
+    Ok(preds)
 }
 
 fn to_junction_op(op: Operator) -> JunctionPredicateOp {
@@ -507,6 +509,38 @@ mod tests {
                         Predicate::and_from([to_delta_predicate(&other).unwrap(), expected])
                     );
                 }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_long_junction_chain_converts_to_flat_junction() {
+        // Pin the stack to the 2 MiB default so RUST_MIN_STACK cannot hide a regression.
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let n = 10_000i64;
+                let term = |i| col("id").eq(lit(i));
+                let expected_terms = || {
+                    (0..n).map(|i| {
+                        Predicate::eq(
+                            Expression::Column(ColumnName::new(["id"])),
+                            Expression::Literal(Scalar::Long(i)),
+                        )
+                    })
+                };
+                let or_chain = (1..n).fold(term(0), |acc, i| acc.or(term(i)));
+                assert_eq!(
+                    to_delta_predicate(&or_chain).unwrap(),
+                    Predicate::or_from(expected_terms())
+                );
+                let and_chain = (1..n).fold(term(0), |acc, i| acc.and(term(i)));
+                assert_eq!(
+                    to_delta_predicate(&and_chain).unwrap(),
+                    Predicate::and_from(expected_terms())
+                );
             })
             .unwrap()
             .join()
