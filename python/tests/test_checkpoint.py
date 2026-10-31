@@ -590,7 +590,7 @@ def test_cleanup_metadata_with_incomplete_multipart_checkpoint(
             .execute("select x from tbl order by x")
             .read_all()
         )
-        return result.to_struct_array().column("x").to_pylist()
+        return result["x"].to_pylist()
 
     # the reader ignores the incomplete checkpoint and replays commits 0 to 2
     assert read_x() == [1, 2, 3]
