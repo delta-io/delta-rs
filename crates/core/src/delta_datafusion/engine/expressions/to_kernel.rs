@@ -515,6 +515,14 @@ mod tests {
             .unwrap();
     }
 
+    /// Drops a left-deep chain one node at a time. DataFusion's recursive `Drop` can overflow
+    /// a 2 MiB stack on a 10,000-deep chain (seen on Windows CI).
+    fn drop_chain(mut expr: Expr) {
+        while let Expr::BinaryExpr(BinaryExpr { left, .. }) = expr {
+            expr = *left;
+        }
+    }
+
     #[test]
     fn test_long_junction_chain_converts_to_flat_junction() {
         // Pin the stack to the 2 MiB default so RUST_MIN_STACK cannot hide a regression.
@@ -536,11 +544,13 @@ mod tests {
                     to_delta_predicate(&or_chain).unwrap(),
                     Predicate::or_from(expected_terms())
                 );
+                drop_chain(or_chain);
                 let and_chain = (1..n).fold(term(0), |acc, i| acc.and(term(i)));
                 assert_eq!(
                     to_delta_predicate(&and_chain).unwrap(),
                     Predicate::and_from(expected_terms())
                 );
+                drop_chain(and_chain);
             })
             .unwrap()
             .join()
