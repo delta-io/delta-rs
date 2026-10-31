@@ -221,7 +221,7 @@ pub async fn cleanup_expired_logs_for(
     debug!("safe_checkpoint_version: {}", safe_checkpoint_version);
 
     // Step 4: Delete DELTA_LOG files where log_ver < safe_checkpoint_version && ts <= cutoff_timestamp
-    let locations = futures::stream::iter(log_entries.into_iter())
+    let locations = futures::stream::iter(log_entries)
         .filter_map(move |meta: Result<crate::ObjectMeta, _>| async move {
             let meta = match meta {
                 Ok(m) => m,
