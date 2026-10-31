@@ -162,12 +162,15 @@ impl std::future::IntoFuture for GenerateBuilder {
                 }
                 // Delete manifests left behind by partitions that no longer have
                 // files, as delta-spark's GenerateSymlinkManifest does; otherwise a
-                // manifest reader keeps seeing rows that were deleted.
+                // manifest reader keeps seeing rows that were deleted. Only objects in
+                // the manifest layout (`.../manifest`) are candidates, so unrelated
+                // objects under the prefix are never removed.
                 let manifest_root = Path::from("_symlink_format_manifest");
                 let mut existing = object_store.list(Some(&manifest_root));
                 while let Some(meta) = existing.next().await {
                     let location = meta?.location;
-                    if !written.contains(&location) {
+                    let is_manifest = location.filename() == Some("manifest");
+                    if is_manifest && !written.contains(&location) {
                         debug!("Removing stale manifest {location:?}");
                         object_store.delete(&location).await?;
                     }
