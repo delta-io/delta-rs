@@ -182,3 +182,42 @@ def test_column_mapping_merge_schema_evolution_rejected(tmp_path: pathlib.Path):
             .when_not_matched_insert_all()
             .execute()
         )
+
+
+@pytest.mark.pyarrow
+def test_conflict_check_partition_predicate_with_column_mapping(
+    tmp_path: pathlib.Path,
+):
+    """https://github.com/delta-io/delta-rs/issues/4979
+
+    A delete predicated on a partition column must not panic when another
+    writer appended a file after the table was loaded: the conflict checker
+    looks up partition values by logical name while a column-mapped table
+    keys them by physical name.
+    """
+    import pyarrow as pa
+
+    table_path = tmp_path / "t"
+    data = pa.table({"k": [1, 2], "p": ["a", "b"]})
+    write_deltalake(
+        table_path,
+        data,
+        partition_by=["p"],
+        configuration={"delta.columnMapping.mode": "name"},
+    )
+
+    dt = DeltaTable(table_path)
+    write_deltalake(table_path, pa.table({"k": [3], "p": ["b"]}), mode="append")
+
+    # PanicException: called `Option::unwrap()` on a `None` value
+    dt.delete("p = 'a'")
+
+    rows = (
+        QueryBuilder()
+        .register("tbl", DeltaTable(table_path))
+        .execute("select k, p from tbl order by k")
+        .read_all()
+        .to_struct_array()
+        .to_pylist()
+    )
+    assert rows == [{"k": 3, "p": "b"}]
