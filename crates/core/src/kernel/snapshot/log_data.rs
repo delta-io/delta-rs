@@ -66,7 +66,7 @@ impl<'a> LogDataHandler<'a> {
         Self { data, config }
     }
 
-    pub(crate) fn table_configuration(&self) -> &TableConfiguration {
+    pub(crate) fn table_configuration(&self) -> &'a TableConfiguration {
         self.config
     }
 
