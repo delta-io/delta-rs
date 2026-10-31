@@ -505,6 +505,14 @@ impl DeltaOperation {
             _ => false,
         }
     }
+
+    /// The save mode of operations that can initialize a table (`Create`, `Write`).
+    pub fn save_mode(&self) -> Option<SaveMode> {
+        match self {
+            Self::Create { mode, .. } | Self::Write { mode, .. } => Some(*mode),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) fn operation_parameter_value(value: Value) -> Value {
