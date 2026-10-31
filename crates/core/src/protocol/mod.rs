@@ -502,7 +502,19 @@ impl DeltaOperation {
         match self {
             // Predicate is none -> Merge operation had to join full source and target
             Self::Merge { predicate, .. } if predicate.is_none() => true,
+            // A DELETE without a predicate reads the whole table, so it must
+            // conflict with any concurrent data change (matching delta-spark,
+            // which sets readWholeTable = true for predicate-less deletes).
+            Self::Delete { predicate, .. } if predicate.is_none() => true,
             _ => false,
+        }
+    }
+
+    /// The save mode of operations that can initialize a table (`Create`, `Write`).
+    pub fn save_mode(&self) -> Option<SaveMode> {
+        match self {
+            Self::Create { mode, .. } | Self::Write { mode, .. } => Some(*mode),
+            _ => None,
         }
     }
 }

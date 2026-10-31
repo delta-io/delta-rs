@@ -8,6 +8,8 @@ use datafusion::common::{Column, ToDFSchema};
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_optimizer::pruning::{PruningPredicateBuilder, PruningStatistics};
+use delta_kernel::schema::StructType;
+use delta_kernel::table_features::ColumnMappingMode;
 
 use crate::delta_datafusion::{
     Expression, create_session, get_null_of_arrow_type, to_correct_scalar_value,
@@ -19,6 +21,8 @@ pub struct AddContainer<'a> {
     inner: &'a Vec<Add>,
     partition_columns: &'a Vec<String>,
     schema: ArrowSchemaRef,
+    kernel_schema: &'a StructType,
+    column_mapping_mode: ColumnMappingMode,
 }
 
 impl<'a> AddContainer<'a> {
@@ -27,12 +31,25 @@ impl<'a> AddContainer<'a> {
         adds: &'a Vec<Add>,
         partition_columns: &'a Vec<String>,
         schema: ArrowSchemaRef,
+        kernel_schema: &'a StructType,
+        column_mapping_mode: ColumnMappingMode,
     ) -> Self {
         Self {
             inner: adds,
             partition_columns,
             schema,
+            kernel_schema,
+            column_mapping_mode,
         }
+    }
+
+    /// Translate a logical column name to the physical name used to key
+    /// partition values and file statistics on column-mapped tables.
+    fn physical_name<'b>(&'b self, logical_name: &'b str) -> &'b str {
+        self.kernel_schema
+            .field(logical_name)
+            .map(|field| field.physical_name(self.column_mapping_mode))
+            .unwrap_or(logical_name)
     }
 
     pub fn get_prune_stats(&self, column: &Column, get_max: bool) -> Option<ArrayRef> {
@@ -44,12 +61,17 @@ impl<'a> AddContainer<'a> {
         }
 
         let data_type = field.data_type();
+        let physical_name = self.physical_name(&column.name);
 
         let values = self.inner.iter().map(|add| {
             if self.partition_columns.contains(&column.name) {
-                let value = add.partition_values.get(&column.name).unwrap();
+                let value = add
+                    .partition_values
+                    .get(physical_name)
+                    .cloned()
+                    .unwrap_or(None);
                 let value = match value {
-                    Some(v) => serde_json::Value::String(v.to_string()),
+                    Some(v) => serde_json::Value::String(v),
                     None => serde_json::Value::Null,
                 };
                 to_correct_scalar_value(&value, data_type)
@@ -66,7 +88,7 @@ impl<'a> AddContainer<'a> {
                 };
 
                 values
-                    .get(&column.name)
+                    .get(physical_name)
                     .and_then(|f| {
                         to_correct_scalar_value(f.as_value()?, data_type)
                             .ok()
@@ -131,10 +153,11 @@ impl PruningStatistics for AddContainer<'_> {
     ///
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        let physical_name = self.physical_name(&column.name);
         let values = self.inner.iter().map(|add| {
             if let Ok(Some(statistics)) = add.get_stats() {
                 if self.partition_columns.contains(&column.name) {
-                    let value = add.partition_values.get(&column.name).unwrap();
+                    let value = add.partition_values.get(physical_name).cloned().flatten();
                     match value {
                         Some(_) => ScalarValue::UInt64(Some(0)),
                         None => ScalarValue::UInt64(Some(statistics.num_records as u64)),
@@ -142,12 +165,12 @@ impl PruningStatistics for AddContainer<'_> {
                 } else {
                     statistics
                         .null_count
-                        .get(&column.name)
+                        .get(physical_name)
                         .map(|f| ScalarValue::UInt64(f.as_value().map(|val| val as u64)))
                         .unwrap_or(ScalarValue::UInt64(None))
                 }
             } else if self.partition_columns.contains(&column.name) {
-                let value = add.partition_values.get(&column.name).unwrap();
+                let value = add.partition_values.get(physical_name).cloned().flatten();
                 match value {
                     Some(_) => ScalarValue::UInt64(Some(0)),
                     None => ScalarValue::UInt64(None),

@@ -444,7 +444,8 @@ mod tests {
         let version = table.version();
         assert_eq!(version, Some(1));
 
-        let expected_expr = vec!["\"vAlue\" < 1000"]; // spellchecker:disable-line
+        // Stored Spark-compatible: bare identifiers, never double-quoted (delta-rs#4993).
+        let expected_expr = vec!["vAlue < 1000"]; // spellchecker:disable-line
         assert_eq!(
             get_constraint_op_params(&mut table)
                 .await

@@ -30,6 +30,7 @@ use arrow_array::{Array, GenericListArray};
 use arrow_schema::{DataType, Field, Schema};
 use chrono::{DateTime, NaiveDate};
 use datafusion::catalog::Session;
+use datafusion::common::Column;
 use datafusion::common::Result as DFResult;
 use datafusion::common::{
     DFSchema, Result, ScalarValue, TableReference, ToDFSchema, config::ConfigOptions,
@@ -52,8 +53,9 @@ use datafusion::logical_expr::{
 use datafusion::sql::planner::{ContextProvider, SqlToRel};
 use datafusion::sql::sqlparser::ast::escape_quoted_string;
 use datafusion::sql::sqlparser::ast::{
-    Expr as SqlExpr, Function, FunctionArg, FunctionArgExpr, FunctionArgumentList,
-    FunctionArguments, Ident, ObjectName, ObjectNamePart, Value, VisitMut, VisitorMut,
+    BinaryOperator as SqlBinaryOperator, Expr as SqlExpr, Function, FunctionArg, FunctionArgExpr,
+    FunctionArgumentList, FunctionArguments, Ident, ObjectName, ObjectNamePart, Value, VisitMut,
+    VisitorMut, visit_expressions_mut,
 };
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
@@ -329,12 +331,62 @@ fn parse_sql_expr(expr: impl AsRef<str>) -> DeltaResult<SqlExpr> {
         .map_err(|err| DeltaTableError::GenericError {
             source: Box::new(err),
         })?;
-    Parser::new(dialect)
+    let mut expr = Parser::new(dialect)
         .with_tokens(tokens)
         .parse_expr()
         .map_err(|err| DeltaTableError::GenericError {
             source: Box::new(err),
-        })
+        })?;
+    // sqlparser 0.62 parses `a IS [NOT] DISTINCT FROM b AND c` as
+    // `a IS [NOT] DISTINCT FROM (b AND c)` because IS DISTINCT FROM binds
+    // looser than AND/OR. Reassociate to match standard SQL semantics.
+    // Fixed upstream in sqlparser 0.63:
+    // <https://github.com/apache/datafusion-sqlparser-rs/pull/2436>
+    let _ = visit_expressions_mut(&mut expr, |e| {
+        reassociate_is_distinct_from(e);
+        ControlFlow::<()>::Continue(())
+    });
+    Ok(expr)
+}
+
+/// Rewrite `a IS [NOT] DISTINCT FROM (b AND|OR c)` back to
+/// `(a IS [NOT] DISTINCT FROM b) AND|OR c` when the boolean chain was not
+/// explicitly parenthesized (parenthesized groups arrive as `Expr::Nested`
+/// and are left untouched).
+fn reassociate_is_distinct_from(expr: &mut SqlExpr) {
+    let (SqlExpr::IsDistinctFrom(_, right) | SqlExpr::IsNotDistinctFrom(_, right)) = expr else {
+        return;
+    };
+    if !matches!(
+        right.as_ref(),
+        SqlExpr::BinaryOp {
+            op: SqlBinaryOperator::And | SqlBinaryOperator::Or,
+            ..
+        }
+    ) {
+        return;
+    }
+    // Take ownership of the matched node and rebuild it reassociated.
+    let old = std::mem::replace(expr, SqlExpr::Value(Value::Boolean(false).into()));
+    type DistinctCtor = fn(Box<SqlExpr>, Box<SqlExpr>) -> SqlExpr;
+    let (ctor, left, right): (DistinctCtor, _, _) = match old {
+        SqlExpr::IsDistinctFrom(l, r) => (SqlExpr::IsDistinctFrom, l, r),
+        SqlExpr::IsNotDistinctFrom(l, r) => (SqlExpr::IsNotDistinctFrom, l, r),
+        _ => unreachable!(),
+    };
+    let SqlExpr::BinaryOp {
+        left: b,
+        op,
+        right: c,
+    } = *right
+    else {
+        unreachable!()
+    };
+    *expr = SqlExpr::BinaryOp {
+        left: Box::new(ctor(left, b)),
+        op,
+        right: c,
+    };
 }
 
 fn sql_expr_to_df_expr(
@@ -528,10 +580,48 @@ impl Display for BinaryExprFormat<'_> {
     }
 }
 
+/// Serialize a [`Column`] for storage in table metadata (e.g. check constraints).
+///
+/// delta-spark parses a double-quoted identifier in stored SQL as a string literal, silently
+/// weakening constraints such as `Value IS NOT NULL` into an always-true comparison of the
+/// literal `'Value'` (delta-rs#4993). Identifiers are therefore emitted bare whenever they are
+/// parseable and backtick-quoted otherwise — Spark's canonical form and valid DataFusion SQL.
+fn spark_sql_column_name(column: &Column) -> String {
+    match &column.relation {
+        Some(relation) => format!(
+            "{}.{}",
+            spark_sql_identifier(&relation.to_string()),
+            spark_sql_identifier(&column.name)
+        ),
+        None => spark_sql_identifier(&column.name),
+    }
+}
+
+/// Format an identifier as Spark-compatible SQL: bare when every character is a valid
+/// identifier character (mixed case included — Spark resolves identifiers case-insensitively)
+/// and backtick-quoted otherwise, never double-quoted.
+fn spark_sql_identifier(name: &str) -> String {
+    let needs_quotes = {
+        let mut chars = name.chars();
+        match chars.next() {
+            Some(first) if first.is_ascii_alphabetic() || first == '_' => {
+                !chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+            }
+            // Empty or leading non-letter: must quote.
+            _ => true,
+        }
+    };
+    if needs_quotes {
+        format!("`{}`", name.replace('`', "``"))
+    } else {
+        name.to_string()
+    }
+}
+
 impl Display for SqlFormat<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.expr {
-            Expr::Column(c) => write!(f, "{}", c.quoted_flat_name()),
+            Expr::Column(c) => write!(f, "{}", spark_sql_column_name(c)),
             Expr::Literal(v, _) => write!(f, "{}", ScalarValueFormat { scalar: v }),
             Expr::Case(case) => {
                 write!(f, "CASE ")?;
@@ -1143,7 +1233,9 @@ mod test {
             },
             simple!(
                 Expr::Column(Column::from_qualified_name_ignore_case("Value3")).eq(lit(3_i64)),
-                "\"Value3\" = 3".to_string()
+                // Stored Spark-compatible: bare identifiers, never double-quoted
+                // (delta-rs#4993).
+                "Value3 = 3".to_string()
             ),
             simple!(col("active").is_true(), "active IS TRUE".to_string()),
             simple!(col("active"), "active".to_string()),

@@ -556,7 +556,12 @@ impl std::future::IntoFuture for VacuumBuilder {
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
         Box::pin(async move {
-            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
+            let mut snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
+            // Vacuum must plan against the latest table version (delta-spark calls
+            // `table.update()` before vacuuming): files committed after this handle was
+            // loaded are still active and must never be treated as orphans.
+            snapshot.update(this.log_store.as_ref(), None).await?;
             let plan = this.create_vacuum_plan(snapshot.snapshot()).await?;
 
             if this.dry_run {
