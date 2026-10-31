@@ -552,8 +552,17 @@ impl<'a> ConflictChecker<'a> {
                         .metadata()
                         .partition_columns()
                         .to_vec();
-                    AddContainer::new(&added_files_to_check, &partition_columns, arrow_schema)
-                        .predicate_matches(predicate.clone())
+                    let table_configuration = self.txn_info.read_snapshot.table_configuration();
+                    let kernel_schema = table_configuration.logical_schema();
+                    let column_mapping_mode = table_configuration.column_mapping_mode();
+                    AddContainer::new(
+                        &added_files_to_check,
+                        &partition_columns,
+                        arrow_schema,
+                        &kernel_schema,
+                        column_mapping_mode,
+                    )
+                    .predicate_matches(predicate.clone())
                         .map_err(|err| CommitConflictError::Predicate {
                             source: Box::new(err),
                         })?
