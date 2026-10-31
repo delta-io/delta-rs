@@ -101,8 +101,9 @@ def test_add_constraint(tmp_path, sample_table: Table, sql_string: str):
     last_action = next(dt.history(1))
     assert last_action["operation"] == "ADD CONSTRAINT"
     assert dt.version() == 1
+    # Stored Spark-compatible: backtick-quoted, never double-quoted (delta-rs#4993).
     assert dt.metadata().configuration == {
-        "delta.constraints.check_price": '"high price" >= 0'
+        "delta.constraints.check_price": "`high price` >= 0"
     }
     assert dt.protocol().min_writer_version == 3
 
@@ -137,8 +138,8 @@ def test_add_multiple_constraint(tmp_path, sample_table: Table):
     assert last_action["operation"] == "ADD CONSTRAINT"
     assert dt.version() == 1
     assert dt.metadata().configuration == {
-        "delta.constraints.check_price": '"high price" >= 0',
-        "delta.constraints.min_price": '"high price" < 5'
+        "delta.constraints.check_price": "`high price` >= 0",
+        "delta.constraints.min_price": "`high price` < 5"
 
     }
     assert dt.protocol().min_writer_version == 3

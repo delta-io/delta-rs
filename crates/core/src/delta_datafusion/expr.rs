@@ -30,6 +30,7 @@ use arrow_array::{Array, GenericListArray};
 use arrow_schema::{DataType, Field, Schema};
 use chrono::{DateTime, NaiveDate};
 use datafusion::catalog::Session;
+use datafusion::common::Column;
 use datafusion::common::Result as DFResult;
 use datafusion::common::{
     DFSchema, Result, ScalarValue, TableReference, ToDFSchema, config::ConfigOptions,
@@ -574,10 +575,48 @@ impl Display for BinaryExprFormat<'_> {
     }
 }
 
+/// Serialize a [`Column`] for storage in table metadata (e.g. check constraints).
+///
+/// delta-spark parses a double-quoted identifier in stored SQL as a string literal, silently
+/// weakening constraints such as `Value IS NOT NULL` into an always-true comparison of the
+/// literal `'Value'` (delta-rs#4993). Identifiers are therefore emitted bare whenever they are
+/// parseable and backtick-quoted otherwise — Spark's canonical form and valid DataFusion SQL.
+fn spark_sql_column_name(column: &Column) -> String {
+    match &column.relation {
+        Some(relation) => format!(
+            "{}.{}",
+            spark_sql_identifier(&relation.to_string()),
+            spark_sql_identifier(&column.name)
+        ),
+        None => spark_sql_identifier(&column.name),
+    }
+}
+
+/// Format an identifier as Spark-compatible SQL: bare when every character is a valid
+/// identifier character (mixed case included — Spark resolves identifiers case-insensitively)
+/// and backtick-quoted otherwise, never double-quoted.
+fn spark_sql_identifier(name: &str) -> String {
+    let needs_quotes = {
+        let mut chars = name.chars();
+        match chars.next() {
+            Some(first) if first.is_ascii_alphabetic() || first == '_' => {
+                !chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+            }
+            // Empty or leading non-letter: must quote.
+            _ => true,
+        }
+    };
+    if needs_quotes {
+        format!("`{}`", name.replace('`', "``"))
+    } else {
+        name.to_string()
+    }
+}
+
 impl Display for SqlFormat<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.expr {
-            Expr::Column(c) => write!(f, "{}", c.quoted_flat_name()),
+            Expr::Column(c) => write!(f, "{}", spark_sql_column_name(c)),
             Expr::Literal(v, _) => write!(f, "{}", ScalarValueFormat { scalar: v }),
             Expr::Case(case) => {
                 write!(f, "CASE ")?;
@@ -1189,7 +1228,9 @@ mod test {
             },
             simple!(
                 Expr::Column(Column::from_qualified_name_ignore_case("Value3")).eq(lit(3_i64)),
-                "\"Value3\" = 3".to_string()
+                // Stored Spark-compatible: bare identifiers, never double-quoted
+                // (delta-rs#4993).
+                "Value3 = 3".to_string()
             ),
             simple!(col("active").is_true(), "active IS TRUE".to_string()),
             simple!(col("active"), "active".to_string()),
