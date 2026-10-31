@@ -1,4 +1,4 @@
-//! Adapts a DataFusion record batch stream to the kernel's `EngineData` iterator.
+//! Adapts a DataFusion record batch stream to kernel's `EngineData` iterator.
 //!
 //! [`PlanResult::Data`] is a synchronous iterator. [`into_engine_data`] spawns one task on the
 //! executor's runtime that drains the stream into a bounded channel, and the iterator receives
@@ -37,7 +37,7 @@ pub fn into_engine_data(
         block_in_place(|| receiver.blocking_recv()).map(|batch| {
             batch
                 .map(|batch| Box::new(ArrowEngineData::new(batch)) as Box<dyn EngineData>)
-                .map_err(|err| crate::Error::from(err).into())
+                .map_err(|err| crate::ExecutorError::from(err).into())
         })
     }))
 }

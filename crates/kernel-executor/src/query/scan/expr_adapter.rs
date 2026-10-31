@@ -1,15 +1,22 @@
 //! Delta-aware physical expression adaptation for parquet scans.
+//!
+//! Shared by this crate's parquet scan ([`super::parquet`]) and core's `DeltaScanExec`.
 
 use std::sync::Arc;
 
-use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion::common::Result;
 use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
 
+use super::field_id::FieldIdAdapter;
+
 /// A [`PhysicalExprAdapterFactory`] that relaxes nested-field nullability on the
 /// logical (table) schema before delegating to DataFusion's default adapter.
+///
+/// If the logical schema carries parquet field ids, columns match by id, then by
+/// name, at every depth (`FieldIdAdapter`).
 ///
 /// In Delta, `nullable = false` is a write-time invariant: engines such as Spark
 /// write parquet files whose nested fields are physically optional even when the
@@ -17,9 +24,10 @@ use datafusion_physical_expr_adapter::{
 /// nullable -> non-nullable nested struct field casts at plan time, so we hand it
 /// a nullability-relaxed target schema instead. The data is guaranteed non-null
 /// by the writer, and the logical output schema is restored above the parquet
-/// scan by [`DeltaScanExec`](super::DeltaScanExec)'s transforms.
+/// scan: by a cast projection in this crate's scan, and by `DeltaScanExec`'s
+/// transforms in core.
 #[derive(Debug)]
-pub(crate) struct DeltaPhysicalExprAdapterFactory;
+pub struct DeltaPhysicalExprAdapterFactory;
 
 impl PhysicalExprAdapterFactory for DeltaPhysicalExprAdapterFactory {
     fn create(
@@ -27,10 +35,16 @@ impl PhysicalExprAdapterFactory for DeltaPhysicalExprAdapterFactory {
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
     ) -> Result<Arc<dyn PhysicalExprAdapter>> {
-        DefaultPhysicalExprAdapterFactory.create(
-            Arc::new(relax_schema_nested_nullability(&logical_file_schema)),
-            physical_file_schema,
-        )
+        let logical_file_schema = Arc::new(relax_schema_nested_nullability(&logical_file_schema));
+        match FieldIdAdapter::try_new(
+            Arc::clone(&logical_file_schema),
+            Arc::clone(&physical_file_schema),
+        ) {
+            Some(adapter) => Ok(Arc::new(adapter)),
+            None => {
+                DefaultPhysicalExprAdapterFactory.create(logical_file_schema, physical_file_schema)
+            }
+        }
     }
 }
 
@@ -38,7 +52,7 @@ impl PhysicalExprAdapterFactory for DeltaPhysicalExprAdapterFactory {
 /// as is: the default adapter already tolerates nullable file columns feeding
 /// non-nullable top-level table columns, and keeping it strict preserves the
 /// "non-nullable column missing from file" error for missing top-level columns.
-pub(super) fn relax_schema_nested_nullability(schema: &Schema) -> Schema {
+pub fn relax_schema_nested_nullability(schema: &Schema) -> Schema {
     let fields: Vec<FieldRef> = schema
         .fields()
         .iter()

@@ -1,16 +1,22 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use chrono::DateTime;
 use dashmap::DashMap;
 use dashmap::mapref::one::Ref;
+use datafusion::datasource::listing::PartitionedFile;
 use datafusion::execution::TaskContext;
 use datafusion::execution::object_store::{ObjectStoreRegistry, ObjectStoreUrl};
+use delta_kernel::plans::ir::nodes::ScanFile;
 use delta_kernel::{DeltaResult, Error as DeltaError, FileMeta, FileSlice, StorageHandler};
 use delta_kernel_default_engine::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
 use delta_kernel_default_engine::filesystem::ObjectStoreStorageHandler;
+use indexmap::IndexMap;
 use itertools::Itertools;
+use object_store::ObjectMeta;
+use object_store::path::Path;
 use tokio::runtime::{Handle, RuntimeFlavor};
 use url::Url;
 
@@ -38,32 +44,34 @@ impl DataFusionStorageHandler {
         self.ctx.runtime_env().object_store_registry.clone()
     }
 
-    fn get_or_create(
+    fn handler_for(
         &self,
         url: ObjectStoreUrl,
     ) -> DeltaResult<Ref<'_, ObjectStoreUrl, Arc<dyn StorageHandler>>> {
         if let Some(handler) = self.registry.get(&url) {
             return Ok(handler);
         }
-        let store = self
-            .registry()
-            .get_store(url.as_ref())
-            .map_err(DeltaError::generic_err)?;
+        // The entry holds the shard's write lock, so concurrent first calls build one handler.
+        let handler = self.registry.entry(url.clone()).or_try_insert_with(|| {
+            let store = self
+                .registry()
+                .get_store(url.as_ref())
+                .map_err(DeltaError::generic_err)?;
 
-        let handler: Arc<dyn StorageHandler> = match self.handle.runtime_flavor() {
-            RuntimeFlavor::MultiThread => Arc::new(ObjectStoreStorageHandler::new(
-                store,
-                Arc::new(TokioMultiThreadExecutor::new(self.handle.clone())),
-            )),
-            RuntimeFlavor::CurrentThread => Arc::new(ObjectStoreStorageHandler::new(
-                store,
-                Arc::new(TokioBackgroundExecutor::new()),
-            )),
-            _ => panic!("unsupported runtime flavor"),
-        };
-
-        self.registry.insert(url.clone(), handler);
-        Ok(self.registry.get(&url).unwrap())
+            let handler: Arc<dyn StorageHandler> = match self.handle.runtime_flavor() {
+                RuntimeFlavor::MultiThread => Arc::new(ObjectStoreStorageHandler::new(
+                    store,
+                    Arc::new(TokioMultiThreadExecutor::new(self.handle.clone())),
+                )),
+                RuntimeFlavor::CurrentThread => Arc::new(ObjectStoreStorageHandler::new(
+                    store,
+                    Arc::new(TokioBackgroundExecutor::new()),
+                )),
+                _ => panic!("unsupported runtime flavor"),
+            };
+            Ok::<_, DeltaError>(handler)
+        })?;
+        Ok(handler.downgrade())
     }
 }
 
@@ -72,7 +80,7 @@ impl StorageHandler for DataFusionStorageHandler {
         &self,
         path: &Url,
     ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<FileMeta>>>> {
-        self.get_or_create(path.as_object_store_url())?
+        self.handler_for(path.as_object_store_url())?
             .list_from(path)
     }
 
@@ -84,7 +92,7 @@ impl StorageHandler for DataFusionStorageHandler {
         Ok(Box::new(
             grouped_files
                 .into_iter()
-                .map(|(url, files)| self.get_or_create(url)?.read_files(files))
+                .map(|(url, files)| self.handler_for(url)?.read_files(files))
                 // TODO: this should not do any blocking operations, since this should
                 // happen when the iterators are polled and we are just creating a vec of iterators.
                 // Is this correct?
@@ -94,22 +102,22 @@ impl StorageHandler for DataFusionStorageHandler {
         ))
     }
 
-    fn copy_atomic(&self, _from: &Url, _to: &Url) -> DeltaResult<()> {
-        // TODO: Implement atomic copy operation
-        Err(delta_kernel::Error::generic("copy_atomic not implemented"))
+    fn copy_atomic(&self, from: &Url, to: &Url) -> DeltaResult<()> {
+        self.handler_for(from.as_object_store_url())?
+            .copy_atomic(from, to)
     }
 
     fn put(&self, path: &Url, data: Bytes, overwrite: bool) -> DeltaResult<()> {
-        self.get_or_create(path.as_object_store_url())?
+        self.handler_for(path.as_object_store_url())?
             .put(path, data, overwrite)
     }
 
-    fn head(&self, _path: &Url) -> DeltaResult<FileMeta> {
-        // TODO: Implement atomic copy operation
-        Err(delta_kernel::Error::generic("head not implemented"))
+    fn head(&self, path: &Url) -> DeltaResult<FileMeta> {
+        self.handler_for(path.as_object_store_url())?.head(path)
     }
-    fn delete(&self, _: &Url) -> DeltaResult<()> {
-        todo!("delete is not implemented");
+
+    fn delete(&self, path: &Url) -> DeltaResult<()> {
+        self.handler_for(path.as_object_store_url())?.delete(path)
     }
 }
 
@@ -144,6 +152,12 @@ impl AsObjectStoreUrl for FileSlice {
     }
 }
 
+impl AsObjectStoreUrl for &ScanFile {
+    fn as_object_store_url(&self) -> ObjectStoreUrl {
+        self.meta.as_object_store_url()
+    }
+}
+
 fn get_store_url(url: &url::Url) -> ObjectStoreUrl {
     ObjectStoreUrl::parse(format!(
         "{}://{}",
@@ -156,13 +170,30 @@ fn get_store_url(url: &url::Url) -> ObjectStoreUrl {
     .unwrap()
 }
 
+/// The file at `meta` as a [`PartitionedFile`], without the double encoding of `PartitionedFile::new`.
+pub fn to_partitioned_file(meta: &FileMeta) -> Result<PartitionedFile, object_store::path::Error> {
+    Ok(ObjectMeta {
+        location: Path::from_url_path(meta.location.path())?,
+        last_modified: DateTime::from_timestamp_millis(meta.last_modified).unwrap_or_default(),
+        size: meta.size,
+        e_tag: None,
+        version: None,
+    }
+    .into())
+}
+
+/// `files` grouped by the object store that serves them, in first-seen order.
 pub(crate) fn group_by_store<T: IntoIterator<Item = impl AsObjectStoreUrl>>(
     files: T,
-) -> std::collections::HashMap<ObjectStoreUrl, Vec<T::Item>> {
-    files
-        .into_iter()
-        .map(|item| (item.as_object_store_url(), item))
-        .into_group_map()
+) -> IndexMap<ObjectStoreUrl, Vec<T::Item>> {
+    let mut groups: IndexMap<ObjectStoreUrl, Vec<T::Item>> = IndexMap::new();
+    for file in files {
+        groups
+            .entry(file.as_object_store_url())
+            .or_default()
+            .push(file);
+    }
+    groups
 }
 
 #[cfg(test)]
@@ -221,6 +252,33 @@ mod tests {
         assert_eq!(data[1], Bytes::from("data"));
         assert_eq!(data[2], Bytes::from("el-da"));
 
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn put_head_copy_delete_round_trip() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let dir = Url::from_directory_path(tmp.path()).unwrap();
+        let source = dir.join("a.bin")?;
+        let copy = dir.join("b.bin")?;
+        let storage = get_handler();
+
+        storage.put(&source, Bytes::from("kernel"), false)?;
+        let meta = storage.head(&source)?;
+        assert_eq!(meta.location, source);
+        assert_eq!(meta.size, 6);
+
+        storage.copy_atomic(&source, &copy)?;
+        assert_eq!(storage.head(&copy)?.size, 6);
+        // The copy is atomic: a second copy onto an existing file is refused.
+        assert!(storage.copy_atomic(&source, &copy).is_err());
+
+        storage.delete(&copy)?;
+        assert!(matches!(
+            storage.head(&copy),
+            Err(DeltaError::FileNotFound(_))
+        ));
         Ok(())
     }
 

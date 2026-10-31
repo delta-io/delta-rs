@@ -1,6 +1,6 @@
-//! Bridges from the kernel's synchronous calls to the executor's tokio runtime.
+//! Bridges from kernel's synchronous calls to the executor's tokio runtime.
 //!
-//! The kernel calls `execute_op` and pulls result iterators synchronously, often from a thread
+//! Kernel calls `execute_op` and pulls result iterators synchronously, often from a thread
 //! that is itself a tokio worker. `Handle::block_on` panics there, so this module follows the
 //! default engine's `TokioMultiThreadExecutor`: spawn the async work on the runtime, hand the
 //! result back over a channel, and wait for it with [`tokio::task::block_in_place`] when the
