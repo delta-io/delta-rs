@@ -332,22 +332,7 @@ impl LogicalFileView {
             .files
             .column_by_name(FIELD_NAME_DELETION_VECTOR)
             .and_then(|col| col.as_struct_opt())?;
-        if dv_col.null_count() == dv_col.len() {
-            return None;
-        }
-        dv_col
-            .is_valid(self.index)
-            .then(|| {
-                let storage_col =
-                    dv_col.column(*DV_FIELD_INDICES.get(DV_FIELD_STORAGE_TYPE).unwrap());
-                storage_col
-                    .is_valid(self.index)
-                    .then_some(DeletionVectorView {
-                        data: dv_col,
-                        index: self.index,
-                    })
-            })
-            .flatten()
+        DeletionVectorView::try_new(dv_col, self.index)
     }
 
     /// Internal API
@@ -486,7 +471,18 @@ struct DeletionVectorView<'a> {
     index: usize,
 }
 
-impl DeletionVectorView<'_> {
+impl<'a> DeletionVectorView<'a> {
+    /// Returns a view into the deletion vector at `index`, if that row has one.
+    fn try_new(data: &'a StructArray, index: usize) -> Option<Self> {
+        if data.null_count() == data.len() || data.is_null(index) {
+            return None;
+        }
+        let storage_col = data.column(*DV_FIELD_INDICES.get(DV_FIELD_STORAGE_TYPE).unwrap());
+        storage_col
+            .is_valid(index)
+            .then_some(DeletionVectorView { data, index })
+    }
+
     /// Converts this view into a DeletionVectorDescriptor.
     fn descriptor(&self) -> DeletionVectorDescriptor {
         DeletionVectorDescriptor {
