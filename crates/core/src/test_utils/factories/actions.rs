@@ -160,6 +160,7 @@ pub fn add_as_remove(add: &Add, data_change: bool) -> Remove {
         deletion_vector: add.deletion_vector.clone(),
         base_row_id: add.base_row_id,
         default_row_commit_version: add.default_row_commit_version,
+        log_path: None,
     }
 }
 

@@ -603,3 +603,31 @@ def test_z_order_with_spill_parameters(
     assert last_action["operation"] == "OPTIMIZE"
     assert dt.version() == old_version + 1
     assert len(dt.file_uris()) == 1
+
+
+def test_optimize_spark_non_ascii_partitions_keeps_row_count(tmp_path: pathlib.Path):
+    import json
+    import shutil
+
+    fixture = (
+        pathlib.Path(__file__).parents[2]
+        / "crates/test/tests/data/spark-non-ascii-partitions"
+    )
+    shutil.copytree(fixture, tmp_path, dirs_exist_ok=True)
+
+    DeltaTable(tmp_path).optimize.compact()
+
+    def log_paths(version: int, action: str) -> set[str]:
+        commit = tmp_path / "_delta_log" / f"{version:020}.json"
+        lines = commit.read_text(encoding="utf-8").splitlines()
+        return {p[action]["path"] for p in map(json.loads, lines) if action in p}
+
+    assert log_paths(3, "remove") == log_paths(1, "add") | log_paths(2, "add")
+    ids = (
+        QueryBuilder()
+        .register("tbl", DeltaTable(tmp_path))
+        .execute("select id from tbl order by id")
+        .read_all()["id"]
+        .to_pylist()
+    )
+    assert ids == [1, 2, 3, 4, 5, 6]

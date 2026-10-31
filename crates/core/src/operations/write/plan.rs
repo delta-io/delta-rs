@@ -34,8 +34,9 @@ use crate::delta_datafusion::{
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::{merge_arrow_schema, normalize_for_delta};
 use crate::kernel::{
-    Action, ActiveAddOptions, Add, AddStatsPolicy, DeletionVectorDescriptor, EagerSnapshot,
-    Metadata, Protocol, ProtocolExt as _, Remove, Snapshot, StructType, StructTypeExt,
+    Action, ActiveAddOptions, AddStatsPolicy, DeletionVectorDescriptor, EagerSnapshot,
+    LogicalFileView, Metadata, Protocol, ProtocolExt as _, Remove, Snapshot, StructType,
+    StructTypeExt,
 };
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
@@ -134,6 +135,7 @@ pub(super) struct RewriteDiagnostics {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct MatchedExistingFile {
     path: String,
+    log_path: String,
     partition_values: HashMap<String, Option<String>>,
     size: i64,
     deletion_vector: Option<DeletionVectorDescriptor>,
@@ -141,10 +143,12 @@ pub(super) struct MatchedExistingFile {
     default_row_commit_version: Option<i64>,
 }
 
-impl From<Add> for MatchedExistingFile {
-    fn from(add: Add) -> Self {
+impl From<&LogicalFileView> for MatchedExistingFile {
+    fn from(file: &LogicalFileView) -> Self {
+        let add = file.to_add();
         Self {
             path: add.path,
+            log_path: file.path_raw().to_string(),
             partition_values: add.partition_values,
             size: add.size,
             deletion_vector: add.deletion_vector,
@@ -167,6 +171,7 @@ impl MatchedExistingFile {
             tags: None,
             base_row_id: self.base_row_id,
             default_row_commit_version: self.default_row_commit_version,
+            log_path: Some(self.log_path),
         }
     }
 }
@@ -592,7 +597,7 @@ async fn collect_all_existing_files(
                     stats: AddStatsPolicy::None,
                 },
             )
-            .map_ok(|file| MatchedExistingFile::from(file.to_add()))
+            .map_ok(|file| MatchedExistingFile::from(&file))
             .try_collect()
             .await?,
     ))
@@ -622,7 +627,7 @@ async fn collect_matched_existing_files(
                     .map_err(|err| DeltaTableError::Generic(format!("{err}")))?;
                 Ok(valid_files
                     .contains(file_url.as_ref())
-                    .then(|| MatchedExistingFile::from(file.to_add())))
+                    .then(|| MatchedExistingFile::from(&file)))
             }
         })
         .try_collect()
