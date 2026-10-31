@@ -695,7 +695,6 @@ impl UnityCatalogBuilder {
 }
 
 /// Databricks Unity Catalog
-
 pub struct UnityCatalog {
     client: reqwest_middleware::ClientWithMiddleware,
     cc_client: Option<UCDeltaTableClient>,

@@ -1,7 +1,5 @@
-use datafusion::common::tree_node::{Transformed, TreeNode as _};
 use datafusion::common::{Result, ScalarValue, plan_datafusion_err, plan_err};
 use datafusion::logical_expr::expr::InList;
-use datafusion::logical_expr::utils::{conjunction, disjunction};
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
 use delta_kernel::expressions::{
     BinaryExpression, BinaryExpressionOp, BinaryPredicate, BinaryPredicateOp, ColumnName,
@@ -17,60 +15,90 @@ use crate::kernel::scalars::ScalarExt;
 /// If the expression converts to a Delta predicate, returns it directly.
 /// Otherwise, wraps the expression as a boolean expression predicate.
 pub(crate) fn to_delta_predicate(expr: &Expr) -> Result<Predicate> {
-    match to_delta_expression(&normalize_delta_predicate_expr(expr)?)? {
+    match to_delta_expression(expr)? {
         Expression::Predicate(pred) => Ok(pred.as_ref().clone()),
         expr => Ok(Predicate::BooleanExpression(expr)),
     }
 }
 
-fn normalize_delta_predicate_expr(expr: &Expr) -> Result<Expr> {
-    let transformed = expr.clone().transform_up(|expr| match expr {
-        Expr::InList(in_list) => Ok(match rewrite_in_list_expr_for_kernel(&in_list) {
-            Some(lowered) => Transformed::yes(lowered),
-            None => Transformed::no(Expr::InList(in_list)),
-        }),
-        other => Ok(Transformed::no(other)),
-    })?;
+/// Returns true when kernel file skipping selects exactly the files whose partition values
+/// satisfy `expr` under SQL semantics.
+///
+/// Kernel file skipping is best effort: it keeps every file for any term it cannot evaluate
+/// (arithmetic, `IS NOT DISTINCT FROM`, `IS NULL` over a comparison, NULL literals, ...). Only
+/// comparisons between a partition column and a non-null literal, `IS [NOT] NULL` on a partition
+/// column and `IN` lists of non-null literals, combined with `AND` / `OR`, are evaluated exactly.
+pub(crate) fn is_exact_partition_predicate(expr: &Expr, partition_columns: &[String]) -> bool {
+    let is_partition_column =
+        |expr: &Expr| matches!(expr, Expr::Column(c) if partition_columns.contains(&c.name));
 
-    Ok(transformed.data)
+    match expr {
+        Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::And | Operator::Or,
+            right,
+        }) => {
+            is_exact_partition_predicate(left, partition_columns)
+                && is_exact_partition_predicate(right, partition_columns)
+        }
+        Expr::BinaryExpr(BinaryExpr {
+            left,
+            op:
+                Operator::Eq
+                | Operator::NotEq
+                | Operator::Lt
+                | Operator::LtEq
+                | Operator::Gt
+                | Operator::GtEq,
+            right,
+        }) => {
+            (is_partition_column(left) && is_non_null_literal(right))
+                || (is_non_null_literal(left) && is_partition_column(right))
+        }
+        Expr::IsNull(inner) | Expr::IsNotNull(inner) => is_partition_column(inner),
+        Expr::InList(in_list) => {
+            is_partition_column(&in_list.expr)
+                && !in_list.list.is_empty()
+                && in_list.list.iter().all(is_non_null_literal)
+        }
+        _ => false,
+    }
 }
 
-/// Rewrites supported `IN` / `NOT IN` expressions into conjunctions or
-/// disjunctions that can be converted into Delta kernel predicates.
-///
-/// Returns `None` when any list item cannot be rewritten without changing the
-/// meaning of the predicate. In that case callers should leave the original
-/// `Expr::InList` unchanged and let downstream conversion decide how to handle it.
-fn rewrite_in_list_expr_for_kernel(in_list: &InList) -> Option<Expr> {
-    if in_list.list.is_empty() {
-        return Some(Expr::Literal(
-            ScalarValue::Boolean(Some(in_list.negated)),
-            None,
-        ));
+fn is_non_null_literal(expr: &Expr) -> bool {
+    matches!(expr, Expr::Literal(v, _) if !v.is_null())
+}
+
+/// Converts `x [NOT] IN (a, b, ...)` into one flat junction, so depth does not grow with
+/// the list length. Lists with NULL or non-literal items are not converted.
+fn in_list_to_delta_predicate(in_list: &InList) -> Result<Predicate> {
+    if !in_list.list.iter().all(is_non_null_literal) {
+        return plan_err!(
+            "Cannot convert to kernel expression: {:?}",
+            Expr::InList(in_list.clone())
+        );
     }
 
-    let list = in_list
+    let expr = to_delta_expression(&in_list.expr)?;
+    let preds = in_list
         .list
         .iter()
-        .map(|item| match item {
-            Expr::Literal(value, _) if !value.is_null() => Some(item.clone()),
-            _ => None,
+        .map(|item| {
+            let eq = Predicate::eq(expr.clone(), to_delta_expression(item)?);
+            Ok(if in_list.negated {
+                Predicate::not(eq)
+            } else {
+                eq
+            })
         })
-        .collect::<Option<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?;
 
-    let lowered_terms = list.into_iter().map(|item| {
-        if in_list.negated {
-            in_list.expr.as_ref().clone().not_eq(item)
-        } else {
-            in_list.expr.as_ref().clone().eq(item)
-        }
-    });
-
-    if in_list.negated {
-        conjunction(lowered_terms)
+    let op = if in_list.negated {
+        JunctionPredicateOp::And
     } else {
-        disjunction(lowered_terms)
-    }
+        JunctionPredicateOp::Or
+    };
+    Ok(Predicate::junction(op, preds))
 }
 
 /// Converts a DataFusion expression to a Delta kernel expression.
@@ -80,6 +108,9 @@ pub(crate) fn to_delta_expression(expr: &Expr) -> Result<Expression> {
         Expr::Literal(scalar, _meta) => {
             Ok(Expression::Literal(datafusion_scalar_to_scalar(scalar)?))
         }
+        Expr::InList(in_list) => Ok(Expression::Predicate(Box::new(in_list_to_delta_predicate(
+            in_list,
+        )?))),
         Expr::BinaryExpr(BinaryExpr {
             op: op @ (Operator::And | Operator::Or),
             ..
@@ -345,7 +376,7 @@ mod tests {
     use datafusion::{
         common::Column,
         functions::core::expr_ext::FieldAccessor,
-        logical_expr::{col, lit},
+        logical_expr::{binary_expr, col, lit},
     };
     use delta_kernel::expressions::{BinaryExpressionOp, JunctionPredicateOp, Scalar};
 
@@ -446,6 +477,43 @@ mod tests {
     }
 
     #[test]
+    fn test_large_in_list_converts_to_flat_junction() {
+        // Pin the stack to the 2 MiB default so RUST_MIN_STACK cannot hide a regression.
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let n = 10_000i64;
+                let list: Vec<Expr> = (0..n).map(lit).collect();
+                let other = col("p").eq(lit(1));
+                for negated in [false, true] {
+                    let in_list = col("id").in_list(list.clone(), negated);
+                    let terms = (0..n).map(|i| {
+                        let eq = Predicate::eq(
+                            Expression::Column(ColumnName::new(["id"])),
+                            Expression::Literal(Scalar::Long(i)),
+                        );
+                        if negated { Predicate::not(eq) } else { eq }
+                    });
+                    let expected = if negated {
+                        Predicate::and_from(terms)
+                    } else {
+                        Predicate::or_from(terms)
+                    };
+                    assert_eq!(to_delta_predicate(&in_list).unwrap(), expected);
+
+                    let nested = other.clone().and(in_list);
+                    assert_eq!(
+                        to_delta_predicate(&nested).unwrap(),
+                        Predicate::and_from([to_delta_predicate(&other).unwrap(), expected])
+                    );
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
     fn test_empty_in_list_rewrites_to_boolean_constant() {
         let expr = col("part").in_list(Vec::<Expr>::new(), false);
         assert_eq!(
@@ -461,17 +529,24 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_delta_predicate_expr_leaves_non_literal_in_list_unchanged() {
+    fn test_non_literal_in_list_is_not_converted() {
         let expr = col("part").in_list(vec![lit("a"), col("other")], false);
 
-        assert_eq!(normalize_delta_predicate_expr(&expr).unwrap(), expr);
+        assert!(to_delta_predicate(&expr).is_err());
     }
 
     #[test]
-    fn test_normalize_delta_predicate_expr_leaves_not_in_list_with_null_unchanged() {
+    fn test_not_in_list_with_null_is_not_converted() {
         let expr = col("part").in_list(vec![lit("a"), lit(ScalarValue::Utf8(None))], true);
 
-        assert_eq!(normalize_delta_predicate_expr(&expr).unwrap(), expr);
+        assert!(to_delta_predicate(&expr).is_err());
+    }
+
+    #[test]
+    fn test_single_item_in_list_converts_to_bare_predicate() {
+        let expr = col("part").in_list(vec![lit("a")], false);
+
+        assert_string_equality_predicate(&to_delta_predicate(&expr).unwrap(), "part", "a");
     }
 
     #[test]
@@ -945,5 +1020,38 @@ mod tests {
             },
             _ => panic!("Expected Predicate expression"),
         }
+    }
+
+    #[test]
+    fn test_is_exact_partition_predicate() {
+        let partition_columns = ["p".to_string(), "q".to_string()];
+        let exact = |expr: Expr| is_exact_partition_predicate(&expr, &partition_columns);
+        let null_bool = || lit(ScalarValue::Boolean(None));
+
+        assert!(exact(col("p").eq(lit(1))));
+        assert!(exact(lit(1).lt(col("p"))));
+        assert!(exact(col("p").not_eq(lit(1)).and(col("q").gt_eq(lit("a")))));
+        assert!(exact(col("p").is_null().or(col("q").is_not_null())));
+        assert!(exact(col("p").in_list(vec![lit(1), lit(2)], true)));
+
+        assert!(!exact(col("x").eq(lit(1))));
+        assert!(!exact(col("p").eq(col("q"))));
+        assert!(!exact((col("p") + lit(1)).eq(lit(2))));
+        assert!(!exact(binary_expr(
+            col("p").eq(lit(1)),
+            Operator::IsNotDistinctFrom,
+            lit(true)
+        )));
+        assert!(!exact(
+            col("q").gt(lit("a")).is_null().or(col("q").lt_eq(lit("a")))
+        ));
+        assert!(!exact(null_bool()));
+        assert!(!exact(null_bool().and(col("p").eq(lit(1)))));
+        assert!(!exact(col("p").eq(lit(1)).or(col("x").eq(lit(1)))));
+        assert!(!exact(col("p").eq(lit(ScalarValue::Int32(None)))));
+        assert!(!exact(
+            col("p").in_list(vec![lit(1), lit(ScalarValue::Int32(None))], true)
+        ));
+        assert!(!exact(col("p").in_list(vec![], false)));
     }
 }
