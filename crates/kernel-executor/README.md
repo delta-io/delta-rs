@@ -9,19 +9,16 @@ as a declarative plan. This crate compiles that plan into a DataFusion
 `LogicalPlan`, runs it on a `SessionContext`, and hands the result back to the
 kernel as `EngineData`.
 
-`deltalake-core` depends on this crate behind its `datafusion` feature. This
-crate therefore depends only on the kernel, DataFusion, and `object_store`,
-never on `deltalake-core`.
-
 ## Layout
 
-| Module             | Concern                                                                 |
-| ------------------ | ----------------------------------------------------------------------- |
-| `lib.rs`           | `DataFusionPlanExecutor` and the `PlanExecutor` dispatch                |
-| `io`               | `IoOperation` variants, delegating to the two handlers below            |
-| `io::storage`      | `StorageHandler` over the session's object store registry               |
-| `io::file_formats` | `JsonHandler` + `ParquetHandler` over the session's object store registry |
-| `expressions`      | kernel `Expression`/`Predicate`/`Scalar` → DataFusion `Expr`            |
-| `query`            | `Plan` → DataFusion `LogicalPlan` (operators)                           |
-| `stream`           | DataFusion record batches → `PlanResult::Data`                          |
-| `error`            | Crate errors and their mapping to `delta_kernel::Error`                 |
+| Module        | Concern                                                               |
+| ------------- | --------------------------------------------------------------------- |
+| `lib.rs`      | `DataFusionPlanExecutor` and the `PlanExecutor` dispatch              |
+| `engine`      | `DataFusionEngine`: a kernel `Engine` that reads through the executor |
+| `io`          | `IoOperation`s: storage, JSON, and parquet handlers                   |
+| `query`       | `Plan` → DataFusion `LogicalPlan`                                     |
+| `query::scan` | `ScanParquet` / `ScanJson` as DataFusion file scans                   |
+| `expressions` | kernel expressions, predicates, and scalars ↔ DataFusion              |
+| `stream`      | DataFusion record batches → kernel `EngineData`                       |
+| `runtime`     | Runs async DataFusion work from the kernel's sync calls               |
+| `error`       | `ExecutorError` and its mapping to `delta_kernel::Error`              |
