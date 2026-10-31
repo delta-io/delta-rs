@@ -690,8 +690,10 @@ async fn failed_post_commit_checkpoint_aborts_its_sibling_scope_and_keeps_the_co
     // Scope 1 is the write, scope 2 the sibling that writes the checkpoint.
     store.fail_finish_of_scope(2);
 
-    let err = table.write(vec![batch(&[1])]).await.unwrap_err();
-    assert!(err.to_string().contains("injected failure"), "{err}");
+    // Post-commit checkpoint failures are best-effort: the commit is durable
+    // and the write succeeds even though the checkpoint scope failed.
+    let table = table.write(vec![batch(&[1])]).await.unwrap();
+    assert_eq!(table.version(), Some(1));
     assert_eq!(
         store.events(),
         vec![
@@ -706,7 +708,10 @@ async fn failed_post_commit_checkpoint_aborts_its_sibling_scope_and_keeps_the_co
                 dirty: true
             },
             ScopeEvent::Abort(2),
-            ScopeEvent::Abort(1),
+            ScopeEvent::Finish {
+                scope: 1,
+                dirty: false
+            },
         ]
     );
 
