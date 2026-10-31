@@ -502,6 +502,10 @@ impl DeltaOperation {
         match self {
             // Predicate is none -> Merge operation had to join full source and target
             Self::Merge { predicate, .. } if predicate.is_none() => true,
+            // A DELETE without a predicate reads the whole table, so it must
+            // conflict with any concurrent data change (matching delta-spark,
+            // which sets readWholeTable = true for predicate-less deletes).
+            Self::Delete { predicate, .. } if predicate.is_none() => true,
             _ => false,
         }
     }
