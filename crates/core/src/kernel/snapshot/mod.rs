@@ -196,7 +196,8 @@ impl<'a> ConflictReadSet<'a> {
         match &self.inner {
             ConflictReadSetInner::Borrowed(log_data) => log_data.table_configuration(),
             ConflictReadSetInner::Owned {
-                table_configuration, ..
+                table_configuration,
+                ..
             } => table_configuration,
         }
     }

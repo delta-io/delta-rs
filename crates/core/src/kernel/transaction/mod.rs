@@ -1107,26 +1107,22 @@ impl PostCommit {
                 // isolated write set that is published on success and discarded on error.
                 // Checkpoint creation and log cleanup are best-effort maintenance: the commit
                 // itself is already durable, so a failure here must not fail the write.
-                let maintenance =
-                    with_operation(&self.log_store, |log_store| async move {
-                        let mut checkpoint_created = false;
-                        if create_checkpoint {
-                            checkpoint_created =
-                                maybe_create_checkpoint(checkpoint_interval, version, &log_store)
-                                    .await?;
-                        }
-                        let mut files_cleaned_up: u64 = 0;
-                        if cleanup_logs {
-                            files_cleaned_up = cleanup_expired_logs_for(
-                                version,
-                                log_store.as_ref(),
-                                cutoff_timestamp,
-                            )
-                            .await? as u64;
-                        }
-                        Ok((checkpoint_created, files_cleaned_up))
-                    })
-                    .await;
+                let maintenance = with_operation(&self.log_store, |log_store| async move {
+                    let mut checkpoint_created = false;
+                    if create_checkpoint {
+                        checkpoint_created =
+                            maybe_create_checkpoint(checkpoint_interval, version, &log_store)
+                                .await?;
+                    }
+                    let mut files_cleaned_up: u64 = 0;
+                    if cleanup_logs {
+                        files_cleaned_up =
+                            cleanup_expired_logs_for(version, log_store.as_ref(), cutoff_timestamp)
+                                .await? as u64;
+                    }
+                    Ok((checkpoint_created, files_cleaned_up))
+                })
+                .await;
 
                 match maintenance {
                     Ok((checkpoint_created, files_cleaned_up)) => {

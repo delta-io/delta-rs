@@ -374,7 +374,12 @@ fn reassociate_is_distinct_from(expr: &mut SqlExpr) {
         SqlExpr::IsNotDistinctFrom(l, r) => (SqlExpr::IsNotDistinctFrom, l, r),
         _ => unreachable!(),
     };
-    let SqlExpr::BinaryOp { left: b, op, right: c } = *right else {
+    let SqlExpr::BinaryOp {
+        left: b,
+        op,
+        right: c,
+    } = *right
+    else {
         unreachable!()
     };
     *expr = SqlExpr::BinaryOp {
