@@ -631,7 +631,23 @@ mod post_commit_reload_is_best_effort {
         // Arm the failure only for the commit under test, after the table is loaded.
         armed.store(true, Ordering::SeqCst);
 
-        let version = fs_common::commit_add(&mut writer, &a2).await;
+        // Drive the commit directly: the helper also calls `update_state()` on this table, which
+        // reads the log through the failing store and is not the post-commit path under test.
+        let snapshot = writer.snapshot().unwrap().clone();
+        let committed = deltalake_core::kernel::transaction::CommitBuilder::default()
+            .with_actions(vec![deltalake_core::kernel::Action::Add(a2.clone())])
+            .build(
+                Some(&snapshot),
+                writer.log_store().clone(),
+                deltalake_core::protocol::DeltaOperation::Write {
+                    mode: deltalake_core::protocol::SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await
+            .expect("commit must succeed even though the post-commit reload fails");
+        let version = committed.version();
         assert_eq!(
             version, 2,
             "commit must be durable even though reload fails"
