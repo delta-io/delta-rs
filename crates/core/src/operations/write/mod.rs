@@ -63,7 +63,7 @@ use crate::delta_datafusion::{
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
-use crate::kernel::{Action, EagerSnapshot, StructType};
+use crate::kernel::{Action, DataType, EagerSnapshot, StructType};
 use crate::logstore::LogStoreRef;
 use crate::logstore::with_operation;
 use crate::protocol::{DeltaOperation, SaveMode};
@@ -444,7 +444,12 @@ impl WriteBuilder {
                 PROTOCOL.can_write_to(snapshot)?;
 
                 if self.schema_mode.is_none() {
-                    PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
+                    PROTOCOL
+                        .check_can_write_timestamp_ntz(snapshot, &schema)
+                        .map_err(|err| {
+                            timestamp_ntz_into_timestamp_mismatch(&schema, &snapshot.schema())
+                                .unwrap_or_else(|| err.into())
+                        })?;
                     #[cfg(feature = "nanosecond-timestamps")]
                     PROTOCOL.check_can_write_timestamp_nanos(snapshot, &schema)?;
                     PROTOCOL.check_can_write_variant(snapshot, &schema)?;
@@ -490,6 +495,23 @@ impl WriteBuilder {
             }
         }
     }
+}
+
+fn timestamp_ntz_into_timestamp_mismatch(
+    input: &StructType,
+    table: &StructType,
+) -> Option<DeltaTableError> {
+    let field = input.fields().find(|f| {
+        f.data_type() == &DataType::TIMESTAMP_NTZ
+            && table.field(f.name()).map(|t| t.data_type()) == Some(&DataType::TIMESTAMP)
+    })?;
+    Some(DeltaTableError::SchemaMismatch {
+        msg: format!(
+            "column `{}` is timestamp_ntz in the data but timestamp in the table; \
+             convert it to UTC or write with schema_mode=\"merge\"",
+            field.name()
+        ),
+    })
 }
 
 impl std::future::IntoFuture for WriteBuilder {
@@ -680,7 +702,7 @@ mod tests {
         get_record_batch_with_nested_struct, setup_table_with_configuration,
     };
     use arrow_array::{
-        Float64Array, Int32Array, Int64Array, StringArray, TimestampMicrosecondArray,
+        ArrayRef, Float64Array, Int32Array, Int64Array, StringArray, TimestampMicrosecondArray,
     };
     use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
     use datafusion::physical_plan::collect;
@@ -1081,6 +1103,33 @@ mod tests {
         ];
         let actual = get_data(&_res).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_write_naive_timestamp_into_utc_timestamp_column() -> TestResult {
+        let batch = |name: &str, tz: Option<&str>| {
+            let array = TimestampMicrosecondArray::from(vec![0]).with_timezone_opt(tz);
+            RecordBatch::try_from_iter([(name, Arc::new(array) as ArrayRef)]).unwrap()
+        };
+        let table = DeltaTable::new_in_memory()
+            .write([batch("t", Some("UTC"))])
+            .await?;
+
+        let err = table.clone().write([batch("t", None)]).await.unwrap_err();
+        assert!(
+            matches!(&err, DeltaTableError::SchemaMismatch { msg } if msg.contains("`t`")),
+            "{err}"
+        );
+
+        // A new timestamp_ntz column still needs the timestampNtz feature
+        let err = table.clone().write([batch("n", None)]).await.unwrap_err();
+        assert!(matches!(err, DeltaTableError::Transaction { .. }), "{err}");
+
+        table
+            .write([batch("t", None)])
+            .with_schema_mode(SchemaMode::Merge)
+            .await?;
+        Ok(())
     }
 
     #[tokio::test]
