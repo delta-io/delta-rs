@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray};
 use arrow_schema::{DataType as ArrowDataType, SchemaRef as ArrowSchemaRef};
-use delta_kernel::schema::StructType;
-use delta_kernel::table_features::ColumnMappingMode;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::{Column, ToDFSchema};
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_optimizer::pruning::{PruningPredicateBuilder, PruningStatistics};
+use delta_kernel::schema::StructType;
+use delta_kernel::table_features::ColumnMappingMode;
 
 use crate::delta_datafusion::{
     Expression, create_session, get_null_of_arrow_type, to_correct_scalar_value,

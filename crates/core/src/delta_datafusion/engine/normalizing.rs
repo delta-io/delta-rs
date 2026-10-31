@@ -114,7 +114,11 @@ fn normalize_array_zeros(array: &ArrayRef) -> Option<ArrayRef> {
     match array.data_type() {
         ArrowDataType::Float32 => {
             let arr = array.as_any().downcast_ref::<Float32Array>()?;
-            if !arr.values().iter().any(|v| *v == 0.0 && v.is_sign_negative()) {
+            if !arr
+                .values()
+                .iter()
+                .any(|v| *v == 0.0 && v.is_sign_negative())
+            {
                 return None;
             }
             let normalized = Float32Array::from_iter(
@@ -125,7 +129,11 @@ fn normalize_array_zeros(array: &ArrayRef) -> Option<ArrayRef> {
         }
         ArrowDataType::Float64 => {
             let arr = array.as_any().downcast_ref::<Float64Array>()?;
-            if !arr.values().iter().any(|v| *v == 0.0 && v.is_sign_negative()) {
+            if !arr
+                .values()
+                .iter()
+                .any(|v| *v == 0.0 && v.is_sign_negative())
+            {
                 return None;
             }
             let normalized = Float64Array::from_iter(
