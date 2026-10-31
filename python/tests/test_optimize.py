@@ -603,3 +603,37 @@ def test_z_order_with_spill_parameters(
     assert last_action["operation"] == "OPTIMIZE"
     assert dt.version() == old_version + 1
     assert len(dt.file_uris()) == 1
+
+
+@pytest.mark.pyarrow
+def test_optimize_compact_preserves_empty_string_partition_values(
+    tmp_path: pathlib.Path,
+):
+    """https://github.com/delta-io/delta-rs/issues/4988
+
+    OPTIMIZE commits with dataChange: false and must not rewrite an
+    empty-string partition value as NULL.
+    """
+    import pyarrow as pa
+
+    for i in (1, 2):
+        write_deltalake(
+            tmp_path,
+            pa.table({"id": [i], "p": [""]}),
+            partition_by=["p"],
+            mode="append",
+        )
+
+    DeltaTable(tmp_path).optimize.compact()
+
+    def ids_where(predicate: str) -> list:
+        return (
+            QueryBuilder()
+            .register("tbl", DeltaTable(tmp_path))
+            .execute(f"select id from tbl where {predicate} order by id")
+            .read_all()["id"]
+            .to_pylist()
+        )
+
+    assert ids_where("p = ''") == [1, 2]
+    assert ids_where("p IS NULL") == []
