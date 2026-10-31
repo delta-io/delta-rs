@@ -1137,7 +1137,16 @@ impl PostCommit {
                     }
                 }
                 if num_log_files_cleaned_up > 0 {
-                    state = DeltaTableState::try_new(&self.log_store, Some(self.version)).await?;
+                    // The reload only refreshes the in-memory view after cleanup. The commit is
+                    // durable, so a failed reload keeps the pre-cleanup state rather than failing
+                    // the write.
+                    match DeltaTableState::try_new(&self.log_store, Some(self.version)).await {
+                        Ok(refreshed) => state = refreshed,
+                        Err(err) => warn!(
+                            error = %err,
+                            "reloading table state after log cleanup failed; the commit is durable, continuing"
+                        ),
+                    }
                 }
             }
 
