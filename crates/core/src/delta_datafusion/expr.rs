@@ -52,8 +52,9 @@ use datafusion::logical_expr::{
 use datafusion::sql::planner::{ContextProvider, SqlToRel};
 use datafusion::sql::sqlparser::ast::escape_quoted_string;
 use datafusion::sql::sqlparser::ast::{
-    Expr as SqlExpr, Function, FunctionArg, FunctionArgExpr, FunctionArgumentList,
-    FunctionArguments, Ident, ObjectName, ObjectNamePart, Value, VisitMut, VisitorMut,
+    BinaryOperator as SqlBinaryOperator, Expr as SqlExpr, Function, FunctionArg, FunctionArgExpr,
+    FunctionArgumentList, FunctionArguments, Ident, ObjectName, ObjectNamePart, Value, VisitMut,
+    VisitorMut, visit_expressions_mut,
 };
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
@@ -329,12 +330,57 @@ fn parse_sql_expr(expr: impl AsRef<str>) -> DeltaResult<SqlExpr> {
         .map_err(|err| DeltaTableError::GenericError {
             source: Box::new(err),
         })?;
-    Parser::new(dialect)
+    let mut expr = Parser::new(dialect)
         .with_tokens(tokens)
         .parse_expr()
         .map_err(|err| DeltaTableError::GenericError {
             source: Box::new(err),
-        })
+        })?;
+    // sqlparser 0.62 parses `a IS [NOT] DISTINCT FROM b AND c` as
+    // `a IS [NOT] DISTINCT FROM (b AND c)` because IS DISTINCT FROM binds
+    // looser than AND/OR. Reassociate to match standard SQL semantics.
+    // Fixed upstream in sqlparser 0.63:
+    // <https://github.com/apache/datafusion-sqlparser-rs/pull/2436>
+    let _ = visit_expressions_mut(&mut expr, |e| {
+        reassociate_is_distinct_from(e);
+        ControlFlow::<()>::Continue(())
+    });
+    Ok(expr)
+}
+
+/// Rewrite `a IS [NOT] DISTINCT FROM (b AND|OR c)` back to
+/// `(a IS [NOT] DISTINCT FROM b) AND|OR c` when the boolean chain was not
+/// explicitly parenthesized (parenthesized groups arrive as `Expr::Nested`
+/// and are left untouched).
+fn reassociate_is_distinct_from(expr: &mut SqlExpr) {
+    let (SqlExpr::IsDistinctFrom(_, right) | SqlExpr::IsNotDistinctFrom(_, right)) = expr else {
+        return;
+    };
+    if !matches!(
+        right.as_ref(),
+        SqlExpr::BinaryOp {
+            op: SqlBinaryOperator::And | SqlBinaryOperator::Or,
+            ..
+        }
+    ) {
+        return;
+    }
+    // Take ownership of the matched node and rebuild it reassociated.
+    let old = std::mem::replace(expr, SqlExpr::Value(Value::Boolean(false).into()));
+    type DistinctCtor = fn(Box<SqlExpr>, Box<SqlExpr>) -> SqlExpr;
+    let (ctor, left, right): (DistinctCtor, _, _) = match old {
+        SqlExpr::IsDistinctFrom(l, r) => (SqlExpr::IsDistinctFrom, l, r),
+        SqlExpr::IsNotDistinctFrom(l, r) => (SqlExpr::IsNotDistinctFrom, l, r),
+        _ => unreachable!(),
+    };
+    let SqlExpr::BinaryOp { left: b, op, right: c } = *right else {
+        unreachable!()
+    };
+    *expr = SqlExpr::BinaryOp {
+        left: Box::new(ctor(left, b)),
+        op,
+        right: c,
+    };
 }
 
 fn sql_expr_to_df_expr(
