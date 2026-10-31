@@ -879,26 +879,46 @@ const MAX_PARTITION_DICT_CARDINALITY: usize = (u16::MAX as usize) + 1;
 
 fn partitioned_files_to_file_groups(
     files: impl IntoIterator<Item = PartitionedFile>,
+    target_partitions: usize,
 ) -> Vec<FileGroup> {
-    partitioned_files_to_file_groups_with_limit(files, MAX_PARTITION_DICT_CARDINALITY)
+    partitioned_files_to_file_groups_with_limit(
+        files,
+        target_partitions,
+        MAX_PARTITION_DICT_CARDINALITY,
+    )
 }
 
 fn partitioned_files_to_file_groups_with_limit(
     files: impl IntoIterator<Item = PartitionedFile>,
+    target_partitions: usize,
     max_files_per_group: usize,
 ) -> Vec<FileGroup> {
-    let file_groups = files
-        .into_iter()
-        // Each `PartitionedFile` is assigned to exactly one file group. DeltaScanStream stores
-        // row ordinal counters per execution partition. Whole file ownership is required for
-        // scan row ordinals.
-        // Partition values are dictionary encoded using a UInt16 key (DataFusion's default
-        // `wrap_partition_type_in_dict`). Keep file groups small enough that the file-id partition
-        // dictionary doesn't exceed the key space (one distinct value per file).
-        .chunks(max_files_per_group)
-        .into_iter()
-        .map(|chunk| chunk.collect::<FileGroup>())
-        .collect_vec();
+    // Each `PartitionedFile` is assigned to exactly one file group. DeltaScanStream stores
+    // row ordinal counters per execution partition. Whole file ownership is required for
+    // scan row ordinals, so files are distributed round robin rather than range split.
+    //
+    // The group count drives scan parallelism: one group is one execution partition, and
+    // files within a group are read sequentially. A single group serializes every file
+    // fetch, which is ruinous on remote stores with many small files. DataFusion's own
+    // repartitioning does not help here: it declines below repartition_file_min_size and
+    // would split files across streams, which row ordinals forbid.
+    //
+    // Partition values are dictionary encoded using a UInt16 key (DataFusion's default
+    // `wrap_partition_type_in_dict`). Keep file groups small enough that the file-id partition
+    // dictionary doesn't exceed the key space (one distinct value per file).
+    let files = files.into_iter().collect_vec();
+    if files.is_empty() {
+        return Vec::new();
+    }
+    let group_count = target_partitions
+        .max(1)
+        .max(files.len().div_ceil(max_files_per_group))
+        .min(files.len());
+    let mut file_groups = vec![Vec::new(); group_count];
+    for (index, file) in files.into_iter().enumerate() {
+        file_groups[index % group_count].push(file);
+    }
+    let file_groups = file_groups.into_iter().map(FileGroup::new).collect_vec();
 
     #[cfg(debug_assertions)]
     {
@@ -1038,7 +1058,8 @@ async fn get_read_plan(
             file_source = file_source.with_predicate(predicate);
         }
 
-        let file_groups = partitioned_files_to_file_groups(files);
+        let file_groups =
+            partitioned_files_to_file_groups(files, state.config().target_partitions());
         let full_table_width = full_table_schema.fields().len();
         let (file_groups, mut statistics) =
             compute_all_files_statistics(file_groups, full_table_schema, true, false)?;
@@ -1212,10 +1233,38 @@ mod tests {
             .map(|i| PartitionedFile::new(format!("memory:///f{i}.parquet"), 0))
             .collect_vec();
 
-        let groups = partitioned_files_to_file_groups(files);
+        let groups = partitioned_files_to_file_groups(files, 1);
         assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].len(), MAX_PARTITION_DICT_CARDINALITY);
-        assert_eq!(groups[1].len(), 1);
+        assert!(
+            groups
+                .iter()
+                .all(|g| g.len() <= MAX_PARTITION_DICT_CARDINALITY)
+        );
+        let total: usize = groups.iter().map(|g| g.len()).sum();
+        assert_eq!(total, MAX_PARTITION_DICT_CARDINALITY + 1);
+    }
+
+    #[test]
+    fn test_partitioned_files_to_file_groups_spreads_across_target_partitions() {
+        let files = (0..10)
+            .map(|i| PartitionedFile::new(format!("memory:///f{i}.parquet"), 0))
+            .collect_vec();
+
+        let groups = partitioned_files_to_file_groups(files, 4);
+        assert_eq!(groups.len(), 4);
+        let sizes = groups.iter().map(|g| g.len()).collect_vec();
+        assert_eq!(sizes, vec![3, 3, 2, 2]);
+
+        // never more groups than files
+        let groups = partitioned_files_to_file_groups(
+            (0..2)
+                .map(|i| PartitionedFile::new(format!("memory:///g{i}.parquet"), 0))
+                .collect_vec(),
+            8,
+        );
+        assert_eq!(groups.len(), 2);
+
+        assert!(partitioned_files_to_file_groups(Vec::new(), 4).is_empty());
     }
 
     #[test]
@@ -1568,7 +1617,7 @@ mod tests {
             PartitionedFile::new("memory:///same.parquet", 0),
         ];
 
-        let _ = partitioned_files_to_file_groups_with_limit(files, 1);
+        let _ = partitioned_files_to_file_groups_with_limit(files, 1, 1);
     }
 
     #[test]

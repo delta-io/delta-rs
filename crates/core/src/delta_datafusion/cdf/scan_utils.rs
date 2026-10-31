@@ -329,7 +329,9 @@ fn row_group_access(
     let rg_end = rg_start + num_rows as u64;
     let mut selectors = Vec::new();
     let mut cursor = rg_start;
-    for idx in marked.iter() {
+    let mut marked_rows = marked.iter();
+    marked_rows.advance_to(rg_start);
+    for idx in marked_rows.take_while(|&idx| idx < rg_end) {
         selectors.push(RowSelector {
             row_count: (idx - cursor) as usize,
             skip: keep_marked,
@@ -702,6 +704,92 @@ mod tests {
         assert!(
             kept.is_empty(),
             "constant `false` must prune even a Remove without partition metadata: {kept:?}"
+        );
+    }
+
+    /// Row offsets that a row group's access plan reads, plus the number of rows it covers.
+    fn selected_offsets(access: RowGroupAccess) -> (usize, Vec<usize>) {
+        let RowGroupAccess::Selection(selection) = access else {
+            panic!("expected a row selection");
+        };
+        let mut covered = 0;
+        let mut selected = Vec::new();
+        for selector in selection.iter() {
+            if !selector.skip {
+                selected.extend(covered..covered + selector.row_count);
+            }
+            covered += selector.row_count;
+        }
+        (covered, selected)
+    }
+
+    /// Three row groups of 100 rows: [0, 100), [100, 200) and [200, 300).
+    fn three_row_group_offsets(
+        marked: &roaring::RoaringTreemap,
+        keep_marked: bool,
+    ) -> Vec<(usize, Vec<usize>)> {
+        [0, 100, 200]
+            .into_iter()
+            .map(|rg_start| selected_offsets(row_group_access(marked, rg_start, 100, keep_marked)))
+            .collect()
+    }
+
+    fn unmarked_rows(marked_offsets: &[usize]) -> Vec<usize> {
+        (0..100)
+            .filter(|row| !marked_offsets.contains(row))
+            .collect()
+    }
+
+    #[test]
+    fn row_group_access_keeps_marked_rows_of_each_row_group() {
+        let marked: roaring::RoaringTreemap =
+            [0, 5, 99, 100, 150, 199, 200, 299].into_iter().collect();
+        assert_eq!(
+            three_row_group_offsets(&marked, true),
+            vec![
+                (100, vec![0, 5, 99]),
+                (100, vec![0, 50, 99]),
+                (100, vec![0, 99]),
+            ]
+        );
+    }
+
+    #[test]
+    fn row_group_access_skips_marked_rows_of_each_row_group() {
+        let marked: roaring::RoaringTreemap = [99, 100, 299].into_iter().collect();
+        assert_eq!(
+            three_row_group_offsets(&marked, false),
+            vec![
+                (100, unmarked_rows(&[99])),
+                (100, unmarked_rows(&[0])),
+                (100, unmarked_rows(&[99])),
+            ]
+        );
+    }
+
+    #[test]
+    fn row_group_access_for_row_groups_without_marked_rows() {
+        let empty = roaring::RoaringTreemap::new();
+        let only_middle: roaring::RoaringTreemap = [150].into_iter().collect();
+        assert_eq!(
+            three_row_group_offsets(&empty, true),
+            vec![(100, vec![]); 3]
+        );
+        assert_eq!(
+            three_row_group_offsets(&only_middle, true),
+            vec![(100, vec![]), (100, vec![50]), (100, vec![])]
+        );
+        assert_eq!(
+            three_row_group_offsets(&empty, false),
+            vec![(100, unmarked_rows(&[])); 3]
+        );
+        assert_eq!(
+            three_row_group_offsets(&only_middle, false),
+            vec![
+                (100, unmarked_rows(&[])),
+                (100, unmarked_rows(&[50])),
+                (100, unmarked_rows(&[])),
+            ]
         );
     }
 }
