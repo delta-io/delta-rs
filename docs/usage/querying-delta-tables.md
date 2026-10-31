@@ -34,6 +34,43 @@ pyarrow.Table
 value: string
 ```
 
+## Choosing an engine
+
+`to_pyarrow_table` and `to_pandas` take an `engine` argument: `"pyarrow"`
+(the deprecated default) scans through a PyArrow dataset, `"datafusion"`
+reads with the built-in DataFusion engine. The datafusion engine also reads
+tables the pyarrow engine cannot (column mapping, deletion vectors), prunes
+files automatically from `filters`, and streams internally instead of
+materializing dataset fragments.
+
+``` python
+>>> dt.to_pandas(engine="datafusion", filters=[("year", "=", "2021")], columns=["value"])
+>>> dt.to_pandas(engine="datafusion", filters="year = '2021'", columns=["value"])
+```
+
+Under the datafusion engine, `filters` also accepts a SQL predicate string,
+passed to the engine as written; tuple filters are sugar compiled to the same
+SQL semantics.
+
+The engines agree on tuple filters in the common cases but differ where
+PyArrow and SQL semantics genuinely part ways. Migrating code should account
+for:
+
+- `("col", "not in", [...])` follows SQL three-valued logic: rows where
+  `col` is NULL do not match. The pyarrow engine keeps them.
+- `("col", "=", None)` matches NULL rows, consistent with the tuple-filter
+  tradition of the listing APIs. The pyarrow engine matches nothing.
+- Duplicate names in `columns=` are an error; the pyarrow engine returns the
+  column twice.
+- Row order follows query execution and is not deterministic across calls.
+- `filesystem=`, `pyarrow.dataset.Expression` filters, and the deprecated
+  `partitions` argument are pyarrow-engine concepts and are rejected;
+  the datafusion engine prunes files from `filters` on its own.
+
+These divergences are pinned by tests in `python/tests/test_engines.py`. The
+pyarrow engine is deprecated wholesale: any call that resolves to it warns,
+and it will be removed in a future release.
+
 ## Selecting files with a pruning predicate
 
 `file_pruning_predicate` selects which files a table's log lists, before any
