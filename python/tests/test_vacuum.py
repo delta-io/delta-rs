@@ -490,4 +490,4 @@ def test_vacuum_full_keeps_files_committed_after_table_load(
         .execute("select x from tbl order by x")
         .read_all()
     )
-    assert result.to_struct_array().column("x").to_pylist() == [1, 2]
+    assert result["x"].to_pylist() == [1, 2]
