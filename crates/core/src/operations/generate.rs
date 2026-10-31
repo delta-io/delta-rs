@@ -149,6 +149,7 @@ impl std::future::IntoFuture for GenerateBuilder {
             let parent = this.log_store.clone();
             with_operation(&parent, |log_store| async move {
                 let object_store = log_store.object_store();
+                let mut written = std::collections::HashSet::with_capacity(payloads.len());
                 for (path, payload) in payloads.drain() {
                     debug!(
                         "Generated manifest for {:?} is {} bytes",
@@ -157,6 +158,19 @@ impl std::future::IntoFuture for GenerateBuilder {
                     );
                     let payload = PutPayload::from(payload.freeze());
                     object_store.put(&path, payload).await?;
+                    written.insert(path);
+                }
+                // Delete manifests left behind by partitions that no longer have
+                // files, as delta-spark's GenerateSymlinkManifest does; otherwise a
+                // manifest reader keeps seeing rows that were deleted.
+                let manifest_root = Path::from("_symlink_format_manifest");
+                let mut existing = object_store.list(Some(&manifest_root));
+                while let Some(meta) = existing.next().await {
+                    let location = meta?.location;
+                    if !written.contains(&location) {
+                        debug!("Removing stale manifest {location:?}");
+                        object_store.delete(&location).await?;
+                    }
                 }
                 Ok(())
             })
