@@ -31,8 +31,12 @@ pub fn to_datafusion_scalar(scalar: &Scalar) -> DeltaResult<ScalarValue> {
         Scalar::Short(value) => ScalarValue::Int16(Some(*value)),
         Scalar::Integer(value) => ScalarValue::Int32(Some(*value)),
         Scalar::Long(value) => ScalarValue::Int64(Some(*value)),
-        Scalar::Float(value) => ScalarValue::Float32(Some(*value)),
-        Scalar::Double(value) => ScalarValue::Float64(Some(*value)),
+        // Normalize -0.0 to 0.0: DataFusion's ScalarValue::partial_cmp uses total_cmp which
+        // incorrectly orders -0.0 < 0.0, causing file-skipping predicates like `f = 0` to
+        // prune files whose stats legitimately contain -0.0 as min/max (delta-rs#4990).
+        // IEEE 754 treats -0.0 == 0.0, so normalizing is semantically safe.
+        Scalar::Float(value) => ScalarValue::Float32(Some(if *value == 0.0 { 0.0 } else { *value })),
+        Scalar::Double(value) => ScalarValue::Float64(Some(if *value == 0.0 { 0.0 } else { *value })),
         Scalar::Timestamp(value) => {
             ScalarValue::TimestampMicrosecond(Some(*value), Some("UTC".into()))
         }
