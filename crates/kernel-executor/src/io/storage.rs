@@ -173,7 +173,7 @@ mod tests {
     use object_store::{ObjectStoreExt as _, local::LocalFileSystem, path::Path};
     use rstest::*;
 
-    use crate::test_utils::TestResult;
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
 
     use super::*;
 
