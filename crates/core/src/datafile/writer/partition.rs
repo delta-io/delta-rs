@@ -624,6 +624,68 @@ mod tests {
         assert_eq!(read, batch);
     }
 
+    /// The one call site of [`DeltaWriterProperties::resolve`]: a layer sees the file's
+    /// table-relative path, prefix included, and its schema, and the properties it
+    /// builds are what the file is written with.
+    #[tokio::test]
+    async fn test_layer_resolves_per_file_at_open() {
+        use crate::datafile::{FileContext, WriterPropertiesLayer};
+        use parquet::file::properties::WriterPropertiesBuilder;
+
+        /// Stamps `created_by` with what the layer was shown.
+        #[derive(Debug)]
+        struct Stamp;
+
+        #[async_trait::async_trait]
+        impl WriterPropertiesLayer for Stamp {
+            async fn apply(
+                &self,
+                builder: WriterPropertiesBuilder,
+                file: FileContext<'_>,
+            ) -> DeltaResult<WriterPropertiesBuilder> {
+                Ok(builder.set_created_by(format!(
+                    "stamp {} {}",
+                    file.path,
+                    file.schema.fields().len()
+                )))
+            }
+        }
+
+        let batch = get_record_batch(None, false);
+        let object_store: ObjectStoreRef = Arc::new(object_store::memory::InMemory::new());
+        let config = PartitionWriterConfig::try_new(
+            batch.schema(),
+            IndexMap::new(),
+            test_props(None, None, None, None).with_layer(Stamp),
+            None,
+            None,
+        )
+        .unwrap()
+        .with_path_prefix(Some(Path::from("_change_data")));
+        let mut writer = PartitionWriter::try_with_config(object_store.clone(), config).unwrap();
+        writer.write(&batch).await.unwrap();
+        let adds = writer.close().await.unwrap();
+        assert_eq!(adds.len(), 1);
+        assert!(
+            adds[0].path.starts_with("_change_data/"),
+            "{}",
+            adds[0].path
+        );
+
+        let bytes = object_store
+            .get(&Path::from(adds[0].path.clone()))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let reader = SerializedFileReader::new(bytes).unwrap();
+        assert_eq!(
+            reader.metadata().file_metadata().created_by(),
+            Some(format!("stamp {} {}", adds[0].path, batch.schema().fields().len()).as_str())
+        );
+    }
+
     /// A batch may not straddle the row-group limit: the rows that fit complete the open group
     /// and the rest start the next one. Both encodings, on both slicing paths of
     /// [`PartitionWriter::write`]: a write batch above the limit (with a target file size), and

@@ -17,35 +17,6 @@ env:
   RUSTC_WRAPPER: "sccache"
 
 jobs:
-  check-windows-python-dependencies:
-    name: Python Windows dependency graph
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: .
-    steps:
-      # v6.0.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-      - uses: ./.github/actions/setup-builder
-
-      - name: Assert Windows Python wheels do not select Unix-only OpenSSH
-        shell: bash
-        run: |
-          set -euo pipefail
-          tree=$(cargo tree -p deltalake-python --target x86_64-pc-windows-msvc)
-
-          if grep -Eq '(^|[[:space:]])openssh v' <<<"$tree"; then
-            printf '%s\n' "$tree"
-            printf '%s\n' "openssh must not be selected for the Windows Python target"
-            exit 1
-          fi
-
-          if grep -Eq '(^|[[:space:]])opendal-service-sftp v' <<<"$tree"; then
-            printf '%s\n' "$tree"
-            printf '%s\n' "OpenDAL SFTP must not be selected for the Windows Python target"
-            exit 1
-          fi
-
   test-minimal:
     runs-on: ubuntu-latest
     steps:
@@ -248,3 +219,59 @@ jobs:
         run: |
           uv pip install pyarrow
           uv run --no-sync python -c 'import deltalake'
+
+  test-windows:
+    name: Python Windows tests (x64)
+    runs-on: windows-latest
+    env:
+      # This job does not use setup-builder, which installs sccache.
+      RUSTC_WRAPPER: ""
+    steps:
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      # <https://github.com/actions/setup-python/releases/tag/v6.2.0>
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.11'
+          architecture: x64
+
+      - name: Install uv
+        # <https://github.com/astral-sh/setup-uv/releases/tag/v8.0.0>
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57
+
+      - name: Install test dependencies
+        run: uv sync --python python --no-install-project --all-extras
+
+      - name: Build and install deltalake
+        # <https://github.com/PyO3/maturin-action/releases/tag/v1.50.1>
+        uses: messense/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad
+        with:
+          target: x86_64-pc-windows-msvc
+          rust-toolchain: stable
+          working-directory: python
+          command: develop
+          args: --uv --profile ci
+
+      - name: Assert Windows Python wheels do not select Unix-only OpenSSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree=$(cargo tree -p deltalake-python --target x86_64-pc-windows-msvc)
+
+          if grep -Eq '(^|[[:space:]])openssh v' <<<"$tree"; then
+            printf '%s\n' "$tree"
+            printf '%s\n' "openssh must not be selected for the Windows Python target"
+            exit 1
+          fi
+
+          if grep -Eq '(^|[[:space:]])opendal-service-sftp v' <<<"$tree"; then
+            printf '%s\n' "$tree"
+            printf '%s\n' "OpenDAL SFTP must not be selected for the Windows Python target"
+            exit 1
+          fi
+
+      - name: Install minimum PyArrow version
+        run: uv pip install pyarrow==21.0.0
+
+      - name: Run unit tests and doctests
+        run: uv run --no-sync pytest -q -n auto --doctest-modules
