@@ -203,10 +203,7 @@ pub async fn cleanup_expired_logs_for(
                 .or_insert_with(|| (num_parts, HashSet::new()));
             entry.1.insert(part);
         } else if let Some(caps) = CHECKPOINT_REGEX.captures(path) {
-            if let Some(version) = caps
-                .get(1)
-                .and_then(|v| v.as_str().parse::<Version>().ok())
-            {
+            if let Some(version) = caps.get(1).and_then(|v| v.as_str().parse::<Version>().ok()) {
                 complete_checkpoint_versions.insert(version);
             }
         }
