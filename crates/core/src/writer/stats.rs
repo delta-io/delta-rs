@@ -1002,7 +1002,7 @@ mod tests {
                 let stats = simple_parquet_stat!(Statistics::Int64, *value);
                 let scalar =
                     StatsScalar::try_from_stats(&stats, logical_type.as_ref(), use_min).unwrap();
-                let actual = serde_json::Value::from(scalar);
+                let actual = scalar.into_json(use_min).unwrap();
                 assert_eq!(
                     actual,
                     Value::from(*expected),
