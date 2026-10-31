@@ -602,3 +602,36 @@ def test_cleanup_metadata_with_incomplete_multipart_checkpoint(
 
 
 @pytest.mark.pyarrow
+def test_failed_post_commit_checkpoint_does_not_fail_write(
+    tmp_path: pathlib.Path,
+):
+    """https://github.com/delta-io/delta-rs/issues/4986
+
+    A failed post-commit checkpoint must not raise from write_deltalake after
+    the commit is already durable, otherwise a caller that retries appends
+    the rows again.
+    """
+    import pyarrow as pa
+
+    table_path = tmp_path / "t"
+    write_deltalake(
+        table_path,
+        pa.table({"x": [1]}),
+        configuration={"delta.checkpointInterval": "1"},
+    )
+    # make the checkpoint write for version 1 fail
+    os.mkdir(table_path / "_delta_log" / "00000000000000000001.checkpoint.parquet")
+
+    # currently raises "Unable to rename file: Is a directory" even though the
+    # append itself is committed
+    write_deltalake(table_path, pa.table({"x": [2]}), mode="append")
+
+    dt = DeltaTable(table_path)
+    assert dt.version() == 1
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select x from tbl order by x")
+        .read_all()
+    )
+    assert result.to_struct_array().column("x").to_pylist() == [1, 2]
