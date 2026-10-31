@@ -1210,6 +1210,39 @@ mod test {
         );
     }
 
+    /// Reserved words stored bare in a constraint or generated expression do not parse back, so
+    /// they must be quoted. Ordinary names such as `order` and `value` stay bare.
+    #[test]
+    fn reserved_identifiers_are_quoted_in_stored_sql() {
+        let session = SessionContext::new();
+        let state = session.state();
+        let reserved = ["interval", "struct", "exists", "trim"];
+        let fields: Vec<ArrowField> = reserved
+            .iter()
+            .chain(["order", "value"].iter())
+            .map(|n| ArrowField::new(*n, ArrowDataType::Int64, true))
+            .collect();
+        let schema = DFSchema::try_from(ArrowSchema::new(fields)).unwrap();
+
+        for name in reserved {
+            let column = Expr::Column(Column::new_unqualified(name));
+            let stored = fmt_expr_to_sql(&column.clone().gt(lit(0_i64))).unwrap();
+            assert_eq!(
+                stored,
+                format!("`{name}` > 0"),
+                "reserved word `{name}` must be quoted in stored SQL"
+            );
+            parse_predicate_expression(&schema, &stored, &state)
+                .unwrap_or_else(|e| panic!("stored `{stored}` must parse back: {e}"));
+        }
+
+        for name in ["order", "value"] {
+            let column = Expr::Column(Column::new_unqualified(name));
+            let stored = fmt_expr_to_sql(&column.gt(lit(0_i64))).unwrap();
+            assert_eq!(stored, format!("{name} > 0"), "`{name}` stays bare");
+        }
+    }
+
     #[tokio::test]
     async fn test_expr_sql() {
         let table = setup_table().await;
