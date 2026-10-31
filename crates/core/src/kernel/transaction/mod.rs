@@ -1156,17 +1156,19 @@ impl PostCommit {
                     Ok((checkpoint_created, files_cleaned_up))
                 })
                 .await;
-                let (checkpoint_created, files_cleaned_up) = match maintenance {
-                    Ok(result) => result,
-                    Err(e) if self.log_store.is_catalog_managed() => {
-                        warn!(error = %e, "post-commit maintenance failed");
-                        (false, 0)
-                    }
-                    Err(e) => return Err(e),
-                };
 
-                new_checkpoint_created = checkpoint_created;
-                num_log_files_cleaned_up = files_cleaned_up;
+                match maintenance {
+                    Ok((checkpoint_created, files_cleaned_up)) => {
+                        new_checkpoint_created = checkpoint_created;
+                        num_log_files_cleaned_up = files_cleaned_up;
+                    }
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            "post-commit checkpoint or log cleanup failed; the commit itself is durable, continuing"
+                        );
+                    }
+                }
                 if num_log_files_cleaned_up > 0 {
                     state = DeltaTableState::try_new(&self.log_store, Some(self.version)).await?;
                 }
