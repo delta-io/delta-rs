@@ -191,6 +191,15 @@ impl<'a> ConflictReadSet<'a> {
             } => LogDataHandler::new(batches.as_ref().as_slice(), table_configuration),
         }
     }
+
+    pub(crate) fn table_configuration(&self) -> &'a TableConfiguration {
+        match &self.inner {
+            ConflictReadSetInner::Borrowed(log_data) => log_data.table_configuration(),
+            ConflictReadSetInner::Owned {
+                table_configuration, ..
+            } => table_configuration,
+        }
+    }
 }
 
 /// A snapshot of a Delta table

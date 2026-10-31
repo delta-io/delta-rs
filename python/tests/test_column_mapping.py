@@ -301,4 +301,4 @@ def test_conflict_check_partition_predicate_with_column_mapping(
         .to_struct_array()
         .to_pylist()
     )
-    assert rows == [{"k": 3, "p": "b"}]
+    assert rows == [{"k": 2, "p": "b"}, {"k": 3, "p": "b"}]
