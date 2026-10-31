@@ -46,11 +46,12 @@ use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use url::Url;
 
-pub use self::configs::WriterStatsConfig;
 use self::execution::write_execution_plan_v2;
 use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use super::CreateBuilder;
 use crate::DeltaTable;
+use crate::datafile::DeltaWriterProperties;
+pub use crate::datafile::WriterStatsConfig;
 use crate::datafile::writer::ArrowWriterOptions;
 use crate::delta_datafusion::Expression;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
@@ -62,14 +63,12 @@ use crate::delta_datafusion::{
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
-use crate::kernel::{Action, EagerSnapshot, StructType};
+use crate::kernel::{Action, DataType, EagerSnapshot, StructType};
 use crate::logstore::LogStoreRef;
 use crate::logstore::with_operation;
 use crate::protocol::{DeltaOperation, SaveMode};
 use uuid::Uuid;
 
-/// Configuration types controlling how data and statistics are written.
-pub mod configs;
 pub(crate) mod execution;
 pub(crate) mod generated_columns;
 pub(crate) mod metrics;
@@ -79,6 +78,12 @@ pub(crate) mod schema_evolution;
 /// Back-compat re-export: the writer types moved to [`crate::datafile::writer`].
 #[deprecated(note = "moved to deltalake_core::datafile::writer")]
 pub use crate::datafile::writer;
+
+/// Back-compat re-export: [`WriterStatsConfig`] moved to [`crate::datafile`].
+#[deprecated(note = "moved to deltalake_core::datafile::WriterStatsConfig")]
+pub mod configs {
+    pub use crate::datafile::WriterStatsConfig;
+}
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum WriteError {
@@ -151,16 +156,12 @@ pub struct WriteBuilder {
     /// Size above which we will write a buffered parquet file to disk.
     /// If None, the writer will not create a new file until the writer is closed.
     target_file_size: Option<Option<NonZeroU64>>,
-    /// Number of records to be written in single batch to underlying writer
-    write_batch_size: Option<usize>,
     /// whether to overwrite the schema or to merge it. None means to fail on schmema drift
     schema_mode: Option<SchemaMode>,
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
     safe_cast: bool,
-    /// Parquet writer properties
-    writer_properties: Option<WriterProperties>,
-    /// Arrow writer options
-    arrow_options: Option<ArrowWriterOptions>,
+    /// How the data files are encoded
+    writer_properties: DeltaWriterProperties,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// Name of the table, only used when table doesn't exist yet
@@ -202,11 +203,9 @@ impl WriteBuilder {
             partition_columns: None,
             predicate: None,
             target_file_size: None,
-            write_batch_size: None,
             safe_cast: false,
             schema_mode: None,
-            writer_properties: None,
-            arrow_options: None,
+            writer_properties: DeltaWriterProperties::default(),
             commit_properties: CommitProperties::default(),
             name: None,
             description: None,
@@ -286,7 +285,9 @@ impl WriteBuilder {
 
     /// Specify the target batch size for row groups written to parquet files.
     pub fn with_write_batch_size(mut self, write_batch_size: usize) -> Self {
-        self.write_batch_size = Some(write_batch_size);
+        self.writer_properties = self
+            .writer_properties
+            .with_write_batch_size(write_batch_size);
         self
     }
 
@@ -299,13 +300,30 @@ impl WriteBuilder {
 
     /// Specify the writer properties to use when writing a parquet file
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
+        self.writer_properties = self
+            .writer_properties
+            .with_parquet_properties(writer_properties);
         self
     }
 
     /// Specify the arrow writer options to use when writing a parquet file
     pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
-        self.arrow_options = Some(arrow_options);
+        self.writer_properties = self.writer_properties.with_arrow_options(arrow_options);
+        self
+    }
+
+    /// How the data files are encoded. Fields set on `writer_properties` replace
+    /// what the builder holds so far, unset fields keep it, so this composes with
+    /// the other setters in any order. Its target file size applies unless
+    /// [`with_target_file_size`] was called; unset, the table's does, as does an
+    /// unset stats config. Only [`with_target_file_size`] disables rolling.
+    ///
+    /// [`with_target_file_size`]: Self::with_target_file_size
+    pub fn with_delta_writer_properties(
+        mut self,
+        writer_properties: DeltaWriterProperties,
+    ) -> Self {
+        self.writer_properties = self.writer_properties.merge(writer_properties);
         self
     }
 
@@ -426,7 +444,12 @@ impl WriteBuilder {
                 PROTOCOL.can_write_to(snapshot)?;
 
                 if self.schema_mode.is_none() {
-                    PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
+                    PROTOCOL
+                        .check_can_write_timestamp_ntz(snapshot, &schema)
+                        .map_err(|err| {
+                            timestamp_ntz_into_timestamp_mismatch(&schema, &snapshot.schema())
+                                .unwrap_or_else(|| err.into())
+                        })?;
                     #[cfg(feature = "nanosecond-timestamps")]
                     PROTOCOL.check_can_write_timestamp_nanos(snapshot, &schema)?;
                     PROTOCOL.check_can_write_variant(snapshot, &schema)?;
@@ -472,6 +495,23 @@ impl WriteBuilder {
             }
         }
     }
+}
+
+fn timestamp_ntz_into_timestamp_mismatch(
+    input: &StructType,
+    table: &StructType,
+) -> Option<DeltaTableError> {
+    let field = input.fields().find(|f| {
+        f.data_type() == &DataType::TIMESTAMP_NTZ
+            && table.field(f.name()).map(|t| t.data_type()) == Some(&DataType::TIMESTAMP)
+    })?;
+    Some(DeltaTableError::SchemaMismatch {
+        msg: format!(
+            "column `{}` is timestamp_ntz in the data but timestamp in the table; \
+             convert it to UTC or write with schema_mode=\"merge\"",
+            field.name()
+        ),
+    })
 }
 
 impl std::future::IntoFuture for WriteBuilder {
@@ -528,9 +568,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         partition_columns: partition_columns.clone(),
                         predicate: this.predicate,
                         target_file_size: this.target_file_size,
-                        write_batch_size: this.write_batch_size,
                         writer_properties: this.writer_properties.clone(),
-                        arrow_options: this.arrow_options.clone(),
                         configuration: &this.configuration,
                     })?;
 
@@ -559,7 +597,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     let plan::PreparedWrite {
                         schema_delta,
                         exact_validation,
-                        exec_options,
+                        writer_properties,
                         ..
                     } = prepared_write;
 
@@ -580,7 +618,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         &session,
                         source_plan.clone(),
                         log_store.object_store(),
-                        exec_options,
+                        writer_properties,
                         exact_validation,
                         contains_cdc,
                         insert_marker_column,
@@ -664,7 +702,7 @@ mod tests {
         get_record_batch_with_nested_struct, setup_table_with_configuration,
     };
     use arrow_array::{
-        Float64Array, Int32Array, Int64Array, StringArray, TimestampMicrosecondArray,
+        ArrayRef, Float64Array, Int32Array, Int64Array, StringArray, TimestampMicrosecondArray,
     };
     use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
     use datafusion::physical_plan::collect;
@@ -1065,6 +1103,33 @@ mod tests {
         ];
         let actual = get_data(&_res).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_write_naive_timestamp_into_utc_timestamp_column() -> TestResult {
+        let batch = |name: &str, tz: Option<&str>| {
+            let array = TimestampMicrosecondArray::from(vec![0]).with_timezone_opt(tz);
+            RecordBatch::try_from_iter([(name, Arc::new(array) as ArrayRef)]).unwrap()
+        };
+        let table = DeltaTable::new_in_memory()
+            .write([batch("t", Some("UTC"))])
+            .await?;
+
+        let err = table.clone().write([batch("t", None)]).await.unwrap_err();
+        assert!(
+            matches!(&err, DeltaTableError::SchemaMismatch { msg } if msg.contains("`t`")),
+            "{err}"
+        );
+
+        // A new timestamp_ntz column still needs the timestampNtz feature
+        let err = table.clone().write([batch("n", None)]).await.unwrap_err();
+        assert!(matches!(err, DeltaTableError::Transaction { .. }), "{err}");
+
+        table
+            .write([batch("t", None)])
+            .with_schema_mode(SchemaMode::Merge)
+            .await?;
+        Ok(())
     }
 
     #[tokio::test]

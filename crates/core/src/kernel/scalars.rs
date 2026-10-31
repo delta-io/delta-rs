@@ -100,8 +100,14 @@ impl ScalarExt for Scalar {
                 let ts = Utc.timestamp_nanos(*ts);
                 ts.naive_utc().format("%Y-%m-%d %H:%M:%S%.9f").to_string()
             }
-            Self::TimestampNtz(ts) | Self::Timestamp(ts) => {
+            Self::Timestamp(ts) => {
                 let ts = Utc.timestamp_micros(*ts).single().unwrap();
+                // Use the recommended ISO8601 representation with an explicit UTC offset.
+                ts.format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string()
+            }
+            Self::TimestampNtz(ts) => {
+                let ts = Utc.timestamp_micros(*ts).single().unwrap();
+                // Timestamp without timezone keeps the offset-less representation.
                 ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
             }
             Self::Date(days) => {
@@ -475,10 +481,19 @@ mod tests {
         let timestamp_micros = 1672574400000000; // 2023-01-01 12:00:00 UTC
         let scalar = Scalar::Timestamp(timestamp_micros);
         let serialized = scalar.serialize();
-        assert!(serialized.starts_with("2023-01-01 12:00:00"));
+        // Timezone-aware timestamps use the recommended ISO8601 representation
+        // with an explicit UTC offset.
+        assert_eq!(serialized, "2023-01-01T12:00:00.000000Z");
 
+        // TIMESTAMP_NTZ keeps the offset-less representation.
         let scalar_ntz = Scalar::TimestampNtz(timestamp_micros);
-        assert_eq!(scalar.serialize(), scalar_ntz.serialize());
+        assert_eq!(scalar_ntz.serialize(), "2023-01-01 12:00:00.000000");
+
+        // The encoded form feeds hive-style partition directory names.
+        assert_eq!(
+            scalar.serialize_encoded(),
+            "2023-01-01T12%3A00%3A00.000000Z"
+        );
     }
 
     #[cfg(feature = "nanosecond-timestamps")]

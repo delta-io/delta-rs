@@ -94,7 +94,8 @@ use serde::{Deserialize, Serialize};
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::errors::DeltaTableError;
 use crate::kernel::{
-    Action, CommitInfo, EagerSnapshot, IsolationLevel, Metadata, Protocol, Transaction, Version,
+    Action, Add, CommitInfo, EagerSnapshot, IsolationLevel, Metadata, Protocol, Transaction,
+    Version,
 };
 use crate::logstore::ObjectStoreRef;
 use crate::logstore::with_operation;
@@ -628,6 +629,7 @@ pub struct CommitBuilder {
     app_transaction: Vec<Transaction>,
     max_retries: usize,
     post_commit_hook: Option<PostCommitHookProperties>,
+    read_files: Option<Arc<[Add]>>,
 }
 
 impl Default for CommitBuilder {
@@ -638,6 +640,7 @@ impl Default for CommitBuilder {
             app_transaction: Vec::new(),
             max_retries: DEFAULT_RETRIES,
             post_commit_hook: None,
+            read_files: None,
         }
     }
 }
@@ -667,6 +670,17 @@ impl<'a> CommitBuilder {
         self
     }
 
+    /// Files read by the transaction, checked against files removed by concurrent commits.
+    ///
+    /// If not set, all files matching the operation's read predicate are treated as read, or all
+    /// files in the table if there is none. Concurrently added files are still checked against
+    /// the read predicate. Files not listed are not checked, so an incomplete list can let a
+    /// conflicting commit through.
+    pub fn with_read_files(mut self, read_files: impl Into<Arc<[Add]>>) -> Self {
+        self.read_files = Some(read_files.into());
+        self
+    }
+
     /// Prepare a Commit operation using the configured builder
     ///
     /// `log_store` is the store the commit is written through. Inside an operation this is the
@@ -689,6 +703,7 @@ impl<'a> CommitBuilder {
             max_retries: self.max_retries,
             data,
             post_commit_hook: self.post_commit_hook,
+            read_files: self.read_files,
         }
     }
 }
@@ -700,9 +715,10 @@ pub struct PreCommit<'a> {
     data: CommitData,
     max_retries: usize,
     post_commit_hook: Option<PostCommitHookProperties>,
+    read_files: Option<Arc<[Add]>>,
 }
 
-impl<'a> std::future::IntoFuture for PreCommit<'a> {
+impl<'a> IntoFuture for PreCommit<'a> {
     type Output = DeltaResult<FinalizedCommit>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
@@ -752,12 +768,13 @@ impl<'a> PreCommit<'a> {
                 max_retries: this.max_retries,
                 data: this.data,
                 post_commit: this.post_commit_hook,
+                read_files: this.read_files,
             })
         })
     }
 }
 
-/// Represents a inflight commit
+/// Represents an inflight commit
 pub struct PreparedCommit<'a> {
     commit_or_bytes: CommitOrBytes,
     committer: Arc<dyn Committer>,
@@ -766,6 +783,7 @@ pub struct PreparedCommit<'a> {
     table_data: Option<&'a dyn TableReference>,
     max_retries: usize,
     post_commit: Option<PostCommitHookProperties>,
+    read_files: Option<Arc<[Add]>>,
 }
 
 impl PreparedCommit<'_> {
@@ -775,7 +793,7 @@ impl PreparedCommit<'_> {
     }
 }
 
-impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
+impl<'a> IntoFuture for PreparedCommit<'a> {
     type Output = DeltaResult<PostCommit>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
@@ -789,6 +807,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             let data = this.data;
             let post_commit = this.post_commit;
             let max_retries = this.max_retries;
+            let read_files = this.read_files;
 
             // The version of the most recent commit attempt. Every non-success exit aborts that
             // attempt so that temporary commit files and staged commit entries do not leak.
@@ -888,7 +907,8 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                     data.operation.read_predicate(),
                                     &data.actions,
                                     data.operation.read_whole_table(),
-                                )?;
+                                )?
+                                .with_read_files(read_files.as_deref());
                                 let conflict_checker = ConflictChecker::new(
                                     transaction_info,
                                     summary,

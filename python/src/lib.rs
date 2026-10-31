@@ -35,6 +35,7 @@ use pyo3_arrow::PyDataType;
 use deltalake::arrow::array::{
     ArrayRef, BooleanBuilder, LargeStringBuilder, ListBuilder, RecordBatchIterator,
 };
+use deltalake::datafile::properties::{DEFAULT_PARQUET_PROPERTIES, OPTIMIZE_PARQUET_PROPERTIES};
 use deltalake::delta_datafusion::create_session_state_with_spill_config;
 use deltalake::delta_datafusion::expr::parse_sql_predicate_to_kernel;
 use deltalake::errors::DeltaTableError;
@@ -53,7 +54,7 @@ use deltalake::operations::vacuum::VacuumMode;
 use deltalake::operations::write::WriteBuilder;
 use deltalake::parquet::basic::{Compression, Encoding};
 use deltalake::parquet::errors::ParquetError;
-use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
+use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 use deltalake::partitions::{
     FilterLiteral, FilterValue, conjunction_to_kernel_predicate, dnf_to_kernel_predicate,
     filter_literal,
@@ -797,7 +798,8 @@ impl RawDeltaTable {
 
             if let Some(writer_props) = writer_properties {
                 cmd = cmd.with_writer_properties(
-                    set_writer_properties(writer_props).map_err(PythonError::from)?,
+                    set_writer_properties(writer_props, &DEFAULT_PARQUET_PROPERTIES)
+                        .map_err(PythonError::from)?,
                 );
             }
 
@@ -877,7 +879,8 @@ impl RawDeltaTable {
 
             if let Some(writer_props) = writer_properties {
                 cmd = cmd.with_writer_properties(
-                    set_writer_properties(writer_props).map_err(PythonError::from)?,
+                    set_writer_properties(writer_props, &OPTIMIZE_PARQUET_PROPERTIES)
+                        .map_err(PythonError::from)?,
                 );
             }
 
@@ -955,7 +958,8 @@ impl RawDeltaTable {
 
             if let Some(writer_props) = writer_properties {
                 cmd = cmd.with_writer_properties(
-                    set_writer_properties(writer_props).map_err(PythonError::from)?,
+                    set_writer_properties(writer_props, &OPTIMIZE_PARQUET_PROPERTIES)
+                        .map_err(PythonError::from)?,
                 );
             }
 
@@ -1885,7 +1889,8 @@ impl RawDeltaTable {
             }
             if let Some(writer_props) = writer_properties {
                 cmd = cmd.with_writer_properties(
-                    set_writer_properties(writer_props).map_err(PythonError::from)?,
+                    set_writer_properties(writer_props, &DEFAULT_PARQUET_PROPERTIES)
+                        .map_err(PythonError::from)?,
                 );
             }
             if let Some(commit_properties) =
@@ -2135,7 +2140,8 @@ impl RawDeltaTable {
 
             if let Some(writer_props) = writer_properties {
                 builder = builder.with_writer_properties(
-                    set_writer_properties(writer_props).map_err(PythonError::from)?,
+                    set_writer_properties(writer_props, &DEFAULT_PARQUET_PROPERTIES)
+                        .map_err(PythonError::from)?,
                 );
             }
 
@@ -2244,13 +2250,19 @@ fn set_post_commithook_properties(
     commit_properties
 }
 
-fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<WriterProperties> {
-    let mut properties = WriterProperties::builder();
+/// Layer the Python `WriterProperties` over `base`, the operation's own default,
+/// so unset knobs keep its compression and the delta-rs `created_by`.
+fn set_writer_properties(
+    writer_properties: PyWriterProperties,
+    base: &WriterProperties,
+) -> DeltaResult<WriterProperties> {
+    let mut properties = base.clone().into_builder();
     let data_page_size_limit = writer_properties.data_page_size_limit;
     let dictionary_page_size_limit = writer_properties.dictionary_page_size_limit;
     let data_page_row_count_limit = writer_properties.data_page_row_count_limit;
     let write_batch_size = writer_properties.write_batch_size;
     let max_row_group_size = writer_properties.max_row_group_size;
+    let writer_version = writer_properties.writer_version;
     let compression = writer_properties.compression;
     let statistics_truncate_length = writer_properties.statistics_truncate_length;
     let default_column_properties = writer_properties.default_column_properties;
@@ -2271,7 +2283,14 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
     if let Some(row_group_size) = max_row_group_size {
         properties = properties.set_max_row_group_row_count(Some(row_group_size));
     }
-    properties = properties.set_statistics_truncate_length(statistics_truncate_length);
+    if let Some(truncate_length) = statistics_truncate_length {
+        properties = properties.set_statistics_truncate_length(Some(truncate_length));
+    }
+    if let Some(writer_version) = writer_version {
+        let version = WriterVersion::from_str(&writer_version)
+            .map_err(|err| DeltaTableError::Generic(err.to_string()))?;
+        properties = properties.set_writer_version(version);
+    }
 
     if let Some(compression) = compression {
         let compress: Compression = compression
@@ -2441,16 +2460,14 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
         Float(val) => val.into_py_any(py)?,
         Double(val) => val.into_py_any(py)?,
         Timestamp(_) => {
-            // We need to manually append 'Z' add to end so that pyarrow can cast the
-            // scalar value to pa.timestamp("us","UTC") or pa.timestamp("ns", "UTC")
-            let value = value.serialize();
-            format!("{value}Z").into_py_any(py)?
+            // pyarrow needs an explicit UTC offset to cast the scalar value to
+            // pa.timestamp("us", "UTC") or pa.timestamp("ns", "UTC"), and
+            // serialize() already emits one (`...Z`) for timezone-aware
+            // timestamps, so the value can be passed through as-is.
+            value.serialize().into_py_any(py)?
         }
         #[cfg(feature = "nanosecond-timestamps")]
-        TimestampNanos(_) => {
-            let value = value.serialize();
-            format!("{value}Z").into_py_any(py)?
-        }
+        TimestampNanos(_) => value.serialize().into_py_any(py)?,
         #[cfg(feature = "nanosecond-timestamps")]
         TimestampNanosNtz(_) => {
             let value = value.serialize();
@@ -2727,6 +2744,7 @@ pub struct PyWriterProperties {
     data_page_row_count_limit: Option<usize>,
     write_batch_size: Option<usize>,
     max_row_group_size: Option<usize>,
+    writer_version: Option<String>,
     statistics_truncate_length: Option<usize>,
     compression: Option<String>,
     default_column_properties: Option<ColumnProperties>,

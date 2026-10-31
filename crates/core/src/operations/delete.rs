@@ -58,11 +58,14 @@ use serde::Serialize;
 
 use super::cdc::should_write_cdc;
 use crate::DeltaTable;
+use crate::datafile::DeltaWriterProperties;
+use crate::datafile::properties::session_parquet_properties;
 use crate::datafile::writer::ArrowWriterOptions;
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::DeltaSessionExt;
 use crate::delta_datafusion::SessionFallbackPolicy;
 use crate::delta_datafusion::SessionResolveContext;
+use crate::delta_datafusion::engine::{is_exact_partition_predicate, to_delta_predicate};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::{
     LogicalPlanBuilderExt as _, LogicalPlanExt, MetricObserver,
@@ -81,10 +84,8 @@ use crate::kernel::{
 use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::cdc::CDC_COLUMN_NAME;
-use crate::operations::write::configs::WriteExecOptions;
 use crate::operations::write::execution::write_exec_plan;
 use crate::protocol::DeltaOperation;
-use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
@@ -104,10 +105,8 @@ pub struct DeleteBuilder {
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
     session_fallback_policy: SessionFallbackPolicy,
-    /// Properties passed to underlying parquet writer for when files are rewritten
-    writer_properties: Option<WriterProperties>,
-    /// Options passed to underlying arrow writer for when files are rewritten
-    arrow_options: Option<ArrowWriterOptions>,
+    /// How rewritten data files are encoded
+    writer_properties: DeltaWriterProperties,
     /// Commit properties and configuration
     commit_properties: CommitProperties,
 }
@@ -226,8 +225,7 @@ impl DeleteBuilder {
             session: None,
             session_fallback_policy: SessionFallbackPolicy::default(),
             commit_properties: CommitProperties::default(),
-            writer_properties: None,
-            arrow_options: None,
+            writer_properties: DeltaWriterProperties::default(),
         }
     }
 
@@ -267,13 +265,27 @@ impl DeleteBuilder {
 
     /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
+        self.writer_properties = self
+            .writer_properties
+            .with_parquet_properties(writer_properties);
         self
     }
 
     /// Arrow writer options passed to the parquet writer for when files are rewritten
     pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
-        self.arrow_options = Some(arrow_options);
+        self.writer_properties = self.writer_properties.with_arrow_options(arrow_options);
+        self
+    }
+
+    /// How the rewritten data files are encoded. Fields set on `writer_properties`
+    /// replace what the builder holds so far, unset fields keep it, so this composes
+    /// with the other setters in any order. An unset target file size or stats
+    /// config falls back to the table's.
+    pub fn with_delta_writer_properties(
+        mut self,
+        writer_properties: DeltaWriterProperties,
+    ) -> Self {
+        self.writer_properties = self.writer_properties.merge(writer_properties);
         self
     }
 }
@@ -322,13 +334,21 @@ impl std::future::IntoFuture for DeleteBuilder {
                     predicate: predicate.as_ref().map(fmt_expr_to_sql).transpose()?,
                 };
 
+                // A caller-supplied session's parquet options configure the rewrite;
+                // delta-rs's own session falls through to the delta-rs default.
+                let writer_properties = if this.session.is_some() {
+                    this.writer_properties
+                        .clone()
+                        .apply_parquet_default(|| session_parquet_properties(&session))?
+                } else {
+                    this.writer_properties.clone()
+                };
                 let (actions, metrics) = execute(
                     predicate,
                     log_store.clone(),
                     snapshot.clone(),
                     &session,
-                    this.writer_properties.clone(),
-                    this.arrow_options.clone(),
+                    writer_properties,
                 )
                 .await?;
 
@@ -411,8 +431,7 @@ async fn execute(
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
     session: &dyn Session,
-    writer_properties: Option<WriterProperties>,
-    arrow_options: Option<ArrowWriterOptions>,
+    writer_properties: DeltaWriterProperties,
 ) -> DeltaResult<(Vec<Action>, DeleteMetrics)> {
     let eager_snapshot = snapshot;
     let snapshot = eager_snapshot.snapshot();
@@ -460,17 +479,15 @@ async fn execute(
 
     if props.partition_only {
         let partition_predicate = conjunction(skipping_pred).unwrap_or(lit(true));
-        let full_file = match crate::delta_datafusion::engine::to_delta_predicate(
-            &partition_predicate,
-        ) {
-            Ok(delta_predicate) => {
-                // `Snapshot::files` documents predicate filtering as "best effort" file skipping
-                // because, in general, files may contain a mix of matching and non-matching rows.
-                //
-                // For partition-only predicates, partition values are constant per file, so
-                // evaluating `partition_predicate` against `partitionValues_parsed` is exact:
-                // a file either fully matches or does not. It is therefore safe to treat this as
-                // the authoritative match set for DELETE.
+        let exact_kernel_predicate =
+            is_exact_partition_predicate(&partition_predicate, &props.partition_columns)
+                .then(|| to_delta_predicate(&partition_predicate).ok())
+                .flatten();
+        let full_file = match exact_kernel_predicate {
+            Some(delta_predicate) => {
+                // Kernel file skipping is best effort and keeps files for terms it cannot
+                // evaluate. Partition values are constant per file and the predicate only uses
+                // shapes kernel evaluates exactly on them, so the returned files are the match set.
                 collect_full_file_deletes(snapshot.active_adds(
                     log_store.as_ref(),
                     ActiveAddOptions {
@@ -480,10 +497,9 @@ async fn execute(
                 ))
                 .await?
             }
-            Err(err) => {
+            None => {
                 tracing::debug!(
-                    ?err,
-                    "Partition-only delete predicate not convertible to kernel; falling back to DataFusion evaluation"
+                    "Partition-only delete predicate is not exact in kernel; falling back to DataFusion evaluation"
                 );
 
                 let matching_paths = Arc::new(
@@ -604,19 +620,13 @@ async fn execute(
     };
 
     let exec = session.create_physical_plan(&write_plan).await?;
-    let exec_options = WriteExecOptions {
-        target_file_size: Some(snapshot.table_properties().target_file_size()),
-        write_batch_size: None,
-        writer_properties,
-        arrow_options,
-    };
     let (mut actions, _) = write_exec_plan(
         session,
         log_store.as_ref(),
         snapshot.table_configuration(),
         exec.clone(),
         write_cdc,
-        exec_options,
+        writer_properties.apply_table_defaults(snapshot.table_configuration()),
     )
     .await?;
 
@@ -917,6 +927,74 @@ mod tests {
         assert_eq!(metrics.num_removed_files, 0);
         assert_eq!(metrics.num_deleted_rows, Some(0));
         assert_eq!(metrics.num_copied_rows, 0);
+    }
+
+    /// Delete `value = 1` from a one-file table and return each rewritten file's
+    /// path and parquet footer.
+    async fn delete_and_read_footers(
+        session: Option<Arc<dyn Session>>,
+    ) -> Vec<(
+        object_store::path::Path,
+        parquet::file::metadata::ParquetMetaData,
+    )> {
+        use crate::logstore::parquet_reader::ParquetObjectReader;
+        use parquet::arrow::ParquetRecordBatchStreamBuilder;
+
+        let table = setup_table(None).await;
+        let table = write_batch(table, get_record_batch(None, false)).await;
+        let mut delete = table.delete().with_predicate(col("value").eq(lit(1)));
+        if let Some(session) = session {
+            delete = delete.with_session_state(session);
+        }
+        let (table, metrics) = delete.await.unwrap();
+        assert_eq!(metrics.num_added_files, 1);
+
+        let store = table.log_store().object_store();
+        let mut footers = vec![];
+        for add in table.snapshot().unwrap().log_data() {
+            let path = add.object_store_path();
+            let reader = ParquetObjectReader::new(store.clone(), path.clone());
+            let builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
+            footers.push((path, builder.metadata().as_ref().clone()));
+        }
+        footers
+    }
+
+    #[tokio::test]
+    async fn test_delete_rewrites_with_delta_rs_parquet_defaults() {
+        use parquet::basic::Compression;
+
+        for (path, metadata) in delete_and_read_footers(None).await {
+            assert!(path.as_ref().ends_with(".snappy.parquet"), "{path}");
+            let created_by = metadata.file_metadata().created_by().unwrap();
+            assert!(created_by.starts_with("delta-rs"), "{created_by}");
+            for column in metadata.row_group(0).columns() {
+                assert_eq!(column.compression(), Compression::SNAPPY);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_rewrites_with_caller_session_parquet_options() {
+        use parquet::basic::{Compression, GzipLevel};
+
+        let mut state = create_session().state();
+        state
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .compression = Some("gzip(6)".into());
+
+        for (path, metadata) in delete_and_read_footers(Some(Arc::new(state))).await {
+            assert!(path.as_ref().ends_with(".gz.parquet"), "{path}");
+            for column in metadata.row_group(0).columns() {
+                assert_eq!(
+                    column.compression(),
+                    Compression::GZIP(GzipLevel::try_new(6).unwrap())
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -2819,6 +2897,76 @@ mod tests {
             assert_eq!(table.version(), Some(4));
         }
 
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::arithmetic_plus("p + 1 = 2", true, &[0, 2, 3])]
+    #[case::arithmetic_times("p * 2 = 2", true, &[0, 2, 3])]
+    #[case::case_when("CASE WHEN p = 1 THEN true ELSE false END", true, &[0, 2, 3])]
+    #[case::not_coalesce("NOT coalesce(q > 'a', false)", true, &[1, 3])]
+    #[case::null_comparison("x = NULL", true, &[0, 1, 2, 3])]
+    #[case::null_comparison_unpartitioned("x = NULL", false, &[0, 1, 2, 3])]
+    #[case::partition_and_null_comparison("p = 1 AND x = NULL", true, &[0, 1, 2, 3])]
+    #[case::eq("p = 1", true, &[0, 2, 3])]
+    #[case::in_list("p IN (0, 1)", true, &[2, 3])]
+    #[case::is_null("p IS NULL", true, &[0, 1, 3])]
+    #[case::is_not_null("p IS NOT NULL", true, &[2])]
+    #[case::junction("p > 0 AND q <> 'c'", true, &[0, 2, 3])]
+    #[case::scalar_function("upper(q) = 'B'", true, &[0, 2, 3])]
+    #[tokio::test]
+    async fn test_delete_partition_only_predicates_follow_sql_semantics(
+        #[case] predicate: &str,
+        #[case] partitioned: bool,
+        #[case] expected_remaining: &[i64],
+    ) -> DeltaResult<()> {
+        use arrow::array::AsArray;
+        use arrow::datatypes::Int64Type;
+        use arrow_array::Int64Array;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("x", DataType::Int64, true),
+            Field::new("p", DataType::Int32, true),
+            Field::new("q", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![0, 1, 2, 3])),
+                Arc::new(Int64Array::from(vec![Some(0), Some(1), Some(2), None])),
+                Arc::new(Int32Array::from(vec![Some(0), Some(1), None, Some(2)])),
+                Arc::new(StringArray::from(vec![
+                    Some("a"),
+                    Some("b"),
+                    None,
+                    Some("c"),
+                ])),
+            ],
+        )?;
+        let partition_columns: &[&str] = if partitioned { &["p", "q"] } else { &[] };
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_partition_columns(partition_columns.iter().copied())
+            .await?;
+
+        let (table, metrics) = table.delete().with_predicate(predicate).await?;
+
+        let mut remaining: Vec<i64> = get_data(&table)
+            .await
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column_by_name("id")
+                    .unwrap()
+                    .as_primitive::<Int64Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        remaining.sort_unstable();
+        assert_eq!(remaining, expected_remaining);
+        assert_eq!(metrics.num_deleted_rows, Some(4 - expected_remaining.len()));
         Ok(())
     }
 }

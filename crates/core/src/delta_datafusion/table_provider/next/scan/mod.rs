@@ -762,7 +762,12 @@ fn update_partition_stats(
         } else {
             (
                 Precision::Exact(0),
-                Precision::Exact(to_datafusion_scalar(stat)?),
+                Precision::Exact(to_datafusion_scalar(stat).map_err(|e| {
+                    DataFusionError::External(Box::new(e)).context(format!(
+                        "failure during planning, when translating the partition value of column '{}'",
+                        field.name()
+                    ))
+                })?),
             )
         };
         if let Some(part_stat) = part_stats.get_mut(field.name()) {
@@ -874,26 +879,46 @@ const MAX_PARTITION_DICT_CARDINALITY: usize = (u16::MAX as usize) + 1;
 
 fn partitioned_files_to_file_groups(
     files: impl IntoIterator<Item = PartitionedFile>,
+    target_partitions: usize,
 ) -> Vec<FileGroup> {
-    partitioned_files_to_file_groups_with_limit(files, MAX_PARTITION_DICT_CARDINALITY)
+    partitioned_files_to_file_groups_with_limit(
+        files,
+        target_partitions,
+        MAX_PARTITION_DICT_CARDINALITY,
+    )
 }
 
 fn partitioned_files_to_file_groups_with_limit(
     files: impl IntoIterator<Item = PartitionedFile>,
+    target_partitions: usize,
     max_files_per_group: usize,
 ) -> Vec<FileGroup> {
-    let file_groups = files
-        .into_iter()
-        // Each `PartitionedFile` is assigned to exactly one file group. DeltaScanStream stores
-        // row ordinal counters per execution partition. Whole file ownership is required for
-        // scan row ordinals.
-        // Partition values are dictionary encoded using a UInt16 key (DataFusion's default
-        // `wrap_partition_type_in_dict`). Keep file groups small enough that the file-id partition
-        // dictionary doesn't exceed the key space (one distinct value per file).
-        .chunks(max_files_per_group)
-        .into_iter()
-        .map(|chunk| chunk.collect::<FileGroup>())
-        .collect_vec();
+    // Each `PartitionedFile` is assigned to exactly one file group. DeltaScanStream stores
+    // row ordinal counters per execution partition. Whole file ownership is required for
+    // scan row ordinals, so files are distributed round robin rather than range split.
+    //
+    // The group count drives scan parallelism: one group is one execution partition, and
+    // files within a group are read sequentially. A single group serializes every file
+    // fetch, which is ruinous on remote stores with many small files. DataFusion's own
+    // repartitioning does not help here: it declines below repartition_file_min_size and
+    // would split files across streams, which row ordinals forbid.
+    //
+    // Partition values are dictionary encoded using a UInt16 key (DataFusion's default
+    // `wrap_partition_type_in_dict`). Keep file groups small enough that the file-id partition
+    // dictionary doesn't exceed the key space (one distinct value per file).
+    let files = files.into_iter().collect_vec();
+    if files.is_empty() {
+        return Vec::new();
+    }
+    let group_count = target_partitions
+        .max(1)
+        .max(files.len().div_ceil(max_files_per_group))
+        .min(files.len());
+    let mut file_groups = vec![Vec::new(); group_count];
+    for (index, file) in files.into_iter().enumerate() {
+        file_groups[index % group_count].push(file);
+    }
+    let file_groups = file_groups.into_iter().map(FileGroup::new).collect_vec();
 
     #[cfg(debug_assertions)]
     {
@@ -945,6 +970,7 @@ async fn get_read_plan(
     let parquet_read_schema = &parquet_read_schema;
 
     let pq_options = crate::datafile::ReaderProperties::default().to_table_parquet_options(state);
+    let metadata_size_hint = pq_options.global.metadata_size_hint;
 
     let mut full_read_schema = SchemaBuilder::from(parquet_read_schema.as_ref().clone());
     full_read_schema.push(file_id_field.as_ref().clone().with_nullable(true));
@@ -977,6 +1003,9 @@ async fn get_read_plan(
         let mut file_source = ParquetSource::new(table_schema)
             .with_table_parquet_options(pq_options.clone())
             .with_parquet_file_reader_factory(reader_factory);
+        if let Some(hint) = metadata_size_hint {
+            file_source = file_source.with_metadata_size_hint(hint);
+        }
 
         // TODO(roeap); we might be able to also push selection vectors into the read plan
         // by creating parquet access plans. However we need to make sure this does not
@@ -1029,7 +1058,8 @@ async fn get_read_plan(
             file_source = file_source.with_predicate(predicate);
         }
 
-        let file_groups = partitioned_files_to_file_groups(files);
+        let file_groups =
+            partitioned_files_to_file_groups(files, state.config().target_partitions());
         let full_table_width = full_table_schema.fields().len();
         let (file_groups, mut statistics) =
             compute_all_files_statistics(file_groups, full_table_schema, true, false)?;
@@ -1203,10 +1233,38 @@ mod tests {
             .map(|i| PartitionedFile::new(format!("memory:///f{i}.parquet"), 0))
             .collect_vec();
 
-        let groups = partitioned_files_to_file_groups(files);
+        let groups = partitioned_files_to_file_groups(files, 1);
         assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].len(), MAX_PARTITION_DICT_CARDINALITY);
-        assert_eq!(groups[1].len(), 1);
+        assert!(
+            groups
+                .iter()
+                .all(|g| g.len() <= MAX_PARTITION_DICT_CARDINALITY)
+        );
+        let total: usize = groups.iter().map(|g| g.len()).sum();
+        assert_eq!(total, MAX_PARTITION_DICT_CARDINALITY + 1);
+    }
+
+    #[test]
+    fn test_partitioned_files_to_file_groups_spreads_across_target_partitions() {
+        let files = (0..10)
+            .map(|i| PartitionedFile::new(format!("memory:///f{i}.parquet"), 0))
+            .collect_vec();
+
+        let groups = partitioned_files_to_file_groups(files, 4);
+        assert_eq!(groups.len(), 4);
+        let sizes = groups.iter().map(|g| g.len()).collect_vec();
+        assert_eq!(sizes, vec![3, 3, 2, 2]);
+
+        // never more groups than files
+        let groups = partitioned_files_to_file_groups(
+            (0..2)
+                .map(|i| PartitionedFile::new(format!("memory:///g{i}.parquet"), 0))
+                .collect_vec(),
+            8,
+        );
+        assert_eq!(groups.len(), 2);
+
+        assert!(partitioned_files_to_file_groups(Vec::new(), 4).is_empty());
     }
 
     #[test]
@@ -1339,6 +1397,129 @@ mod tests {
         Ok(())
     }
 
+    /// Regression test for <https://github.com/delta-io/delta-rs/issues/4864>:
+    /// the DataFusion session's `datafusion.execution.parquet.metadata_size_hint`
+    /// must be applied to the scan's `ParquetSource` so the parquet reader prefetches
+    /// the footer with a single hint-sized range read instead of first probing the
+    /// footer length with a small (8-byte) request.
+    #[tokio::test]
+    async fn test_scan_applies_parquet_metadata_size_hint() -> TestResult {
+        use crate::delta_datafusion::DeltaSessionContext;
+        use crate::delta_datafusion::engine::AsObjectStoreUrl as _;
+        use crate::test_utils::object_store::{
+            RecordedObjectStoreOperation, RecordedPathKind, drain_recorded_object_store_operations,
+            recording_log_store,
+        };
+        use futures::TryStreamExt as _;
+
+        // The hint must be small enough to actually prefetch the footer of the single
+        // data file written below, yet large enough that delta-rs's parquet footer cache
+        // would already have to read past the tail of the file if it were consulted with
+        // the file's object size (`tail_bytes = max(footer+8, 16KB)`), so observing an
+        // end-of-file range read of exactly `METADATA_SIZE_HINT` bytes can only come
+        // from the parquet metadata prefetch.
+        const METADATA_SIZE_HINT: u64 = 4096;
+        const NUM_ROWS: i64 = 5000;
+
+        let arrow_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            arrow_schema,
+            vec![Arc::new(Int64Array::from_iter_values(0..NUM_ROWS))],
+        )?;
+        // Disable compression so the data file is guaranteed to be larger than the
+        // footer cache's minimum tail read (`max(footer+8, 16KB)`).
+        let writer_properties = parquet::file::properties::WriterProperties::builder()
+            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+            .build();
+        let table = crate::DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_writer_properties(writer_properties)
+            .await?;
+
+        let (log_store, mut operations) = recording_log_store(table.log_store());
+
+        let session =
+            DeltaSessionContext::new_with_session_overrides(&std::collections::HashMap::from([(
+                "datafusion.execution.parquet.metadata_size_hint".to_string(),
+                METADATA_SIZE_HINT.to_string(),
+            )]))?
+            .into_inner();
+        // Register the recording store for the table's root URL so data-file reads flow
+        // through it (the scan looks up stores in the runtime env by the files' fully
+        // qualified store URLs).
+        session.state().runtime_env().register_object_store(
+            log_store.root_url().as_object_store_url().as_ref(),
+            log_store.object_store(),
+        );
+
+        let provider = table.table_provider().await?;
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let batches = collect(scan, session.task_ctx()).await?;
+        assert_eq!(
+            batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            NUM_ROWS as usize
+        );
+
+        // Sanity: every written parquet file must be larger than the hint, so a hinted
+        // reader issues a bounded prefetch read of exactly `metadata_size_hint` bytes
+        // ending at the end of the file.
+        let parquet_sizes: Vec<u64> = log_store
+            .object_store()
+            .list(None)
+            .try_filter_map(|meta| async move {
+                Ok(meta
+                    .location
+                    .as_ref()
+                    .ends_with(".parquet")
+                    .then_some(meta.size))
+            })
+            .try_collect()
+            .await?;
+        assert!(!parquet_sizes.is_empty(), "expected written parquet files");
+        assert!(
+            parquet_sizes.iter().all(|&size| size > METADATA_SIZE_HINT),
+            "test precondition: parquet files must be larger than the metadata size hint, got {parquet_sizes:?}"
+        );
+        // Sanity: delta-rs's parquet footer cache would need to read the last
+        // `max(footer+8, 16KB)` bytes, so the files must be larger than that to keep the
+        // prefetch-read assertion below unambiguous.
+        const FOOTER_CACHE_MIN_TAIL_BYTES: u64 = 16 * 1024;
+        assert!(
+            parquet_sizes
+                .iter()
+                .all(|&size| size > FOOTER_CACHE_MIN_TAIL_BYTES),
+            "test precondition: parquet files must be larger than the footer cache's \
+             minimum tail read, got {parquet_sizes:?}"
+        );
+
+        let operations = drain_recorded_object_store_operations(&mut operations).await;
+        let has_prefetch_read = operations.iter().any(|op| {
+            let is_prefetch = |range: &std::ops::Range<u64>| {
+                range.end - range.start == METADATA_SIZE_HINT && parquet_sizes.contains(&range.end)
+            };
+            match op {
+                RecordedObjectStoreOperation::GetRange(kind, range)
+                    if matches!(kind, RecordedPathKind::Data | RecordedPathKind::Other) =>
+                {
+                    is_prefetch(range)
+                }
+                RecordedObjectStoreOperation::GetRanges(kind, ranges)
+                    if matches!(kind, RecordedPathKind::Data | RecordedPathKind::Other) =>
+                {
+                    ranges.iter().any(is_prefetch)
+                }
+                _ => false,
+            }
+        });
+        assert!(
+            has_prefetch_read,
+            "scans must propagate datafusion.execution.parquet.metadata_size_hint to the \
+             ParquetSource (https://github.com/delta-io/delta-rs/issues/4864); recorded operations: {operations:?}"
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_scan_public_file_id_uses_file_path_with_compact_internal_ids() -> TestResult {
         let table = TestTables::Simple.table_builder()?.load().await?;
@@ -1436,7 +1617,7 @@ mod tests {
             PartitionedFile::new("memory:///same.parquet", 0),
         ];
 
-        let _ = partitioned_files_to_file_groups_with_limit(files, 1);
+        let _ = partitioned_files_to_file_groups_with_limit(files, 1, 1);
     }
 
     #[test]

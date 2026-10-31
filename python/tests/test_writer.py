@@ -2305,18 +2305,26 @@ def test_write_stats_columns_stats_provided(tmp_path: pathlib.Path):
 @pytest.mark.parametrize(
     "array",
     [
-        lambda: __import__("pyarrow").array([[datetime(2010, 1, 1)]]),
-        lambda: __import__("pyarrow").array([{"foo": datetime(2010, 1, 1)}]),
-        lambda: __import__("pyarrow").array([{"foo": [[datetime(2010, 1, 1)]]}]),
-        lambda: __import__("pyarrow").array(
-            [{"foo": [[{"foo": datetime(2010, 1, 1)}]]}]
+        lambda pa: pa.array([[datetime(2010, 1, 1)]]),
+        lambda pa: pa.array([{"foo": datetime(2010, 1, 1)}]),
+        lambda pa: pa.array([{"foo": [[datetime(2010, 1, 1)]]}]),
+        lambda pa: pa.array([{"foo": [[{"foo": datetime(2010, 1, 1)}]]}]),
+        lambda pa: pa.array(
+            [[("k", datetime(2010, 1, 1))]], pa.map_(pa.string(), pa.timestamp("us"))
+        ),
+        lambda pa: pa.array(
+            [[(datetime(2010, 1, 1), "v")]], pa.map_(pa.timestamp("us"), pa.string())
+        ),
+        lambda pa: pa.array(
+            [[[("k", datetime(2010, 1, 1))]]],
+            pa.list_(pa.map_(pa.string(), pa.timestamp("us"))),
         ),
     ],
 )
 def test_write_timestamp_ntz_nested(tmp_path: pathlib.Path, array):
     import pyarrow as pa
 
-    data = pa.table({"x": array()})
+    data = pa.table({"x": array(pa)})
     write_deltalake(
         tmp_path,
         data,
@@ -2341,6 +2349,8 @@ def test_write_timestamp_ntz_nested(tmp_path: pathlib.Path, array):
         lambda pa, ts: pa.array([{"foo": ts}]),
         lambda pa, ts: pa.array([{"foo": [[ts]]}]),
         lambda pa, ts: pa.array([{"foo": [[{"foo": ts}]]}]),
+        lambda pa, ts: pa.array([[("k", ts)]], pa.map_(pa.string(), ts.type)),
+        lambda pa, ts: pa.array([[(ts, "v")]], pa.map_(ts.type, pa.string())),
     ],
 )
 def test_write_timestamp_nanos_nested(tmp_path: pathlib.Path, array):
@@ -2599,6 +2609,20 @@ def test_write_timestamp(tmp_path: pathlib.Path):
     # Now that a datetime has been passed through the writer version needs to
     # be upgraded to 7 to support timestampNtz
     assert protocol.min_writer_version == 2
+
+
+@pytest.mark.pyarrow
+def test_write_naive_timestamp_into_utc_timestamp_column(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    utc = pa.table({"t": pa.array([0], pa.timestamp("us", tz="UTC"))})
+    naive = pa.table({"t": pa.array([0], pa.timestamp("us"))})
+    write_deltalake(tmp_path, utc)
+
+    with pytest.raises(SchemaMismatchError, match="column `t` is timestamp_ntz"):
+        write_deltalake(tmp_path, naive, mode="append")
+
+    write_deltalake(tmp_path, naive, mode="append", schema_mode="merge")
 
 
 def test_write_transactions(tmp_path: pathlib.Path, sample_table: Table):
