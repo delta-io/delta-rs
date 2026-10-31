@@ -478,31 +478,39 @@ mod tests {
 
     #[test]
     fn test_large_in_list_converts_to_flat_junction() {
-        let n = 10_000i64;
-        let list: Vec<Expr> = (0..n).map(lit).collect();
-        let other = col("p").eq(lit(1));
-        for negated in [false, true] {
-            let in_list = col("id").in_list(list.clone(), negated);
-            let terms = (0..n).map(|i| {
-                let eq = Predicate::eq(
-                    Expression::Column(ColumnName::new(["id"])),
-                    Expression::Literal(Scalar::Long(i)),
-                );
-                if negated { Predicate::not(eq) } else { eq }
-            });
-            let expected = if negated {
-                Predicate::and_from(terms)
-            } else {
-                Predicate::or_from(terms)
-            };
-            assert_eq!(to_delta_predicate(&in_list).unwrap(), expected);
+        // Pin the stack to the 2 MiB default so RUST_MIN_STACK cannot hide a regression.
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let n = 10_000i64;
+                let list: Vec<Expr> = (0..n).map(lit).collect();
+                let other = col("p").eq(lit(1));
+                for negated in [false, true] {
+                    let in_list = col("id").in_list(list.clone(), negated);
+                    let terms = (0..n).map(|i| {
+                        let eq = Predicate::eq(
+                            Expression::Column(ColumnName::new(["id"])),
+                            Expression::Literal(Scalar::Long(i)),
+                        );
+                        if negated { Predicate::not(eq) } else { eq }
+                    });
+                    let expected = if negated {
+                        Predicate::and_from(terms)
+                    } else {
+                        Predicate::or_from(terms)
+                    };
+                    assert_eq!(to_delta_predicate(&in_list).unwrap(), expected);
 
-            let nested = other.clone().and(in_list);
-            assert_eq!(
-                to_delta_predicate(&nested).unwrap(),
-                Predicate::and_from([to_delta_predicate(&other).unwrap(), expected])
-            );
-        }
+                    let nested = other.clone().and(in_list);
+                    assert_eq!(
+                        to_delta_predicate(&nested).unwrap(),
+                        Predicate::and_from([to_delta_predicate(&other).unwrap(), expected])
+                    );
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]
