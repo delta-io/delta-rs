@@ -270,11 +270,13 @@ pub(crate) fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> Result<Scalar
             None => Ok(Scalar::Null(DataType::LONG)),
         },
         ScalarValue::Float32(maybe_value) => match maybe_value {
-            Some(value) => Ok(Scalar::Float(*value)),
+            // Normalize -0.0 to 0.0: SQL treats -0.0 == 0.0, while arrow's comparison kernels
+            // order -0.0 < 0.0 (delta-rs#4990).
+            Some(value) => Ok(Scalar::Float(if *value == 0.0 { 0.0 } else { *value })),
             None => Ok(Scalar::Null(DataType::FLOAT)),
         },
         ScalarValue::Float64(maybe_value) => match maybe_value {
-            Some(value) => Ok(Scalar::Double(*value)),
+            Some(value) => Ok(Scalar::Double(if *value == 0.0 { 0.0 } else { *value })),
             None => Ok(Scalar::Null(DataType::DOUBLE)),
         },
         ScalarValue::TimestampMicrosecond(maybe_value, Some(_)) => match maybe_value {

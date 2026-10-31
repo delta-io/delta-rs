@@ -15,15 +15,16 @@ use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion::execution::TaskContext;
-use delta_kernel::engine::arrow_expression::ArrowEvaluationHandler;
 use delta_kernel::plans::PlanExecutor;
 use delta_kernel::{Engine, EvaluationHandler, JsonHandler, ParquetHandler, StorageHandler};
 use tokio::runtime::Handle;
 
 use self::handlers::{PlanBasedJsonHandler, PlanBasedParquetHandler, PlanBasedStorageHandler};
+use self::normalizing::NormalizingEvaluationHandler;
 use crate::DataFusionPlanExecutor;
 
 mod handlers;
+mod normalizing;
 
 /// A kernel [`Engine`] backed by DataFusion, with every handler routed through the executor.
 ///
@@ -31,7 +32,7 @@ mod handlers;
 #[derive(Debug, Clone)]
 pub struct DataFusionEngine {
     executor: Arc<DataFusionPlanExecutor>,
-    evaluation: Arc<ArrowEvaluationHandler>,
+    evaluation: Arc<NormalizingEvaluationHandler>,
     storage: Arc<PlanBasedStorageHandler>,
     json: Arc<PlanBasedJsonHandler>,
     parquet: Arc<PlanBasedParquetHandler>,
@@ -58,7 +59,7 @@ impl DataFusionEngine {
     /// Creates an engine over an existing executor.
     pub fn from_executor(executor: Arc<DataFusionPlanExecutor>) -> Self {
         Self {
-            evaluation: Arc::new(ArrowEvaluationHandler),
+            evaluation: Arc::new(NormalizingEvaluationHandler::new()),
             storage: Arc::new(PlanBasedStorageHandler {
                 executor: executor.clone(),
             }),
@@ -81,6 +82,7 @@ impl DataFusionEngine {
 
 impl Engine for DataFusionEngine {
     fn evaluation_handler(&self) -> Arc<dyn EvaluationHandler> {
+        // Normalizes -0.0 to 0.0 in the data before predicate evaluation; see delta-rs#4990.
         self.evaluation.clone()
     }
 
