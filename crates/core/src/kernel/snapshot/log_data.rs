@@ -66,7 +66,7 @@ impl<'a> LogDataHandler<'a> {
         Self { data, config }
     }
 
-    pub(crate) fn table_configuration(&self) -> &TableConfiguration {
+    pub(crate) fn table_configuration(&self) -> &'a TableConfiguration {
         self.config
     }
 
@@ -117,7 +117,7 @@ mod datafusion {
     use ::datafusion::common::scalar::ScalarValue;
     use ::datafusion::physical_optimizer::pruning::PruningStatistics;
     use arrow::compute::concat;
-    use arrow_array::{Array, StringArray};
+    use arrow_array::{Array, Float32Array, Float64Array, StringArray};
     use arrow_array::{ArrayRef, BooleanArray, UInt64Array};
     use arrow_schema::DataType as ArrowDataType;
     use delta_kernel::expressions::Expression;
@@ -165,13 +165,58 @@ mod datafusion {
                 })
                 .try_collect()
                 .ok()?;
-            concat(
+            let concatenated = concat(
                 &results
                     .iter()
                     .map(|result| result.as_ref())
                     .collect::<Vec<_>>(),
             )
-            .ok()
+            .ok()?;
+
+            // Normalize -0.0 to 0.0 for float columns to prevent incorrect pruning.
+            // DataFusion's ScalarValue::partial_cmp uses total_cmp, which orders -0.0 < 0.0.
+            // When stats contain -0.0 as maxValues and the predicate is `col = 0`, the
+            // pruning check `0 <= -0.0` evaluates to false, incorrectly pruning the file.
+            // IEEE 754 and SQL treat -0.0 == 0.0, so normalizing is correct.
+            match concatenated.data_type() {
+                ArrowDataType::Float32 => {
+                    let arr = concatenated
+                        .as_any()
+                        .downcast_ref::<arrow_array::Float32Array>()?;
+                    let normalized: Float32Array = arr
+                        .iter()
+                        .map(|v| {
+                            v.map(|x| {
+                                if x == 0.0 && x.is_sign_negative() {
+                                    0.0
+                                } else {
+                                    x
+                                }
+                            })
+                        })
+                        .collect();
+                    Some(Arc::new(normalized))
+                }
+                ArrowDataType::Float64 => {
+                    let arr = concatenated
+                        .as_any()
+                        .downcast_ref::<arrow_array::Float64Array>()?;
+                    let normalized: Float64Array = arr
+                        .iter()
+                        .map(|v| {
+                            v.map(|x| {
+                                if x == 0.0 && x.is_sign_negative() {
+                                    0.0
+                                } else {
+                                    x
+                                }
+                            })
+                        })
+                        .collect();
+                    Some(Arc::new(normalized))
+                }
+                _ => Some(concatenated),
+            }
         }
 
         /// Evaluate the raw partition values for a `Binary`-typed partition column.

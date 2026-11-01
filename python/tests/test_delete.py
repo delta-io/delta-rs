@@ -6,6 +6,7 @@ import pytest
 from arro3.core import Array, DataType, Field, Table
 
 from deltalake import CommitProperties, write_deltalake
+from deltalake.exceptions import CommitFailedError
 from deltalake.query import QueryBuilder
 from deltalake.table import DeltaTable
 
@@ -292,3 +293,56 @@ def test_delete_partition_predicate_follows_sql_semantics(
     )
     assert sorted(remaining) == expected_remaining
     assert metrics["num_deleted_rows"] == 4 - len(expected_remaining)
+
+
+@pytest.mark.pyarrow
+def test_delete_without_predicate_conflicts_with_concurrent_merge(
+    tmp_path: pathlib.Path,
+):
+    """https://github.com/delta-io/delta-rs/issues/4985
+
+    A delete() without a predicate on a stale snapshot must conflict with an
+    insert-only merge committed after the snapshot was loaded, matching the
+    behavior of delete() with a predicate.
+    """
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, pa.table({"id": [1]}))
+    stale = DeltaTable(tmp_path)
+    (
+        DeltaTable(tmp_path)
+        .merge(
+            pa.table({"id": [1, 2]}),
+            "t.id = s.id",
+            source_alias="s",
+            target_alias="t",
+        )
+        .when_not_matched_insert_all()
+        .execute()
+    )
+
+    with pytest.raises(CommitFailedError):
+        stale.delete()
+
+
+@pytest.mark.pyarrow
+def test_delete_is_distinct_from_binds_tighter_than_and(tmp_path: pathlib.Path):
+    """https://github.com/delta-io/delta-rs/issues/4987
+
+    `f IS DISTINCT FROM TRUE AND id = 2` must parse as
+    `(f IS DISTINCT FROM TRUE) AND id = 2` so only id 2 is deleted.
+    """
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, pa.table({"id": [1, 2, 3], "f": [True, False, None]}))
+
+    DeltaTable(tmp_path).delete("f IS DISTINCT FROM TRUE AND id = 2")
+
+    remaining = (
+        QueryBuilder()
+        .register("tbl", DeltaTable(tmp_path))
+        .execute("select id from tbl")
+        .read_all()["id"]
+        .to_pylist()
+    )
+    assert sorted(remaining) == [1, 3]

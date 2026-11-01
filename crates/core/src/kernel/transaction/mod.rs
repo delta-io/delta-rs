@@ -100,7 +100,7 @@ use crate::kernel::{
 use crate::logstore::ObjectStoreRef;
 use crate::logstore::with_operation;
 use crate::logstore::{CommitOrBytes, CommitResponse, Committer, LogStoreRef, PayloadKind};
-use crate::protocol::{DeltaOperation, operation_parameter_value};
+use crate::protocol::{DeltaOperation, SaveMode, operation_parameter_value};
 use crate::protocol::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
@@ -835,8 +835,37 @@ impl<'a> IntoFuture for PreparedCommit<'a> {
                         }
                         Ok(CommitResponse::Conflict { .. })
                         | Err(TransactionError::VersionAlreadyExists(_)) => {
-                            // Table was created by another writer since the `table_data.is_none()`
-                            // check. Load the current table state and continue with the retry loop.
+                            // Table was created by another writer since the
+                            // `table_data.is_none()` check. A commit that initializes the table
+                            // (carries protocol and metadata actions) can never win this race:
+                            // re-committing those actions as the next version would silently
+                            // overwrite the winner's metadata without any conflict check, so the
+                            // loser must fail — or no-op for SaveMode::Ignore.
+                            let initializes_table = data.actions.iter().any(|action| {
+                                matches!(action, Action::Protocol(_) | Action::Metadata(_))
+                            });
+                            if initializes_table {
+                                if data.operation.save_mode() == Some(SaveMode::Ignore) {
+                                    let mut data = data;
+                                    data.actions
+                                        .retain(|action| matches!(action, Action::CommitInfo(_)));
+                                    return Ok(PostCommit {
+                                        version: log_store.get_latest_version(0).await?,
+                                        data,
+                                        create_checkpoint: false,
+                                        cleanup_expired_logs: None,
+                                        log_store,
+                                        table_data: None,
+                                        metrics: CommitMetrics { num_retries: 0 },
+                                    });
+                                }
+                                return Err(DeltaTableError::Generic(
+                                    "A Delta table was created concurrently at this location; \
+                                     refusing to commit table initialization over it"
+                                        .to_string(),
+                                ));
+                            }
+                            // Load the current table state and continue with the retry loop.
                             debug!("version 0 already exists, loading table state for retry");
                             attempt_number = 2;
                             let latest_version: Version = log_store.get_latest_version(0).await?;
@@ -1076,31 +1105,48 @@ impl PostCommit {
                 // File-only work runs in a sibling scope. The operation-scoped store forwards
                 // `begin_operation` to its parent, so on an isolating backend this is a second
                 // isolated write set that is published on success and discarded on error.
-                let (checkpoint_created, files_cleaned_up) =
-                    with_operation(&self.log_store, |log_store| async move {
-                        let mut checkpoint_created = false;
-                        if create_checkpoint {
-                            checkpoint_created =
-                                maybe_create_checkpoint(checkpoint_interval, version, &log_store)
-                                    .await?;
-                        }
-                        let mut files_cleaned_up: u64 = 0;
-                        if cleanup_logs {
-                            files_cleaned_up = cleanup_expired_logs_for(
-                                version,
-                                log_store.as_ref(),
-                                cutoff_timestamp,
-                            )
-                            .await? as u64;
-                        }
-                        Ok((checkpoint_created, files_cleaned_up))
-                    })
-                    .await?;
+                // Checkpoint creation and log cleanup are best-effort maintenance: the commit
+                // itself is already durable, so a failure here must not fail the write.
+                let maintenance = with_operation(&self.log_store, |log_store| async move {
+                    let mut checkpoint_created = false;
+                    if create_checkpoint {
+                        checkpoint_created =
+                            maybe_create_checkpoint(checkpoint_interval, version, &log_store)
+                                .await?;
+                    }
+                    let mut files_cleaned_up: u64 = 0;
+                    if cleanup_logs {
+                        files_cleaned_up =
+                            cleanup_expired_logs_for(version, log_store.as_ref(), cutoff_timestamp)
+                                .await? as u64;
+                    }
+                    Ok((checkpoint_created, files_cleaned_up))
+                })
+                .await;
 
-                new_checkpoint_created = checkpoint_created;
-                num_log_files_cleaned_up = files_cleaned_up;
+                match maintenance {
+                    Ok((checkpoint_created, files_cleaned_up)) => {
+                        new_checkpoint_created = checkpoint_created;
+                        num_log_files_cleaned_up = files_cleaned_up;
+                    }
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            "post-commit checkpoint or log cleanup failed; the commit itself is durable, continuing"
+                        );
+                    }
+                }
                 if num_log_files_cleaned_up > 0 {
-                    state = DeltaTableState::try_new(&self.log_store, Some(self.version)).await?;
+                    // The reload only refreshes the in-memory view after cleanup. The commit is
+                    // durable, so a failed reload keeps the pre-cleanup state rather than failing
+                    // the write.
+                    match DeltaTableState::try_new(&self.log_store, Some(self.version)).await {
+                        Ok(refreshed) => state = refreshed,
+                        Err(err) => warn!(
+                            error = %err,
+                            "reloading table state after log cleanup failed; the commit is durable, continuing"
+                        ),
+                    }
                 }
             }
 

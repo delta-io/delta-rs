@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import DeltaTable, QueryBuilder, write_deltalake
 
 
 @pytest.mark.pandas
@@ -259,3 +259,40 @@ def test_stats_columns_after_excluded_struct(tmp_path: pathlib.Path) -> None:
     assert actions["min"][0].as_py() == {"a": 1, "b": 3}
     assert actions["max"][0].as_py() == {"a": 2, "b": 4}
     assert actions["null_count"][0].as_py() == {"a": 0, "b": 0}
+
+
+@pytest.mark.pyarrow
+def test_file_skipping_with_negative_zero_max_values(tmp_path: pathlib.Path):
+    """https://github.com/delta-io/delta-rs/issues/4990
+
+    delta-spark 4.4.1 writes "maxValues":{"f":-0.0} for a file holding -0.0 and
+    0.0; a file whose float maxValues is -0.0 must not be skipped for `f = 0`.
+    The add action's stats are rewritten to what delta-spark stores.
+    """
+    import json
+
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, pa.table({"id": [1, 2], "f": [-0.0, 0.0]}))
+
+    log_path = tmp_path / "_delta_log" / "00000000000000000000.json"
+    lines = []
+    for line in log_path.read_text().splitlines():
+        payload = json.loads(line)
+        if "add" in payload and payload["add"].get("stats"):
+            stats = json.loads(payload["add"]["stats"])
+            stats["maxValues"]["f"] = -0.0
+            payload["add"]["stats"] = json.dumps(stats, separators=(",", ":"))
+        lines.append(json.dumps(payload, separators=(",", ":")))
+    log_path.write_text("\n".join(lines) + "\n")
+
+    matched = (
+        QueryBuilder()
+        .register("tbl", DeltaTable(tmp_path))
+        .execute("select id from tbl where f = 0 order by id")
+        .read_all()["id"]
+        .to_pylist()
+    )
+    assert matched == [1, 2]
+
+    assert DeltaTable(tmp_path).delete("f = 0")["num_deleted_rows"] == 2
