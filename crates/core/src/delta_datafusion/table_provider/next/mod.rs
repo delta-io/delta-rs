@@ -1146,6 +1146,30 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_query_variant_shredded_table_issue_4954() -> TestResult {
+        // Spark-written table with variantShredding-preview and typed_value
+        // children for id, message, active, and tags (see issue #4954).
+        let url = Url::from_directory_path(
+            std::path::Path::new("../test/tests/data/variant-shredded-issue-4954")
+                .canonicalize()?,
+        )
+        .map_err(|_| crate::DeltaTableError::InvalidTableLocation("variant fixture".into()))?;
+        let table = crate::DeltaTableBuilder::from_url(url)?.load().await?;
+        let provider = DeltaScan::builder()
+            .with_snapshot(table.snapshot()?.snapshot().snapshot().clone())
+            .await?;
+
+        let session = Arc::new(create_session().into_inner());
+        session.register_table("variant_table", provider)?;
+
+        let df = session.sql("SELECT * FROM variant_table").await?;
+        let batches = df.collect().await?;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+
+        Ok(())
+    }
+
     async fn build_insert_input(
         state: &dyn Session,
         schema: SchemaRef,
