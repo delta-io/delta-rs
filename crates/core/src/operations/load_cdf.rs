@@ -706,6 +706,35 @@ impl CdfLoadBuilder {
     }
 }
 
+/// Build a human-readable guidance string naming the current retention knobs,
+/// for use in `DeltaTableError::ChangeDataFileNotFound.retention_guidance` when
+/// a CDF scan hits an object-store NotFound on a file that `VACUUM` removed
+/// past `delta.deletedFileRetentionDuration` while the referencing commit log
+/// entry remained within `delta.logRetentionDuration`.
+///
+/// The exact mapping of raw object-store NotFound to this typed error is a
+/// follow-up (see issue #3392 discussion): the mapping needs to happen inside
+/// the execution-time stream, since the file read failure surfaces during
+/// `ExecutionPlan::execute()` rather than at plan construction. This helper
+/// exists so the error constructor already carries actionable context.
+pub fn cdf_retention_guidance(snapshot: &EagerSnapshot) -> String {
+    let config = snapshot.table_configuration().table_properties();
+    let dfr = config
+        .deleted_file_retention_duration
+        .map(|d| format!("{:?}", d))
+        .unwrap_or_else(|| "interval 7 days (default)".to_string());
+    let lr = config
+        .log_retention_duration
+        .map(|d| format!("{:?}", d))
+        .unwrap_or_else(|| "interval 30 days (default)".to_string());
+    format!(
+        "Current settings: deletedFileRetentionDuration={dfr}, logRetentionDuration={lr}. \
+         To enable this CDF read, either (1) raise deletedFileRetentionDuration to match or \
+         exceed logRetentionDuration before the next VACUUM, or (2) start the CDF read at a \
+         later version whose data files are still within the deletedFileRetentionDuration window."
+    )
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1910,5 +1939,53 @@ pub(crate) mod tests {
         );
 
         Ok(())
+    }
+
+    /// Unit test for the `ChangeDataFileNotFound` error variant added for #3392.
+    ///
+    /// Validates that the error carries actionable context (version + path +
+    /// retention guidance) in its Display message so a user hitting the raw
+    /// object-store NotFound during CDF read gets guidance on which retention
+    /// knob to adjust rather than a bare parquet error.
+    #[test]
+    fn test_change_data_file_not_found_error_message_has_actionable_context() {
+        let err = DeltaTableError::ChangeDataFileNotFound {
+            version: 1,
+            path: "part-00000-abc-c000.snappy.parquet".to_string(),
+            retention_guidance: "Current settings: deletedFileRetentionDuration=5s, \
+                 logRetentionDuration=10s. To enable this CDF read, either (1) raise \
+                 deletedFileRetentionDuration to match or exceed logRetentionDuration \
+                 before the next VACUUM, or (2) start the CDF read at a later version \
+                 whose data files are still within the deletedFileRetentionDuration window."
+                .to_string(),
+        };
+
+        let msg = format!("{err}");
+
+        // Message must name the version so the user knows which commit the
+        // missing file was first referenced from.
+        assert!(
+            msg.contains("version 1"),
+            "error must name the version, got: {msg}"
+        );
+        // Message must name the missing path.
+        assert!(
+            msg.contains("part-00000-abc-c000.snappy.parquet"),
+            "error must name the missing path, got: {msg}"
+        );
+        // Message must point at VACUUM so the user knows the proximate cause.
+        assert!(
+            msg.contains("VACUUM"),
+            "error must mention VACUUM, got: {msg}"
+        );
+        // Message must mention both retention knobs so the user knows what to tune.
+        assert!(
+            msg.contains("deletedFileRetentionDuration"),
+            "error must mention deletedFileRetentionDuration, got: {msg}"
+        );
+        assert!(
+            msg.contains("logRetentionDuration"),
+            "error must mention logRetentionDuration, got: {msg}"
+        );
     }
 }
