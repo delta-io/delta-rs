@@ -184,6 +184,7 @@ impl CdfLoadBuilder {
         Vec<CdcDataSpec<Add>>,
         Vec<CdcDataSpec<Remove>>,
         Vec<ResolvedPair>,
+        HashMap<String, Version>,
     )> {
         if self.starting_version.is_none() && self.starting_timestamp.is_none() {
             return Err(DeltaTableError::NoStartingVersionOrTimestamp);
@@ -198,12 +199,22 @@ impl CdfLoadBuilder {
         let mut add_files: Vec<CdcDataSpec<Add>> = Vec::new();
         let mut remove_files: Vec<CdcDataSpec<Remove>> = Vec::new();
         let mut resolved_pairs: Vec<ResolvedPair> = Vec::new();
+        // path -> first version that referenced it, used by CdfErrorMappingExec
+        // to attribute object-store NotFound errors to the originating commit
+        // when VACUUM deleted the file past deletedFileRetentionDuration.
+        let mut path_to_version: HashMap<String, Version> = HashMap::new();
 
         // Start from 0 since if start > latest commit, the returned commit is not a valid commit
         let latest_version = match self.log_store.get_latest_version(start).await {
             Ok(latest_version) => latest_version,
             Err(DeltaTableError::InvalidVersion(_)) if self.allow_out_of_range => {
-                return Ok((change_files, add_files, remove_files, resolved_pairs));
+                return Ok((
+                    change_files,
+                    add_files,
+                    remove_files,
+                    resolved_pairs,
+                    path_to_version,
+                ));
             }
             Err(e) => return Err(e),
         };
@@ -216,14 +227,26 @@ impl CdfLoadBuilder {
 
         if end < start {
             return if self.allow_out_of_range {
-                Ok((change_files, add_files, remove_files, resolved_pairs))
+                Ok((
+                    change_files,
+                    add_files,
+                    remove_files,
+                    resolved_pairs,
+                    path_to_version,
+                ))
             } else {
                 Err(DeltaTableError::ChangeDataInvalidVersionRange { start, end })
             };
         }
         if start > latest_version {
             return if self.allow_out_of_range {
-                Ok((change_files, add_files, remove_files, resolved_pairs))
+                Ok((
+                    change_files,
+                    add_files,
+                    remove_files,
+                    resolved_pairs,
+                    path_to_version,
+                ))
             } else {
                 Err(DeltaTableError::InvalidVersion(start))
             };
@@ -254,7 +277,13 @@ impl CdfLoadBuilder {
             && starting_timestamp.timestamp_millis() > *latest_timestamp
         {
             return if self.allow_out_of_range {
-                Ok((change_files, add_files, remove_files, resolved_pairs))
+                Ok((
+                    change_files,
+                    add_files,
+                    remove_files,
+                    resolved_pairs,
+                    path_to_version,
+                ))
             } else {
                 Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit { ending_timestamp })
             };
@@ -341,6 +370,9 @@ impl CdfLoadBuilder {
                     "Located {} cdf actions for version: {version}",
                     cdc_actions.len(),
                 );
+                for a in &cdc_actions {
+                    path_to_version.entry(a.path.clone()).or_insert(version);
+                }
                 change_files.push(CdcDataSpec::new(version, ts, cdc_actions))
             } else {
                 let mut removes_by_path: HashMap<String, Remove> = remove_actions
@@ -350,6 +382,7 @@ impl CdfLoadBuilder {
                 let mut unpaired_adds: Vec<Add> = Vec::with_capacity(add_actions.len());
                 for add in add_actions {
                     if let Some(remove) = removes_by_path.remove(&add.path) {
+                        path_to_version.entry(add.path.clone()).or_insert(version);
                         resolved_pairs.push(ResolvedPair {
                             version,
                             timestamp: ts,
@@ -367,6 +400,9 @@ impl CdfLoadBuilder {
                         "Located {} add cdf actions for version: {version}",
                         unpaired_adds.len()
                     );
+                    for a in &unpaired_adds {
+                        path_to_version.entry(a.path.clone()).or_insert(version);
+                    }
                     add_files.push(CdcDataSpec::new(version, ts, unpaired_adds));
                 }
 
@@ -375,6 +411,9 @@ impl CdfLoadBuilder {
                         "Located {} remove cdf actions for version: {version}",
                         remove_actions.len()
                     );
+                    for r in &remove_actions {
+                        path_to_version.entry(r.path.clone()).or_insert(version);
+                    }
                     remove_files.push(CdcDataSpec::new(version, ts, remove_actions));
                 }
             }
@@ -386,7 +425,13 @@ impl CdfLoadBuilder {
             remove_files = prune_specs_by_partition(remove_files, partition_pruning)?;
         }
 
-        Ok((change_files, add_files, remove_files, resolved_pairs))
+        Ok((
+            change_files,
+            add_files,
+            remove_files,
+            resolved_pairs,
+            path_to_version,
+        ))
     }
 
     #[inline]
@@ -560,7 +605,7 @@ impl CdfLoadBuilder {
 
         let partition_pruning =
             self.partition_pruning_predicate(session, &schema, partition_values)?;
-        let (cdc, add, remove, pairs) = self
+        let (cdc, add, remove, pairs, path_to_version) = self
             .determine_files_to_read(&snapshot, partition_pruning.as_ref())
             .await?;
         session.ensure_log_store_registered(self.log_store.as_ref())?;
@@ -702,8 +747,218 @@ impl CdfLoadBuilder {
 
         let scan = Arc::new(ProjectionExec::try_new(expressions, union_scan)?);
 
-        Ok(scan)
+        // Wrap the final scan with CdfErrorMappingExec so object-store NotFound
+        // errors on data files vacuumed past `delta.deletedFileRetentionDuration`
+        // surface as the typed `DeltaTableError::ChangeDataFileNotFound` with
+        // version + retention guidance, instead of a raw ParquetError that gives
+        // no hint about VACUUM or retention. See issue #3392.
+        let retention_guidance = cdf_retention_guidance(&snapshot);
+        let wrapped: Arc<dyn ExecutionPlan> = Arc::new(CdfErrorMappingExec::new(
+            scan,
+            Arc::new(path_to_version),
+            retention_guidance,
+        ));
+        Ok(wrapped)
     }
+}
+
+/// ExecutionPlan wrapper that remaps object-store NotFound errors from the CDF
+/// data-file scan to a typed `DeltaTableError::ChangeDataFileNotFound` with
+/// version + retention context. All other errors pass through unchanged.
+///
+/// Context is supplied by the caller: a `path -> version` map built during
+/// `determine_files_to_read` names which commit first referenced each file,
+/// and a `retention_guidance` string names the current retention knobs with
+/// concrete fix advice.
+///
+/// This is the companion to the typed error variant added in #4925; see the
+/// discussion on issue #3392 for the design rationale (mapping at the plan
+/// boundary vs inside the parquet reader factory).
+#[derive(Debug)]
+pub(crate) struct CdfErrorMappingExec {
+    input: Arc<dyn ExecutionPlan>,
+    path_to_version: Arc<HashMap<String, Version>>,
+    retention_guidance: Arc<str>,
+}
+
+impl CdfErrorMappingExec {
+    pub(crate) fn new(
+        input: Arc<dyn ExecutionPlan>,
+        path_to_version: Arc<HashMap<String, Version>>,
+        retention_guidance: String,
+    ) -> Self {
+        Self {
+            input,
+            path_to_version,
+            retention_guidance: Arc::from(retention_guidance),
+        }
+    }
+}
+
+impl datafusion::physical_plan::DisplayAs for CdfErrorMappingExec {
+    fn fmt_as(
+        &self,
+        _t: datafusion::physical_plan::DisplayFormatType,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(f, "CdfErrorMappingExec")
+    }
+}
+
+impl ExecutionPlan for CdfErrorMappingExec {
+    fn name(&self) -> &str {
+        "CdfErrorMappingExec"
+    }
+
+    fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
+        self.input.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            path_to_version: Arc::clone(&self.path_to_version),
+            retention_guidance: Arc::clone(&self.retention_guidance),
+        }))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            datafusion::physical_plan::ReplaceChildrenOptions::new(
+                datafusion::physical_plan::ChildrenPropertiesMode::Recompute,
+            ),
+        )
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<datafusion::execution::TaskContext>,
+    ) -> datafusion::common::Result<datafusion::execution::SendableRecordBatchStream> {
+        use futures::StreamExt;
+
+        let stream = self.input.execute(partition, context)?;
+        let schema = stream.schema();
+        let path_to_version = Arc::clone(&self.path_to_version);
+        let retention_guidance = Arc::clone(&self.retention_guidance);
+
+        let mapped = stream.map(move |item| match item {
+            Ok(batch) => Ok(batch),
+            Err(err) => Err(remap_cdf_error(
+                err,
+                path_to_version.as_ref(),
+                retention_guidance.as_ref(),
+            )),
+        });
+
+        Ok(Box::pin(
+            datafusion::physical_plan::stream::RecordBatchStreamAdapter::new(schema, mapped),
+        ))
+    }
+
+    fn apply_expressions(
+        &self,
+        _visit: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+        ) -> datafusion::common::Result<
+            datafusion::common::tree_node::TreeNodeRecursion,
+        >,
+    ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+        Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+    }
+}
+
+/// If `err` is (or wraps) an object-store NotFound on a path that appears in
+/// `path_to_version`, convert it to the typed `ChangeDataFileNotFound` variant.
+/// All other errors pass through unchanged.
+fn remap_cdf_error(
+    err: datafusion::common::DataFusionError,
+    path_to_version: &HashMap<String, Version>,
+    retention_guidance: &str,
+) -> datafusion::common::DataFusionError {
+    use datafusion::common::DataFusionError;
+    use object_store::Error as ObjectStoreError;
+
+    // Walk the error chain for an object-store NotFound.
+    // DataFusionError::ObjectStore wraps a Box<object_store::Error>, so deref.
+    let not_found_path: Option<String> = match &err {
+        DataFusionError::ObjectStore(boxed) => match boxed.as_ref() {
+            ObjectStoreError::NotFound { path, .. } => Some(path.clone()),
+            _ => None,
+        },
+        DataFusionError::External(e) => {
+            if let Some(os_err) = e.downcast_ref::<ObjectStoreError>()
+                && let ObjectStoreError::NotFound { path, .. } = os_err
+            {
+                Some(path.clone())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
+    let Some(path) = not_found_path else {
+        return err;
+    };
+
+    // Object-store paths may be absolute or relative; our map keys are the
+    // relative paths from Add/Remove/AddCDCFile actions. Match by suffix.
+    let version = path_to_version
+        .iter()
+        .find_map(|(k, v)| if path.ends_with(k) { Some(*v) } else { None })
+        .unwrap_or(0);
+
+    DataFusionError::External(Box::new(DeltaTableError::ChangeDataFileNotFound {
+        version,
+        path,
+        retention_guidance: retention_guidance.to_string(),
+    }))
+}
+
+/// Build a human-readable guidance string naming the current retention knobs,
+/// for use in `DeltaTableError::ChangeDataFileNotFound.retention_guidance` when
+/// a CDF scan hits an object-store NotFound on a file that `VACUUM` removed
+/// past `delta.deletedFileRetentionDuration` while the referencing commit log
+/// entry remained within `delta.logRetentionDuration`.
+///
+/// The exact mapping of raw object-store NotFound to this typed error is a
+/// follow-up (see issue #3392 discussion): the mapping needs to happen inside
+/// the execution-time stream, since the file read failure surfaces during
+/// `ExecutionPlan::execute()` rather than at plan construction. This helper
+/// exists so the error constructor already carries actionable context.
+pub fn cdf_retention_guidance(snapshot: &EagerSnapshot) -> String {
+    let config = snapshot.table_configuration().table_properties();
+    let dfr = config
+        .deleted_file_retention_duration
+        .map(|d| format!("{:?}", d))
+        .unwrap_or_else(|| "interval 7 days (default)".to_string());
+    let lr = config
+        .log_retention_duration
+        .map(|d| format!("{:?}", d))
+        .unwrap_or_else(|| "interval 30 days (default)".to_string());
+    format!(
+        "Current settings: deletedFileRetentionDuration={dfr}, logRetentionDuration={lr}. \
+         To enable this CDF read, either (1) raise deletedFileRetentionDuration to match or \
+         exceed logRetentionDuration before the next VACUUM, or (2) start the CDF read at a \
+         later version whose data files are still within the deletedFileRetentionDuration window."
+    )
 }
 
 #[cfg(test)]
@@ -1910,5 +2165,53 @@ pub(crate) mod tests {
         );
 
         Ok(())
+    }
+
+    /// Unit test for the `ChangeDataFileNotFound` error variant added for #3392.
+    ///
+    /// Validates that the error carries actionable context (version + path +
+    /// retention guidance) in its Display message so a user hitting the raw
+    /// object-store NotFound during CDF read gets guidance on which retention
+    /// knob to adjust rather than a bare parquet error.
+    #[test]
+    fn test_change_data_file_not_found_error_message_has_actionable_context() {
+        let err = DeltaTableError::ChangeDataFileNotFound {
+            version: 1,
+            path: "part-00000-abc-c000.snappy.parquet".to_string(),
+            retention_guidance: "Current settings: deletedFileRetentionDuration=5s, \
+                 logRetentionDuration=10s. To enable this CDF read, either (1) raise \
+                 deletedFileRetentionDuration to match or exceed logRetentionDuration \
+                 before the next VACUUM, or (2) start the CDF read at a later version \
+                 whose data files are still within the deletedFileRetentionDuration window."
+                .to_string(),
+        };
+
+        let msg = format!("{err}");
+
+        // Message must name the version so the user knows which commit the
+        // missing file was first referenced from.
+        assert!(
+            msg.contains("version 1"),
+            "error must name the version, got: {msg}"
+        );
+        // Message must name the missing path.
+        assert!(
+            msg.contains("part-00000-abc-c000.snappy.parquet"),
+            "error must name the missing path, got: {msg}"
+        );
+        // Message must point at VACUUM so the user knows the proximate cause.
+        assert!(
+            msg.contains("VACUUM"),
+            "error must mention VACUUM, got: {msg}"
+        );
+        // Message must mention both retention knobs so the user knows what to tune.
+        assert!(
+            msg.contains("deletedFileRetentionDuration"),
+            "error must mention deletedFileRetentionDuration, got: {msg}"
+        );
+        assert!(
+            msg.contains("logRetentionDuration"),
+            "error must mention logRetentionDuration, got: {msg}"
+        );
     }
 }
