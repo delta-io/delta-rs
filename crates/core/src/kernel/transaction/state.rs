@@ -13,6 +13,7 @@ use crate::delta_datafusion::{
     Expression, create_session, get_null_of_arrow_type, to_correct_scalar_value,
 };
 use crate::errors::DeltaResult;
+use crate::kernel::snapshot::ceil_timestamps;
 use crate::kernel::{Add, EagerSnapshot};
 
 pub struct AddContainer<'a> {
@@ -117,7 +118,11 @@ impl PruningStatistics for AddContainer<'_> {
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.get_prune_stats(column, true)
+        let max = self.get_prune_stats(column, true)?;
+        if self.partition_columns.contains(&column.name) {
+            return Some(max);
+        }
+        Some(ceil_timestamps(max))
     }
 
     /// return the number of containers (e.g. row groups) being
@@ -233,6 +238,8 @@ mod tests {
     use crate::table::state::DeltaTableState;
     use crate::test_utils::{ActionFactory, TestSchemas};
 
+    use super::*;
+
     fn init_table_actions() -> Vec<Action> {
         vec![
             ActionFactory::protocol(None, None, None::<Vec<_>>, None::<Vec<_>>).into(),
@@ -271,6 +278,29 @@ mod tests {
             .gt(lit::<i64>(10))
             .or(col("value").lt_eq(lit::<i64>(0)));
         assert_eq!(parsed, expected)
+    }
+
+    #[tokio::test]
+    async fn test_timestamp_max_cut_to_milliseconds_keeps_file() {
+        // This file holds 22:59:32.846706, but its max statistic is 22:59:32.846.
+        let file = "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet";
+        let path = std::fs::canonicalize("../test/tests/data/delta-stats-optional").unwrap();
+        let table = crate::open_table(url::Url::from_directory_path(path).unwrap())
+            .await
+            .unwrap();
+        let log_data = table.snapshot().unwrap().log_data();
+        let max = ScalarValue::TimestampMicrosecond(Some(1666652372846000), Some("UTC".into()));
+        let predicate = col("timestamp").gt(lit(max));
+
+        let mut files =
+            files_matching_predicate(log_data.clone(), std::slice::from_ref(&predicate)).unwrap();
+        assert!(files.any(|add| add.path == file));
+
+        let adds = log_data.iter().map(|f| f.to_add()).collect();
+        let partition_columns = vec![];
+        let container = AddContainer::new(&adds, &partition_columns, log_data.read_schema());
+        let mut files = container.predicate_matches(predicate).unwrap();
+        assert!(files.any(|add| add.path == file));
     }
 
     #[tokio::test]
