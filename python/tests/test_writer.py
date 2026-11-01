@@ -2504,6 +2504,47 @@ def test_predicate_out_of_bounds(tmp_path: pathlib.Path):
     )
 
 
+@pytest.mark.pyarrow
+@pytest.mark.parametrize(
+    "predicate",
+    ["id = 2.5", "id < 2.5", "id > 2.5", "id BETWEEN 1.5 AND 2.5", "id IN (2.5)"],
+)
+def test_overwrite_predicate_does_not_truncate_float_literal(
+    tmp_path: pathlib.Path, predicate: str
+):
+    """A float literal compared with an integer column must not be cast to the column type.
+
+    Truncating `2.5` to `2` made `id = 2.5` remove the rows where `id` is 2.
+    """
+    import pyarrow as pa
+
+    ids = pa.array([1, 2, 3], pa.int64())
+    write_deltalake(tmp_path, pa.table({"id": ids, "v": [1.0, 2.0, 3.0]}))
+
+    empty = pa.table({"id": pa.array([], pa.int64()), "v": pa.array([], pa.float64())})
+    try:
+        write_deltalake(tmp_path, empty, mode="overwrite", predicate=predicate)
+    except DeltaError:
+        pass  # refusing the write is acceptable, losing rows is not
+
+    remaining = DeltaTable(tmp_path).to_pyarrow_table().column("id").to_pylist()
+    assert sorted(remaining) == [1, 2, 3]
+
+
+@pytest.mark.pyarrow
+def test_overwrite_predicate_accepts_whole_float_literal(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    ids = pa.array([1, 2, 3], pa.int64())
+    write_deltalake(tmp_path, pa.table({"id": ids, "v": [1.0, 2.0, 3.0]}))
+
+    empty = pa.table({"id": pa.array([], pa.int64()), "v": pa.array([], pa.float64())})
+    write_deltalake(tmp_path, empty, mode="overwrite", predicate="id = 2.0")
+
+    remaining = DeltaTable(tmp_path).to_pyarrow_table().column("id").to_pylist()
+    assert sorted(remaining) == [1, 3]
+
+
 @pytest.mark.pandas
 def test_write_timestampntz(tmp_path: pathlib.Path):
     import pandas as pd

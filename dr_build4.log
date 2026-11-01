@@ -1,0 +1,30 @@
+--- Setup dependencies ---
+uv sync --no-install-project --all-extras
+Resolved 107 packages in 4ms
+Uninstalled 1 package in 0.76ms
+ - deltalake==1.6.5 (from file:///workspace/oss-agentic/dr/python)
+--- Develop with Python binding with profile: dev ---
+uvx --from 'maturin[zig]' maturin develop --uv --profile dev 
+📦 Including license file `LICENSE.txt`
+🍹 Building a mixed python/rust project
+🐍 Found CPython 3.12 at /workspace/oss-agentic/dr/python/.venv/bin/python
+🔗 Found pyo3 bindings with abi3-py3.11 support
+Checked 4 packages in 1ms
+Resolved 35 packages in 14ms
+Checked 35 packages in 0.24ms
+   Compiling deltalake-core v2.0.0 (/workspace/oss-agentic/dr/crates/core)
+   Compiling deltalake-azure v2.0.0 (/workspace/oss-agentic/dr/crates/azure)
+   Compiling deltalake-aws v2.0.0 (/workspace/oss-agentic/dr/crates/aws)
+   Compiling deltalake-gcp v2.0.0 (/workspace/oss-agentic/dr/crates/gcp)
+   Compiling deltalake-catalog-glue v2.0.0 (/workspace/oss-agentic/dr/crates/catalog-glue)
+   Compiling deltalake-hdfs v2.0.0 (/workspace/oss-agentic/dr/crates/hdfs)
+   Compiling deltalake-opendal v2.0.0 (/workspace/oss-agentic/dr/crates/opendal)
+   Compiling deltalake-lakefs v2.0.0 (/workspace/oss-agentic/dr/crates/lakefs)
+   Compiling deltalake-catalog-unity v2.0.0 (/workspace/oss-agentic/dr/crates/catalog-unity)
+   Compiling deltalake-mount v2.0.0 (/workspace/oss-agentic/dr/crates/mount)
+   Compiling deltalake v2.0.0 (/workspace/oss-agentic/dr/crates/deltalake)
+   Compiling deltalake-python v1.6.5 (/workspace/oss-agentic/dr/python)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 24.08s
+📦 Built wheel for abi3 Python ≥ 3.11 to /tmp/.tmpsZSZYi/deltalake-1.6.5-cp311-abi3-linux_x86_64.whl
+✏️ Setting installed package as editable
+🛠 Installed deltalake-1.6.5
