@@ -67,6 +67,7 @@ nav:
       - Writing a table:
           - usage/writing/index.md
           - usage/writing/writing-to-s3-with-locking-provider.md
+      - Environment variables: usage/environment-variables.md
       - Deleting rows from a table: usage/deleting-rows-from-delta-lake-table.md
       - Best practices: usage/delta-lake-best-practices.md
       - Optimize:
