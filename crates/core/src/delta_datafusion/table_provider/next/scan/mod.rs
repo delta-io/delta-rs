@@ -382,15 +382,9 @@ async fn replay_files(
         }
     }
 
-    let transforms: HashMap<_, _> = files
-        .iter_mut()
-        .enumerate()
-        .flat_map(|(file_index, file)| {
-            file.transform
-                .take()
-                .map(|t| (compact_internal_file_id(file_index), t))
-        })
-        .collect();
+    // Intern equivalent transforms so files that share partition / column-mapping
+    // behavior reuse one Expression allocation (#4523).
+    let transforms = intern_scan_transforms(&mut files);
 
     let dv_stream = stream.dv_stream.build();
     let dvs_by_url: HashMap<_, _> = dv_stream
@@ -798,6 +792,32 @@ type FilesByStore = (
     bool,
     Option<Arc<FileMetadataCache>>,
 );
+
+/// Deduplicate equivalent per-file transforms by structural equality.
+///
+/// Partitioned scans historically retained one [`Expression`] tree per file even when
+/// many files shared the same partition values and column-mapping transform. Interning
+/// keeps the compact file-id → transform map but shares the underlying allocations.
+fn intern_scan_transforms(files: &mut [ScanFileContext]) -> HashMap<String, Arc<Expression>> {
+    let mut unique: Vec<Arc<Expression>> = Vec::new();
+    files
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(file_index, file)| {
+            let transform = file.transform.take()?;
+            let shared = if let Some(existing) = unique
+                .iter()
+                .find(|candidate| candidate.as_ref() == transform.as_ref())
+            {
+                Arc::clone(existing)
+            } else {
+                unique.push(Arc::clone(&transform));
+                transform
+            };
+            Some((compact_internal_file_id(file_index), shared))
+        })
+        .collect()
+}
 
 fn compact_internal_file_id(file_index: usize) -> String {
     file_index.to_string()
@@ -1582,6 +1602,49 @@ mod tests {
             &[true, false, true]
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_intern_scan_transforms_shares_equal_expressions() {
+        use delta_kernel::expressions::Scalar;
+
+        let shared_expr = Arc::new(Expression::literal(Scalar::Integer(7)));
+        let other_expr = Arc::new(Expression::literal(Scalar::Integer(8)));
+
+        let mut files = vec![
+            {
+                let mut f = scan_file_context("s3://bucket/part=a/f1.parquet");
+                f.transform = Some(Arc::clone(&shared_expr));
+                f
+            },
+            {
+                let mut f = scan_file_context("s3://bucket/part=a/f2.parquet");
+                // Equal content, distinct allocation — must intern onto the first Arc.
+                f.transform = Some(Arc::new(Expression::literal(Scalar::Integer(7))));
+                f
+            },
+            {
+                let mut f = scan_file_context("s3://bucket/part=b/f3.parquet");
+                f.transform = Some(Arc::clone(&other_expr));
+                f
+            },
+            scan_file_context("s3://bucket/part=none/f4.parquet"),
+        ];
+
+        let transforms = intern_scan_transforms(&mut files);
+        assert_eq!(transforms.len(), 3);
+        assert!(files.iter().all(|f| f.transform.is_none()));
+
+        let t0 = transforms.get("0").expect("file 0 transform");
+        let t1 = transforms.get("1").expect("file 1 transform");
+        let t2 = transforms.get("2").expect("file 2 transform");
+        assert!(Arc::ptr_eq(t0, t1), "equal transforms must share one Arc");
+        assert!(
+            !Arc::ptr_eq(t0, t2),
+            "distinct transforms must stay distinct"
+        );
+        assert_eq!(t0.as_ref(), &Expression::literal(Scalar::Integer(7)));
+        assert_eq!(t2.as_ref(), &Expression::literal(Scalar::Integer(8)));
     }
 
     #[test]
