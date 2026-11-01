@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Generator
 
 import pytest
 from arro3.core import Array, DataType, Field, Schema, Table
-from azure.storage import blob
 
 from deltalake import (
     DeltaTable,
@@ -171,6 +170,7 @@ def azurite_creds():
     # These are the well-known values
     # https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=visual-studio#well-known-storage-account-and-key
     import azure.core
+    from azure.storage import blob
 
     account_name = "devstoreaccount1"
     config = dict(
@@ -217,6 +217,8 @@ def azurite_env_vars(monkeypatch, azurite_creds):
 
 @pytest.fixture(scope="session")
 def azurite_sas_creds(azurite_creds):
+    from azure.storage import blob
+
     env = os.environ.copy()
     env.update(azurite_creds)
     env["AZURE_STORAGE_CONNECTION_STRING"] = (
