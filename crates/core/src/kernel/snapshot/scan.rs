@@ -1,7 +1,5 @@
-use std::cell::RefCell;
 use std::pin::Pin;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use arrow_array::RecordBatch;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
@@ -540,15 +538,14 @@ impl Scan {
         let mut builder = ReceiverStreamBuilder::<ScanMetadata>::new(100);
         let tx = builder.tx();
         let scan_inner = move || {
-            let evaluation_error: Rc<RefCell<Option<DeltaTableError>>> =
-                Rc::new(RefCell::new(None));
-            let error_slot = Rc::clone(&evaluation_error);
+            let evaluation_error: Arc<Mutex<Option<DeltaTableError>>> = Arc::new(Mutex::new(None));
+            let error_slot = Arc::clone(&evaluation_error);
             let scan_row_data = existing_data
                 .map(|batch| Box::new(ArrowEngineData::new(batch)) as Box<dyn EngineData>)
                 .map_while(move |batch| match evaluator.evaluate(batch.as_ref()) {
                     Ok(data) => Some(data),
                     Err(err) => {
-                        *error_slot.borrow_mut() = Some(err.into());
+                        *error_slot.lock().unwrap() = Some(err.into());
                         None
                     }
                 })
@@ -560,14 +557,14 @@ impl Scan {
                 Box::new(scan_row_data),
                 existing_predicate,
             )? {
-                if let Some(err) = evaluation_error.borrow_mut().take() {
+                if let Some(err) = evaluation_error.lock().unwrap().take() {
                     return Err(err);
                 }
                 if tx.blocking_send(Ok(res?)).is_err() {
                     break;
                 }
             }
-            if let Some(err) = evaluation_error.borrow_mut().take() {
+            if let Some(err) = evaluation_error.lock().unwrap().take() {
                 return Err(err);
             }
             Ok(())

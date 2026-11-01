@@ -988,7 +988,7 @@ pub struct DeletionVectorDescriptor {
 impl TryFrom<DeletionVectorDescriptor>
     for delta_kernel::actions::deletion_vector::DeletionVectorDescriptor
 {
-    type Error = delta_kernel::Error;
+    type Error = delta_kernel::KernelError;
 
     fn try_from(dv: DeletionVectorDescriptor) -> Result<Self, Self::Error> {
         use delta_kernel::actions::deletion_vector::DeletionVectorStorageType;
