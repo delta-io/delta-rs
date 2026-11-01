@@ -3401,6 +3401,40 @@ mod tests {
             .expect_err("Remove action is included when Delta table is append-only. Should error");
     }
 
+    #[rstest::rstest]
+    #[case::delete_predicate("target.id = source.id", Some("target.value < 10.5"))]
+    #[case::join_predicate("target.id = source.id AND target.value < 10.5", None)]
+    #[tokio::test]
+    async fn test_merge_does_not_narrow_fractional_literals(
+        #[case] join_predicate: &str,
+        #[case] delete_predicate: Option<&str>,
+    ) {
+        let schema = get_arrow_schema(&None);
+        let table = write_data(setup_table(None).await, &schema).await;
+
+        let (table, _) = table
+            .merge(merge_source(schema), join_predicate)
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_delete(|delete| match delete_predicate {
+                Some(predicate) => delete.predicate(predicate),
+                None => delete,
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &get_data(&table).await);
+    }
+
     async fn write_data(table: DeltaTable, schema: &Arc<ArrowSchema>) -> DeltaTable {
         let batch = RecordBatch::try_new(
             Arc::clone(schema),
