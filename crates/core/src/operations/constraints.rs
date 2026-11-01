@@ -164,12 +164,16 @@ impl std::future::IntoFuture for ConstraintBuilder {
                         constraints_sql_mapper[name]
                     );
                 }
-                let constraints_checker: Vec<Constraint> = constraints_sql_mapper
-                    .values()
-                    .map(|sql| Constraint::new("*", sql))
+                // Keep the constraint names so a failed validation can name
+                // the constraint instead of reporting a bare check failure.
+                // Sorted for a deterministic check order.
+                let mut constraints_checker: Vec<Constraint> = constraints_sql_mapper
+                    .iter()
+                    .map(|(name, sql)| Constraint::new(name, sql))
                     .collect();
+                constraints_checker.sort_by(|a, b| a.name.cmp(&b.name));
 
-                let plan = DataValidationExec::try_new_with_predicates(
+                let plan = DataValidationExec::try_new_with_labeled_predicates(
                     session.as_ref(),
                     proivider.scan(session.as_ref(), None, &[], None).await?,
                     constraints_to_exprs(session.as_ref(), &schema, &constraints_checker)?,

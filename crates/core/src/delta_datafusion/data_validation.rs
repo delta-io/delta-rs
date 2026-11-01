@@ -55,6 +55,29 @@ use crate::table::config::TablePropertiesExt as _;
 use crate::table::{Constraint, GeneratedColumn};
 use crate::{DeltaTableError, StructTypeExt as _};
 
+/// A single validation check: a boolean expression that must hold for every
+/// row, together with a human-readable label naming the check. The label is
+/// what a refused write reports, so that a caller can tell a failed write
+/// predicate apart from a failed check constraint or a null in a
+/// non-nullable column instead of getting one shared "validation check"
+/// message for all of them.
+#[derive(Debug, Clone)]
+pub(crate) struct ValidationCheck {
+    /// The boolean expression that must hold for every row.
+    pub expr: Expr,
+    /// Human-readable name of the check, e.g. `check constraint \`v_positive\``.
+    pub label: String,
+}
+
+impl ValidationCheck {
+    pub(crate) fn new(expr: Expr, label: impl Into<String>) -> Self {
+        Self {
+            expr,
+            label: label.into(),
+        }
+    }
+}
+
 /// Logical plan node for data validation
 ///
 /// This node represents a data validation step in the logical plan,
@@ -270,7 +293,7 @@ pub(crate) fn validation_predicates(
     session: &dyn Session,
     source_schema: &DFSchema,
     table_configuration: &TableConfiguration,
-) -> Result<Vec<Expr>> {
+) -> Result<Vec<ValidationCheck>> {
     // find all columns that are non-nullable in the table schema but nullable
     // in the source schema and add IS NOT NULL checks for them.
     let table_schema: Schema = table_configuration
@@ -293,13 +316,25 @@ pub(crate) fn validation_predicates(
     // and emitted separately below.
     let mut validations: Vec<_> = non_nullable_table
         .difference(&non_nullable_source)
-        .filter_map(|col| non_nullable_scalar_check_expr(col, &table_schema))
+        .filter_map(|col| {
+            non_nullable_scalar_check_expr(col, &table_schema).map(|expr| {
+                ValidationCheck::new(
+                    expr,
+                    format!("non-nullable column `{}`", col.path().join(".")),
+                )
+            })
+        })
         .collect();
-    validations.extend(
-        non_nullable_table
-            .iter()
-            .filter_map(|col| non_nullable_collection_check_expr(col, &table_schema)),
-    );
+    validations.extend(non_nullable_table.iter().filter_map(|col| {
+        non_nullable_collection_check_expr(col, &table_schema).map(|expr| {
+            // The last path segment names the element/value, not the column.
+            let parent = &col.path()[..col.path().len().saturating_sub(1)];
+            ValidationCheck::new(
+                expr,
+                format!("non-nullable elements of column `{}`", parent.join(".")),
+            )
+        })
+    }));
 
     if table_configuration.is_feature_enabled(&TableFeature::Invariants) {
         let invariants = table_configuration
@@ -309,7 +344,10 @@ pub(crate) fn validation_predicates(
         for invariant in invariants {
             let expr =
                 parse_predicate_expression(source_schema, &invariant.invariant_sql, session)?;
-            validations.push(expr);
+            validations.push(ValidationCheck::new(
+                expr,
+                format!("column invariant on `{}`", invariant.field_name),
+            ));
         }
     }
 
@@ -434,10 +472,14 @@ pub(crate) fn constraints_to_exprs<'a>(
     session: &dyn Session,
     df_schema: &DFSchema,
     constraints: impl IntoIterator<Item = &'a Constraint>,
-) -> Result<Vec<Expr>> {
+) -> Result<Vec<ValidationCheck>> {
     Ok(constraints
         .into_iter()
-        .map(|constraint| parse_predicate_expression(df_schema, &constraint.expr, session))
+        .map(|constraint| {
+            parse_predicate_expression(df_schema, &constraint.expr, session).map(|expr| {
+                ValidationCheck::new(expr, format!("check constraint `{}`", constraint.name))
+            })
+        })
         .try_collect()?)
 }
 
@@ -445,14 +487,17 @@ pub(crate) fn generated_columns_to_exprs<'a>(
     session: &dyn Session,
     df_schema: &DFSchema,
     generated_columns: impl IntoIterator<Item = &'a GeneratedColumn>,
-) -> Result<Vec<Expr>> {
+) -> Result<Vec<ValidationCheck>> {
     generated_columns
         .into_iter()
         .map(|gen_col| {
             let expr = parse_generated_column_expression(df_schema, gen_col, session)?;
             let col_expr = col(&gen_col.name);
             let validation_expr = binary_expr(col_expr, Operator::IsNotDistinctFrom, expr);
-            Ok::<_, DataFusionError>(validation_expr)
+            Ok::<_, DataFusionError>(ValidationCheck::new(
+                validation_expr,
+                format!("generated column `{}`", gen_col.name),
+            ))
         })
         .collect()
 }
@@ -474,27 +519,18 @@ pub struct DataValidationExec {
     input: Arc<dyn ExecutionPlan>,
     /// The expression to use for checking data validity
     check_expression: Arc<dyn PhysicalExpr>,
+    /// The individual checks behind `check_expression`, each with the label
+    /// reported when it fails. Empty when the plan was built from a single
+    /// combined expression, in which case the error keeps its old shape.
+    /// These are only evaluated on the failure path, against the rows that
+    /// already failed the combined check, so valid rows cost nothing extra.
+    check_labels: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// Plan properties including the schema after validation
     /// (may have updated nullability)
     properties: Arc<PlanProperties>,
 }
 
 impl DataValidationExec {
-    /// Create a new [`DataValidationExec`] if there are any predicates to apply
-    /// otherwise return the input execution plan as-is.
-    pub fn try_new_with_predicates(
-        session: &dyn Session,
-        input: Arc<dyn ExecutionPlan>,
-        predicates: Vec<Expr>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let df_schema = DFSchema::try_from(input.schema())?;
-        if let Some(validation_expr) = conjunction(simplify_predicates(predicates)?) {
-            let check_expression = simplify_expr(session, df_schema.into(), validation_expr)?;
-            return Ok(Arc::new(Self::try_new(input, check_expression, None)?));
-        }
-        Ok(input)
-    }
-
     pub(crate) fn try_new_with_predicates_and_schema(
         session: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
@@ -513,11 +549,49 @@ impl DataValidationExec {
         Ok(input)
     }
 
+    /// Create a new [`DataValidationExec`] if there are any checks to apply,
+    /// otherwise return the input execution plan as-is. The individual
+    /// checks are kept so a failed write can name the check that refused it.
+    pub(crate) fn try_new_with_labeled_predicates(
+        session: &dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        checks: Vec<ValidationCheck>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let df_schema: DFSchemaRef = DFSchema::try_from(input.schema())?.into();
+        let exprs: Vec<Expr> = checks.iter().map(|check| check.expr.clone()).collect();
+        if let Some(validation_expr) = conjunction(simplify_predicates(exprs)?) {
+            let check_expression = simplify_expr(session, df_schema.clone(), validation_expr)?;
+            let mut check_labels = Vec::with_capacity(checks.len());
+            for check in &checks {
+                let physical = simplify_expr(session, df_schema.clone(), check.expr.clone())?;
+                check_labels.push((physical, check.label.clone()));
+            }
+            return Ok(Arc::new(Self::try_new_with_labels(
+                input,
+                check_expression,
+                None,
+                check_labels,
+            )?));
+        }
+        Ok(input)
+    }
+
     /// Create a new [`DataValidationExec`]
     pub fn try_new(
         input: Arc<dyn ExecutionPlan>,
         check_expression: Arc<dyn PhysicalExpr>,
         validated_schema: Option<SchemaRef>,
+    ) -> Result<Self> {
+        Self::try_new_with_labels(input, check_expression, validated_schema, Vec::new())
+    }
+
+    /// Create a new [`DataValidationExec`] with per-check expressions used
+    /// only to name the failing checks on the failure path.
+    fn try_new_with_labels(
+        input: Arc<dyn ExecutionPlan>,
+        check_expression: Arc<dyn PhysicalExpr>,
+        validated_schema: Option<SchemaRef>,
+        check_labels: Vec<(Arc<dyn PhysicalExpr>, String)>,
     ) -> Result<Self> {
         let result_type = check_expression.data_type(input.schema().as_ref())?;
         if !matches!(result_type, DataType::Boolean) {
@@ -536,6 +610,7 @@ impl DataValidationExec {
         Ok(Self {
             input,
             check_expression,
+            check_labels,
             properties,
         })
     }
@@ -544,15 +619,17 @@ impl DataValidationExec {
         Self {
             input,
             check_expression: Arc::clone(&self.check_expression),
+            check_labels: self.check_labels.clone(),
             properties: Arc::clone(&self.properties),
         }
     }
 
     fn try_with_new_input(&self, input: Arc<dyn ExecutionPlan>) -> Result<Self> {
-        Self::try_new(
+        Self::try_new_with_labels(
             input,
             Arc::clone(&self.check_expression),
             Some(self.schema()),
+            self.check_labels.clone(),
         )
     }
 }
@@ -625,6 +702,7 @@ impl ExecutionPlan for DataValidationExec {
             self.input.execute(partition, context)?,
             self.schema(),
             Arc::clone(&self.check_expression),
+            self.check_labels.clone(),
         )))
     }
 
@@ -690,6 +768,12 @@ impl ExecutionPlan for DataValidationExec {
             &Arc<dyn PhysicalExpr>,
         ) -> Result<TreeNodeRecursion, DataFusionError>,
     ) -> Result<TreeNodeRecursion, DataFusionError> {
+        // Deliberately only the combined expression: the labeled copies are
+        // failure-path diagnostics, not plan expressions, and exposing them
+        // as extra roots would double-count the check for plan walkers.
+        // A rewrite that invalidates a labeled copy only costs the label:
+        // per-check evaluation failures are skipped and the error falls
+        // back to its previous unlabeled shape.
         apply_expression_roots([&self.check_expression], expr_rewriter)
     }
 }
@@ -700,6 +784,9 @@ pin_project! {
     pub(crate) struct DataValidationStream<S> {
         // The expression to use for checking data validity
         check_expression: Arc<dyn PhysicalExpr>,
+
+        // The individual checks behind `check_expression`, with labels.
+        check_labels: Vec<(Arc<dyn PhysicalExpr>, String)>,
 
         // The schema of the output stream
         schema: SchemaRef,
@@ -716,13 +803,42 @@ impl<S> DataValidationStream<S> {
         stream: S,
         schema: SchemaRef,
         check_expression: Arc<dyn PhysicalExpr>,
+        check_labels: Vec<(Arc<dyn PhysicalExpr>, String)>,
     ) -> DataValidationStream<S> {
         DataValidationStream {
             check_expression,
+            check_labels,
             schema,
             stream,
         }
     }
+}
+
+/// Labels of the checks that fail on `batch`, in the order the checks were
+/// given. A check that cannot be evaluated on the failing rows (it should not
+/// happen, since the rows already failed the combined check) is skipped
+/// rather than replacing the validation error with a new one.
+fn failed_check_labels(
+    checks: &[(Arc<dyn PhysicalExpr>, String)],
+    batch: &RecordBatch,
+) -> Vec<String> {
+    let mut failed = Vec::new();
+    for (expr, label) in checks {
+        let Ok(evaluated) = expr.evaluate(batch) else {
+            continue;
+        };
+        let check_failed = match evaluated {
+            ColumnarValue::Array(array) => array
+                .as_boolean()
+                .iter()
+                .any(|value| matches!(value, Some(false) | None)),
+            ColumnarValue::Scalar(value) => !matches!(value, ScalarValue::Boolean(Some(true))),
+        };
+        if check_failed && !failed.contains(label) {
+            failed.push(label.clone());
+        }
+    }
+    failed
 }
 
 impl<S> Stream for DataValidationStream<S>
@@ -748,11 +864,21 @@ where
                             let invalid_slice =
                                 invalid_data.slice(0, invalid_data.num_rows().min(5));
                             let preview = pretty_format_batches(&[invalid_slice])?;
+                            let failed = failed_check_labels(this.check_labels, &invalid_data);
+                            let failed_line = if failed.is_empty() {
+                                String::new()
+                            } else {
+                                let mut lines = String::from("\nFailed checks:");
+                                for label in &failed {
+                                    lines.push_str(&format!("\n- {label}"));
+                                }
+                                lines
+                            };
                             return Poll::Ready(Some(Err(DataFusionError::External(Box::new(
                                 DeltaTableError::InvalidData {
                                     message: format!(
                                         "Invalid data found: {invalid_count} rows failed \
-                                        validation check.\nPreview of invalid data:\n\n{preview}"
+                                        validation check.{failed_line}\nPreview of invalid data:\n\n{preview}"
                                     ),
                                 },
                             )))));
@@ -992,12 +1118,21 @@ mod tests {
     use datafusion::physical_plan::{
         ChildrenPropertiesMode, ReplaceChildrenOptions, collect, displayable,
     };
-    use datafusion::prelude::{SessionContext, binary_expr, col};
+    use datafusion::prelude::{Expr, SessionContext, binary_expr, col};
     use futures::StreamExt;
 
     use crate::delta_datafusion::create_session;
 
     use super::*;
+
+    /// Wrap plain predicates as labeled checks for tests that do not
+    /// care about the reported label.
+    fn unlabeled(predicates: Vec<Expr>) -> Vec<ValidationCheck> {
+        predicates
+            .into_iter()
+            .map(|expr| ValidationCheck::new(expr, "validation check"))
+            .collect()
+    }
 
     fn create_test_schema(nullable: bool) -> SchemaRef {
         Arc::new(Schema::new(vec![
@@ -1044,8 +1179,11 @@ mod tests {
 
         // Create validation for non-nullable id column
         let predicates = vec![col("id").is_not_null()];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         let result = collect(validated_exec, ctx.task_ctx()).await?;
         assert_eq!(result.len(), 1);
@@ -1068,8 +1206,11 @@ mod tests {
 
         // Create validation: id > 5
         let predicates = vec![col("id").gt(datafusion::prelude::lit(5i32))];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         let result = collect(validated_exec, ctx.task_ctx()).await?;
         assert_eq!(result.len(), 1);
@@ -1092,8 +1233,11 @@ mod tests {
 
         // Create validation: id > 5
         let predicates = vec![col("id").gt(datafusion::prelude::lit(5i32))];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         let result = collect(validated_exec, ctx.task_ctx()).await;
         assert!(result.is_err());
@@ -1102,6 +1246,49 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("Invalid data found")
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_validation_labeled_failure_names_failed_checks() -> Result<()> {
+        let schema = create_test_schema(true);
+        // Row 1 fails the id check only, row 2 fails the name check only.
+        let batch = create_test_batch(
+            schema.clone(),
+            vec![Some(2), Some(10)],
+            vec![Some("a"), None],
+        );
+
+        let ctx = SessionContext::new();
+        let memory_exec = get_memory_exec(&ctx.state(), schema, vec![batch]).await;
+
+        let checks = vec![
+            ValidationCheck::new(
+                col("id").gt(datafusion::prelude::lit(5i32)),
+                "check constraint `id_positive`",
+            ),
+            ValidationCheck::new(col("name").is_not_null(), "non-nullable column `name`"),
+        ];
+        let validated_exec =
+            DataValidationExec::try_new_with_labeled_predicates(&ctx.state(), memory_exec, checks)?;
+
+        let err = collect(validated_exec, ctx.task_ctx())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Failed checks:"),
+            "expected failed checks in error, got: {err}"
+        );
+        assert!(
+            err.contains("- check constraint `id_positive`"),
+            "expected id check named, got: {err}"
+        );
+        assert!(
+            err.contains("- non-nullable column `name`"),
+            "expected name check named, got: {err}"
         );
 
         Ok(())
@@ -1165,8 +1352,11 @@ mod tests {
             col("id").gt(datafusion::prelude::lit(5i32)),
             col("id").lt(datafusion::prelude::lit(100i32)),
         ];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         let result = collect(validated_exec, ctx.task_ctx()).await?;
         assert_eq!(result.len(), 1);
@@ -1192,8 +1382,11 @@ mod tests {
             col("id").gt(datafusion::prelude::lit(5i32)),
             col("id").lt(datafusion::prelude::lit(100i32)),
         ];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         let result = collect(validated_exec, ctx.task_ctx()).await;
         assert!(result.is_err());
@@ -1225,8 +1418,11 @@ mod tests {
             Operator::IsNotDistinctFrom,
             col("id") * datafusion::prelude::lit(2i32),
         )];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         let result = collect(validated_exec, ctx.task_ctx()).await?;
         assert_eq!(result.len(), 1);
@@ -1258,8 +1454,11 @@ mod tests {
             Operator::IsNotDistinctFrom,
             col("id") * datafusion::prelude::lit(2i32),
         )];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         let result = collect(validated_exec, ctx.task_ctx()).await;
         assert!(result.is_err());
@@ -1276,8 +1475,11 @@ mod tests {
         let memory_exec = get_memory_exec(&ctx.state(), schema, vec![batch]).await;
 
         let predicates = vec![col("id").is_not_null()];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         let result = collect(validated_exec, ctx.task_ctx()).await?;
         assert_eq!(result.len(), 1);
@@ -1300,10 +1502,10 @@ mod tests {
 
         // No predicates - should return input plan unchanged
         let predicates = vec![];
-        let result_exec = DataValidationExec::try_new_with_predicates(
+        let result_exec = DataValidationExec::try_new_with_labeled_predicates(
             &ctx.state(),
             memory_exec.clone(),
-            predicates,
+            unlabeled(predicates),
         )?;
 
         // When no predicates, should return the input plan
@@ -1328,8 +1530,11 @@ mod tests {
         let memory_exec = get_memory_exec(&ctx.state(), schema, vec![batch]).await;
 
         let predicates = vec![col("id").gt(datafusion::prelude::lit(5i32))];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         let result = collect(validated_exec, ctx.task_ctx()).await;
         assert!(result.is_err());
@@ -1353,8 +1558,11 @@ mod tests {
 
         // `id > 5` evaluates to NULL for the second row, which still counts as a violation.
         let predicates = vec![col("id").gt(datafusion::prelude::lit(5i32))];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         let result = collect(validated_exec, ctx.task_ctx()).await;
         assert!(result.is_err());
@@ -1381,8 +1589,11 @@ mod tests {
         let memory_exec = get_memory_exec(&ctx.state(), schema, vec![batch]).await;
 
         let predicates = vec![col("id").is_not_null()];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         // Check that maintains_input_order returns true
         let downcast = validated_exec.downcast_ref::<DataValidationExec>().unwrap();
@@ -1398,8 +1609,11 @@ mod tests {
         let ctx = SessionContext::new();
 
         let predicates = vec![col("id").is_not_null()];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), empty_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            empty_exec,
+            unlabeled(predicates),
+        )?;
 
         let display_str = displayable(validated_exec.as_ref())
             .indent(false)
@@ -1416,10 +1630,10 @@ mod tests {
         let ctx = SessionContext::new();
         let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
 
-        let inner = DataValidationExec::try_new_with_predicates(
+        let inner = DataValidationExec::try_new_with_labeled_predicates(
             &ctx.state(),
             input,
-            vec![col("id").gt(datafusion::prelude::lit(0i32))],
+            unlabeled(vec![col("id").gt(datafusion::prelude::lit(0i32))]),
         )?;
         let inner_expected = Arc::clone(
             &inner
@@ -1427,10 +1641,10 @@ mod tests {
                 .unwrap()
                 .check_expression,
         );
-        let outer = DataValidationExec::try_new_with_predicates(
+        let outer = DataValidationExec::try_new_with_labeled_predicates(
             &ctx.state(),
             inner,
-            vec![col("id").lt(datafusion::prelude::lit(100i32))],
+            unlabeled(vec![col("id").lt(datafusion::prelude::lit(100i32))]),
         )?;
         let outer_validation = outer.downcast_ref::<DataValidationExec>().unwrap();
         let expected = Arc::clone(&outer_validation.check_expression);
@@ -1478,10 +1692,10 @@ mod tests {
             same_properties_input.properties()
         ));
 
-        let validation = DataValidationExec::try_new_with_predicates(
+        let validation = DataValidationExec::try_new_with_labeled_predicates(
             &ctx.state(),
             one_partition_input,
-            vec![col("id").is_not_null()],
+            unlabeled(vec![col("id").is_not_null()]),
         )?;
         let original_properties = Arc::clone(validation.properties());
 
@@ -1509,10 +1723,10 @@ mod tests {
         ];
         let ctx = SessionContext::new();
         let input = get_memory_exec(&ctx.state(), schema, batches).await;
-        let validation = DataValidationExec::try_new_with_predicates(
+        let validation = DataValidationExec::try_new_with_labeled_predicates(
             &ctx.state(),
             input,
-            vec![col("id").is_not_null()],
+            unlabeled(vec![col("id").is_not_null()]),
         )?;
 
         let repartitioned = validation
@@ -1546,8 +1760,11 @@ mod tests {
         let ctx = SessionContext::new();
 
         let predicates = vec![col("id").is_not_null()];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         // Try to create with wrong number of children
         let result = validated_exec.replace_children(
@@ -1578,8 +1795,11 @@ mod tests {
         let memory_exec = get_memory_exec(&ctx.state(), schema, vec![batch]).await;
 
         let predicates = vec![col("id").gt(datafusion::prelude::lit(5i32))];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         let mut stream = validated_exec.execute(0, ctx.task_ctx())?;
 
@@ -1608,8 +1828,11 @@ mod tests {
 
         // Use a literal true predicate (scalar)
         let predicates = vec![datafusion::prelude::lit(true)];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         let result = collect(validated_exec, ctx.task_ctx()).await?;
         assert_eq!(result.len(), 1);
@@ -1632,8 +1855,11 @@ mod tests {
 
         // Use a literal false predicate (scalar)
         let predicates = vec![datafusion::prelude::lit(false)];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         let result = collect(validated_exec, ctx.task_ctx()).await;
         assert!(result.is_err());
@@ -1658,8 +1884,11 @@ mod tests {
 
         // Create validation: id > 5 (2 rows should fail)
         let predicates = vec![col("id").gt(datafusion::prelude::lit(5i32))];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(predicates),
+        )?;
 
         let result = collect(validated_exec, ctx.task_ctx()).await;
         assert!(result.is_err());
@@ -2117,8 +2346,11 @@ mod tests {
             .expect("expected a collection check");
         let ctx = SessionContext::new();
         let memory_exec = get_memory_exec(&ctx.state(), batch.schema(), vec![batch]).await;
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, vec![check])?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(vec![check]),
+        )?;
         collect(validated_exec, ctx.task_ctx()).await.map(|_| ())
     }
 
@@ -2200,8 +2432,11 @@ mod tests {
             .expect("expected a scalar check");
         let ctx = SessionContext::new();
         let memory_exec = get_memory_exec(&ctx.state(), batch.schema(), vec![batch]).await;
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, vec![check])?;
+        let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+            &ctx.state(),
+            memory_exec,
+            unlabeled(vec![check]),
+        )?;
         collect(validated_exec, ctx.task_ctx()).await.map(|_| ())
     }
 
