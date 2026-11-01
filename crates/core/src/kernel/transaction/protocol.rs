@@ -319,6 +319,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     #[cfg(feature = "datafusion")]
     {
         reader_features.insert(TableFeature::ColumnMapping);
+        reader_features.insert(TableFeature::VariantShredding);
     }
 
     let mut writer_features = HashSet::new();
@@ -816,6 +817,27 @@ mod tests {
             assert!(checker.can_read_from(eager).is_ok());
             assert!(checker.can_write_to(eager).is_ok());
         }
+    }
+
+    #[tokio::test]
+    async fn test_variant_shredding_support_is_read_only_and_requires_datafusion() {
+        let protocol = ProtocolInner::new(3, 7)
+            .append_reader_features([TableFeature::VariantType, TableFeature::VariantShredding])
+            .append_writer_features([TableFeature::VariantType, TableFeature::VariantShredding])
+            .as_kernel();
+        assert_eq!(
+            INSTANCE.can_read_from_protocol(&protocol).is_ok(),
+            cfg!(feature = "datafusion")
+        );
+        let snapshot = DeltaTableState::from_actions(vec![
+            Action::Protocol(protocol),
+            metadata_action(None).into(),
+        ])
+        .await
+        .unwrap();
+        assert!(matches!(INSTANCE.can_write_to(snapshot.snapshot()),
+            Err(TransactionError::UnsupportedTableFeatures(features))
+                if features.contains(&TableFeature::VariantShredding)));
     }
 
     #[tokio::test]
