@@ -322,12 +322,22 @@ pub enum CommitOrBytes {
     LogBytes(Bytes),
 }
 
-/// The logtail for a catalog managed table
+/// The log tail of a catalog-managed table, as reported by the catalog.
+///
+/// For catalog-managed tables (e.g. Unity Catalog managed commits) the catalog — not the
+/// filesystem — is the source of truth for which commits exist: commits are staged under
+/// `_delta_log/_staged_commits/` until the catalog ratifies them, so the filesystem may
+/// contain commits the catalog has not published. A catalog-backed [`LogStore`] returns this
+/// from [`LogStore::catalog_log_tail`] so snapshot loading can replay the catalog-provided
+/// tail (via the kernel's `SnapshotBuilder::with_log_tail`) and cap replay at the
+/// catalog-ratified maximum version (via `SnapshotBuilder::with_max_catalog_version`),
+/// ignoring unratified filesystem commits.
 #[derive(Clone)]
 pub struct CatalogLogTail {
-    /// The tail log paths
+    /// Staged commit log paths reported by the catalog, ordered oldest-first (ascending
+    /// version) as the kernel requires.
     pub log_tail: Vec<LogPath>,
-    /// The table's latest version
+    /// The highest catalog-ratified table version: the upper bound for log replay.
     pub max_version: Version,
 }
 
@@ -408,8 +418,12 @@ pub trait LogStore: Send + Sync + AsAny {
     /// Find latest version currently stored in the delta log.
     async fn get_latest_version(&self, start_version: Version) -> DeltaResult<Version>;
 
-    /// Return catalog-provided commits for a catalog-managed table, or `None` for
-    /// filesystem-managed tables (the default).
+    /// Return the catalog-provided log tail for a catalog-managed table.
+    ///
+    /// Filesystem-managed stores (the default) return `None` and snapshot loading follows the
+    /// ordinary filesystem listing path. Catalog-backed stores override this to supply the
+    /// staged commits and the catalog-ratified maximum version the kernel should use instead;
+    /// see [`CatalogLogTail`].
     async fn catalog_log_tail(&self) -> DeltaResult<Option<CatalogLogTail>> {
         Ok(None)
     }
