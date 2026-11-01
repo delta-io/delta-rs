@@ -115,6 +115,7 @@ impl From<WriteError> for DeltaTableError {
 
 ///Specifies how to handle schema drifts
 #[derive(PartialEq, Clone, Copy)]
+#[non_exhaustive]
 pub enum SchemaMode {
     /// Overwrite the schema with the new schema
     Overwrite,
