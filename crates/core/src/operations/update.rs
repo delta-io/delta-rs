@@ -306,6 +306,9 @@ async fn execute(
         .into_iter()
         .map(|(key, expr)| expr.resolve(session, schema.clone()).map(|e| (key.name, e)))
         .try_collect()?;
+    for name in updates.keys() {
+        schema.field_with_unqualified_name(name)?;
+    }
 
     let scan_start = Instant::now();
 
