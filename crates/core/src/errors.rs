@@ -255,6 +255,12 @@ impl From<serde_json::Error> for DeltaTableError {
     }
 }
 
+impl From<delta_kernel::KernelError> for DeltaTableError {
+    fn from(err: delta_kernel::KernelError) -> Self {
+        DeltaTableError::KernelError(delta_kernel::Error::Kernel(err))
+    }
+}
+
 impl DeltaTableError {
     /// Crate a NotATable Error with message for given path.
     pub fn not_a_table(path: impl AsRef<str>) -> Self {
