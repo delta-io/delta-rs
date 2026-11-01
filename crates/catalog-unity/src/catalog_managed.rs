@@ -1,14 +1,29 @@
+use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::UnityCatalog;
+use crate::UnityCatalogError;
 use async_trait::async_trait;
 use bytes::Bytes;
+use chrono::Utc;
 use delta_kernel::LogPath;
-use deltalake_core::kernel::Version;
-use deltalake_core::logstore::object_store::ObjectStore;
-use deltalake_core::logstore::{CatalogLogTail, LogStore, LogStoreConfig, ObjectStoreRef};
+use deltalake_core::kernel::transaction::TransactionError;
+use deltalake_core::kernel::{CommitInfo, Version};
+use deltalake_core::logstore::object_store::{
+    Error as ObjectStoreError, ObjectStore, ObjectStoreExt, PutMode,
+};
+use deltalake_core::logstore::{
+    CatalogLogTail, CommitOrBytes, CommitResponse, Committer, LogStore, LogStoreConfig,
+    ObjectStoreRef, PayloadKind, commit_uri_from_version,
+};
+
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
-use unity_catalog_delta_client_api::Commit;
+use tracing::warn;
+use unity_catalog_delta_client_api::{
+    Commit, DeltaTableRequirement, DeltaTableUpdate, Error as UCError, TableIdentifier,
+    UpdateTableClient, UpdateTableRequest,
+};
+use unity_catalog_delta_rest_client::{UCDeltaTableClient, UCUpdateTableRestClient};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Default)]
 pub struct CommitList {
@@ -17,48 +32,196 @@ pub struct CommitList {
 }
 
 #[async_trait]
-pub trait CommitCoordinator: Send + Sync + std::fmt::Debug {
+pub trait CommitCoordinator: Send + Sync + Debug {
+    fn table_uuid(&self) -> &str;
     async fn get_commits(&self) -> DeltaResult<CommitList>;
+    async fn publish(&self, store: &ObjectStoreRef, up_to: Version) -> DeltaResult<()>;
+}
+
+fn staged_commit_path(file_name: &str) -> DeltaResult<Path> {
+    Ok(Path::from(format!(
+        "_delta_log/_staged_commits/{}",
+        staged_file_name(file_name)?
+    )))
+}
+
+fn staged_file_name(file_name: &str) -> DeltaResult<String> {
+    let parsed = Path::parse(file_name)?;
+    Ok(parsed.filename().unwrap_or(file_name).to_string())
 }
 
 #[derive(Debug)]
 pub struct UnityCommitCoordinator {
-    client: UnityCatalog,
+    rest: Arc<UCDeltaTableClient>,
+    update: Arc<UCUpdateTableRestClient>,
     catalog: String,
     schema: String,
     table: String,
+    table_uuid: String,
+    store: ObjectStoreRef,
 }
 
 impl UnityCommitCoordinator {
     pub fn new(
-        client: UnityCatalog,
+        rest: Arc<UCDeltaTableClient>,
+        update: Arc<UCUpdateTableRestClient>,
         catalog: impl Into<String>,
         schema: impl Into<String>,
         table: impl Into<String>,
+        table_uuid: impl Into<String>,
+        store: ObjectStoreRef,
     ) -> Self {
         Self {
-            client,
+            rest,
+            update,
             catalog: catalog.into(),
             schema: schema.into(),
             table: table.into(),
+            table_uuid: table_uuid.into(),
+            store,
         }
+    }
+
+    fn target(&self) -> TableIdentifier {
+        TableIdentifier::new(&self.catalog, &self.schema, &self.table)
+    }
+
+    fn update_request(&self, update: DeltaTableUpdate) -> UpdateTableRequest {
+        let reqs = DeltaTableRequirement::AssertTableUuid {
+            uuid: self.table_uuid.clone(),
+        };
+        UpdateTableRequest::new(vec![reqs], vec![update]).unwrap()
+    }
+}
+
+/// The staged-commit `file_name` and object-store `Path` for `version` under
+/// `_delta_log/_staged_commits/`, using a random UUID to keep concurrent writers' files distinct.
+fn staged_commit_file(version: Version, uuid: Uuid) -> (String, Path) {
+    let file_name = format!("{version:020}.{uuid}.json");
+    let path = Path::from(format!("_delta_log/_staged_commits/{file_name}"));
+    (file_name, path)
+}
+
+/// Wrap an error as a `TransactionError` the commit loop treats as a hard (non-conflict) failure.
+fn commit_failed(msg: String) -> TransactionError {
+    TransactionError::LogStoreError {
+        source: Box::new(DeltaTableError::Generic(msg.clone())),
+        msg,
+    }
+}
+
+fn classify_attempt(
+    version: Version,
+    file_name: &str,
+    list: &CommitList,
+) -> Option<CommitResponse> {
+    let commit = list.commits.iter().find(|c| c.version as u64 == version)?;
+    match staged_file_name(&commit.file_name) {
+        Ok(name) if name == file_name => Some(CommitResponse::Committed),
+        _ => Some(CommitResponse::Conflict { version }),
+    }
+}
+
+#[async_trait]
+impl Committer for UnityCommitCoordinator {
+    async fn commit(
+        &self,
+        version: Version,
+        payload: CommitOrBytes,
+        commit_info: Option<&CommitInfo>,
+    ) -> Result<CommitResponse, TransactionError> {
+        let CommitOrBytes::LogBytes(bytes) = payload else {
+            return Err(commit_failed(
+                "CatalogManagedLogStore requires a LogBytes payload".to_string(),
+            ));
+        };
+
+        let (file_name, staged_path) = staged_commit_file(version, Uuid::new_v4());
+        self.store.put(&staged_path, bytes.clone().into()).await?;
+        let (file_size, modified) = match self.store.head(&staged_path).await {
+            Ok(meta) => (meta.size as i64, meta.last_modified.timestamp_millis()),
+            Err(_) => (bytes.len() as i64, Utc::now().timestamp_millis()),
+        };
+        let timestamp = commit_info
+            .and_then(|info| info.in_commit_timestamp.or(info.timestamp))
+            .unwrap_or(modified);
+        let commit = Commit::new(
+            version as i64,
+            timestamp,
+            file_name.clone(),
+            file_size,
+            modified,
+        );
+        let request = self.update_request(DeltaTableUpdate::AddCommit { commit });
+        let target = self.target();
+
+        let mut outcome = self.update.update_table(&target, request.clone()).await;
+        // TODO: this is not correct, need to stop it from doubling up on requests
+        if matches!(
+            outcome,
+            Err(UCError::MaxUnpublishedCommitsExceeded(_num_commits))
+        ) {
+            warn!(
+                version,
+                "UC reports too many unpublished commits; publishing then retrying ratify"
+            );
+            if let Err(e) = self.publish(&self.store, version.saturating_sub(1)).await {
+                warn!(error = %e, "publish before ratify retry failed");
+            }
+            outcome = self.update.update_table(&target, request).await;
+        }
+
+        match outcome {
+            Ok(()) => Ok(CommitResponse::Committed),
+            // Not sure what to do on conflicts right now from the catalog, not even sure what the catalog returns
+            // when a conflict occurs
+            // Err(err) if is_version_conflict(&err) => Ok(CommitResponse::Conflict { version }),
+            Err(err) => self
+                .get_commits()
+                .await
+                .ok()
+                .and_then(|list| classify_attempt(version, &file_name, &list))
+                .ok_or_else(|| {
+                    commit_failed(format!(
+                        "UC update_table failed for version {version}: {err}. The staged commit \
+                         {file_name} is kept because the catalog may still ratify it; reload the \
+                         table to see whether version {version} was committed before retrying"
+                    ))
+                }),
+        }
+    }
+
+    async fn abort(
+        &self,
+        _version: Version,
+        _payload: CommitOrBytes,
+    ) -> Result<(), TransactionError> {
+        Ok(())
+    }
+
+    fn payload_kind(&self) -> PayloadKind {
+        PayloadKind::Bytes
     }
 }
 
 #[async_trait]
 impl CommitCoordinator for UnityCommitCoordinator {
+    fn table_uuid(&self) -> &str {
+        &self.table_uuid
+    }
+
     async fn get_commits(&self) -> DeltaResult<CommitList> {
         let resp = self
-            .client
-            .delta_rest_client()?
+            .rest
             .load_table(&self.catalog, &self.schema, &self.table)
             .await
-            .map_err(|e| DeltaTableError::Generic(format!("UC load_table failed: {e}")))?;
+            .map_err(UnityCatalogError::from)?;
 
         let raw_max_version = resp
             .latest_table_version
             .or(resp.metadata.last_commit_version)
             .unwrap_or(-1);
+
         let max_version = if raw_max_version < 0 {
             0
         } else {
@@ -69,6 +232,39 @@ impl CommitCoordinator for UnityCommitCoordinator {
             commits: resp.commits,
             max_version,
         })
+    }
+
+    async fn publish(&self, store: &ObjectStoreRef, up_to: Version) -> DeltaResult<()> {
+        let list = self.get_commits().await?;
+        let mut published = 0;
+        let mut commits = list.commits.to_vec();
+        commits.sort_by_key(|c| c.version);
+        for commit in commits {
+            let version = commit.version as u64;
+            if version > up_to {
+                break;
+            }
+            if published + 1 != version {
+                return Err(DeltaTableError::Generic(format!(
+                    "catalog commits to publish are not contiguous: version {published} is followed by {version}",
+                )));
+            }
+            let numbered = commit_uri_from_version(Some(version));
+            if store.head(&numbered).await.is_err() {
+                let staged_path = staged_commit_path(&commit.file_name)?;
+                let bytes = store.get(&staged_path).await?.bytes().await?;
+                match store
+                    .put_opts(&numbered, bytes.into(), PutMode::Create.into())
+                    .await
+                {
+                    Ok(_) | Err(ObjectStoreError::AlreadyExists { .. }) => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            published = version;
+        }
+
+        Ok(())
     }
 }
 
@@ -97,13 +293,26 @@ impl<C: CommitCoordinator> CatalogManagedLogStore<C> {
 }
 
 #[async_trait]
-impl<C: CommitCoordinator + 'static> LogStore for CatalogManagedLogStore<C> {
+impl<C: CommitCoordinator + Committer + 'static> LogStore for CatalogManagedLogStore<C> {
     fn name(&self) -> String {
         "CatalogManagedLogStore".into()
     }
 
     async fn read_commit_entry(&self, version: Version) -> DeltaResult<Option<Bytes>> {
-        deltalake_core::logstore::read_commit_entry(self.prefixed_store.as_ref(), version).await
+        if let Some(bytes) =
+            deltalake_core::logstore::read_commit_entry(self.prefixed_store.as_ref(), version)
+                .await?
+        {
+            return Ok(Some(bytes));
+        }
+        let list = self.coordinator.get_commits().await?;
+        let Some(commit) = list.commits.iter().find(|c| c.version as u64 == version) else {
+            return Ok(None);
+        };
+        let staged_path = staged_commit_path(&commit.file_name)?;
+        Ok(Some(
+            self.prefixed_store.get(&staged_path).await?.bytes().await?,
+        ))
     }
 
     async fn get_latest_version(&self, _start_version: Version) -> DeltaResult<Version> {
@@ -120,21 +329,12 @@ impl<C: CommitCoordinator + 'static> LogStore for CatalogManagedLogStore<C> {
         let mut commits = list.commits;
         commits.sort_by_key(|c| c.version);
         for c in commits {
-            let file_path = Path::parse(&c.file_name)?;
-            let file_name = file_path.filename().unwrap_or(&c.file_name);
-            let path = LogPath::staged_commit(
+            log_tail.push(LogPath::staged_commit(
                 base.clone(),
-                file_name,
+                &staged_file_name(&c.file_name)?,
                 c.file_modification_timestamp,
                 c.file_size as u64,
-            )
-            .map_err(|e| {
-                DeltaTableError::Generic(format!(
-                    "invalid staged commit path for {}: {e}",
-                    c.file_name
-                ))
-            })?;
-            log_tail.push(path);
+            )?);
         }
 
         Ok(Some(CatalogLogTail {
@@ -143,12 +343,24 @@ impl<C: CommitCoordinator + 'static> LogStore for CatalogManagedLogStore<C> {
         }))
     }
 
+    fn is_catalog_managed(&self) -> bool {
+        true
+    }
+
+    async fn publish_logs(&self, up_to: Version) -> DeltaResult<()> {
+        self.coordinator.publish(&self.prefixed_store, up_to).await
+    }
+
     fn object_store(&self) -> Arc<dyn ObjectStore> {
         self.prefixed_store.clone()
     }
 
     fn root_object_store(&self) -> Arc<dyn ObjectStore> {
         self.root_store.clone()
+    }
+
+    fn committer(&self) -> Arc<dyn Committer> {
+        self.coordinator.clone()
     }
 
     fn config(&self) -> &LogStoreConfig {
@@ -163,15 +375,52 @@ mod tests {
     use deltalake_core::logstore::object_store::memory::InMemory;
     use reqwest::Url;
 
+    /// Test double: serves a fixed `CommitList` for reads.
     #[derive(Debug)]
-    struct MockCoordinator(CommitList);
+    struct MockCoordinator {
+        list: CommitList,
+    }
 
     #[async_trait]
     impl CommitCoordinator for MockCoordinator {
+        fn table_uuid(&self) -> &str {
+            TABLE_UUID
+        }
+
         async fn get_commits(&self) -> DeltaResult<CommitList> {
-            Ok(self.0.clone())
+            Ok(self.list.clone())
+        }
+
+        async fn publish(&self, _store: &ObjectStoreRef, _up_to: Version) -> DeltaResult<()> {
+            Ok(())
         }
     }
+
+    #[async_trait]
+    impl Committer for MockCoordinator {
+        async fn commit(
+            &self,
+            _version: Version,
+            _payload: CommitOrBytes,
+            _commit_info: Option<&CommitInfo>,
+        ) -> Result<CommitResponse, TransactionError> {
+            unimplemented!()
+        }
+
+        async fn abort(
+            &self,
+            _version: Version,
+            _payload: CommitOrBytes,
+        ) -> Result<(), TransactionError> {
+            Ok(())
+        }
+
+        fn payload_kind(&self) -> PayloadKind {
+            PayloadKind::Bytes
+        }
+    }
+
+    const TABLE_UUID: &str = "3a0d65cd-4a56-49a8-937b-95f9e3ee90e5";
 
     fn store() -> ObjectStoreRef {
         Arc::new(InMemory::new())
@@ -180,7 +429,7 @@ mod tests {
     fn log_store(list: CommitList) -> CatalogManagedLogStore<MockCoordinator> {
         let url = Url::parse("memory:///cat.schema.table").unwrap();
         let config = LogStoreConfig::new(&url, StorageConfig::default());
-        CatalogManagedLogStore::new(store(), store(), config, Arc::new(MockCoordinator(list)))
+        CatalogManagedLogStore::new(store(), store(), config, Arc::new(MockCoordinator { list }))
     }
 
     fn sample_commits() -> CommitList {
@@ -250,6 +499,19 @@ mod tests {
     }
 
     #[test]
+    fn staged_commit_file_is_zero_padded_under_staged_commits() {
+        let (file_name, path) = staged_commit_file(5, Uuid::nil());
+        assert_eq!(
+            file_name,
+            "00000000000000000005.00000000-0000-0000-0000-000000000000.json"
+        );
+        assert_eq!(
+            path.as_ref(),
+            "_delta_log/_staged_commits/00000000000000000005.00000000-0000-0000-0000-000000000000.json"
+        );
+    }
+
+    #[test]
     fn parse_uc_identity_splits_three_parts() {
         let url = Url::parse("uc://main.sales.orders").unwrap();
         assert_eq!(
@@ -262,11 +524,64 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn read_commit_entry_falls_back_to_staged_tail() {
+        let prefixed: ObjectStoreRef = Arc::new(InMemory::new());
+        let staged = Path::from(
+            "_delta_log/_staged_commits/00000000000000000002.3a0d65cd-4a56-49a8-937b-95f9e3ee90e5.json",
+        );
+        prefixed
+            .put(&staged, Bytes::from_static(b"{\"commitInfo\":{}}").into())
+            .await
+            .unwrap();
+
+        let url = Url::parse("memory:///cat.schema.table").unwrap();
+        let config = LogStoreConfig::new(&url, StorageConfig::default());
+        let ls = CatalogManagedLogStore::new(
+            prefixed.clone(),
+            store(),
+            config,
+            Arc::new(MockCoordinator {
+                list: sample_commits(),
+            }),
+        );
+
+        assert!(ls.read_commit_entry(2).await.unwrap().is_some());
+        assert!(ls.read_commit_entry(99).await.unwrap().is_none());
+    }
+
+    const OURS: &str = "00000000000000000003.11111111-1111-4111-8111-111111111111.json";
+    const THEIRS: &str = "00000000000000000003.22222222-2222-4222-8222-222222222222.json";
+
+    fn listed(version: i64, file_name: &str, max_version: Version) -> CommitList {
+        CommitList {
+            commits: vec![Commit::new(version, 0, file_name, 10, 0)],
+            max_version,
+        }
+    }
+
     #[test]
-    fn catalog_managed_opt_in_detected() {
-        let mut cfg = StorageConfig::default();
-        assert!(!crate::is_catalog_managed_requested(&cfg));
-        cfg.raw.insert("catalog_managed".into(), "true".into());
-        assert!(crate::is_catalog_managed_requested(&cfg));
+    fn classify_listed_attempt_by_staged_file_name() {
+        let list = listed(3, OURS, 3);
+        assert_eq!(
+            classify_attempt(3, OURS, &list),
+            Some(CommitResponse::Committed)
+        );
+        let prefixed = listed(3, &format!("_staged_commits/{OURS}"), 3);
+        assert_eq!(
+            classify_attempt(3, OURS, &prefixed),
+            Some(CommitResponse::Committed)
+        );
+        let lost = listed(3, THEIRS, 3);
+        assert_eq!(
+            classify_attempt(3, OURS, &lost),
+            Some(CommitResponse::Conflict { version: 3 })
+        );
+    }
+
+    #[test]
+    fn classify_unratified_attempt_is_unknown() {
+        let list = listed(2, "00000000000000000002.x.json", 2);
+        assert_eq!(classify_attempt(3, OURS, &list), None);
     }
 }

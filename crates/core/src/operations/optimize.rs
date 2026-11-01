@@ -59,6 +59,7 @@ use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
+use crate::protocol::checkpoints::catalog_managed_maintenance_error;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
@@ -424,6 +425,11 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
 
         Box::pin(async move {
             let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
+
+            if this.log_store.is_catalog_managed() {
+                return Err(catalog_managed_maintenance_error("OPTIMIZE"));
+            }
+
             if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
                 return Err(DeltaTableError::unsupported_column_mapping(
                     ColumnMappingOperation::Write,
