@@ -24,7 +24,7 @@ use delta_kernel::expressions::{
     VariadicExpressionOp,
 };
 use delta_kernel::schema::{DataType, PrimitiveType, SchemaRef, StructField, StructType};
-use delta_kernel::{DeltaResult, EngineData, Error as KernelError};
+use delta_kernel::{EngineData, KernelError, KernelResult as DeltaResult};
 
 use super::predicate::to_datafusion_predicate_expr;
 use super::scalar::to_datafusion_scalar;

@@ -8,7 +8,7 @@ use datafusion::execution::{
 use delta_kernel::engine::parse_json as arrow_parse_json;
 use delta_kernel::{
     EngineData, FileDataReadResultIterator, FileMeta, FilteredEngineData, JsonHandler,
-    ParquetHandler, PredicateRef, error::DeltaResult as KernelResult, schema::SchemaRef,
+    ParquetHandler, PredicateRef, error::KernelResult, schema::SchemaRef,
 };
 use delta_kernel_default_engine::{
     executor::tokio::{TokioBackgroundExecutor, TokioMultiThreadExecutor},
@@ -53,7 +53,7 @@ impl DataFusionFileFormatHandler {
         let store = self
             .registry()
             .get_store(url.as_ref())
-            .map_err(delta_kernel::Error::generic_err)?;
+            .map_err(delta_kernel::KernelError::generic_err)?;
 
         let handler: Arc<dyn ParquetHandler> = match self.handle.runtime_flavor() {
             RuntimeFlavor::MultiThread => Arc::new(DefaultParquetHandler::new(
@@ -81,7 +81,7 @@ impl DataFusionFileFormatHandler {
         let store = self
             .registry()
             .get_store(url.as_ref())
-            .map_err(delta_kernel::Error::generic_err)?;
+            .map_err(delta_kernel::KernelError::generic_err)?;
 
         let handler: Arc<dyn JsonHandler> = match self.handle.runtime_flavor() {
             RuntimeFlavor::MultiThread => Arc::new(DefaultJsonHandler::new(
@@ -131,7 +131,7 @@ impl ParquetHandler for DataFusionFileFormatHandler {
         &self,
         _location: url::Url,
         _data: Box<dyn Iterator<Item = KernelResult<Box<dyn EngineData>>> + Send>,
-    ) -> KernelResult<()> {
+    ) -> KernelResult<u64> {
         todo!("write parquet file")
     }
 
