@@ -1004,6 +1004,13 @@ async fn execute(
     // In the case where there are partition columns in the join predicate, we can scan the source table
     // to get the distinct list of partitions affected and constrain the search to those.
 
+    let reads_only_target = |filter: &Expr| {
+        filter
+            .column_refs()
+            .into_iter()
+            .all(|c| target.schema().index_of_column(c).is_ok())
+    };
+
     // The `WHEN NOT MATCHED BY SOURCE` clauses touch target rows that match no source row, so the
     // early filter must keep the files those rows are in: OR their predicates onto it (#4535). An
     // unconditional clause, or one that reads a non-target column, can touch any row and forces a
@@ -1018,16 +1025,12 @@ async fn execute(
         None => (false, None),
         Some(predicates) => {
             let filter = predicates.into_iter().reduce(Expr::or);
-            let target_only = filter.as_ref().is_none_or(|filter| {
-                filter
-                    .column_refs()
-                    .into_iter()
-                    .all(|c| target.schema().index_of_column(c).is_ok())
-            });
-            (target_only, filter)
+            (filter.as_ref().is_none_or(reads_only_target), filter)
         }
     };
 
+    // The early filter keeps source columns that the join predicate does not qualify, as in
+    // `id = source_id`. Such a filter cannot skip target files.
     let target_subset_filter = if skip_files {
         try_construct_early_filter(
             predicate.clone(),
@@ -1046,6 +1049,7 @@ async fn execute(
     } else {
         None
     }
+    .filter(reads_only_target)
     .map(|e| normalize_target_subset_filter(target.schema().clone(), e))
     .transpose()?;
 
