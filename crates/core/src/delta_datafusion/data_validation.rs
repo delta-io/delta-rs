@@ -850,17 +850,16 @@ fn collect_non_nullable_fields_recursive(
                 }
             }
         }
-        DataType::List(element) | DataType::LargeList(element) => {
+        DataType::List(element) | DataType::LargeList(element)
             // Record a non-nullable element so the collection check can enforce it; we don't
             // recurse further as paths past a list element aren't addressable today.
             // FixedSizeList is intentionally excluded: DataFusion's array_compact does not
             // support it, so we can't emit a safe check.
-            if !element.is_nullable() {
+            if !element.is_nullable() => {
                 let mut element_path = current_path.clone();
                 element_path.push(element.name());
                 non_nullable_paths.push(ColumnName::from_iter(element_path.iter().cloned()));
             }
-        }
         // For primitive types, we've already recorded if non-nullable above
         _ => {}
     }
