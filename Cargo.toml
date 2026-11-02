@@ -85,7 +85,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Cargo.lock is gitignored, so the pin must live here; it is referenced by
 # deltalake-python's build-dependencies to constrain workspace resolution.
 # Remove once sccache handles -Tp/-Tc arguments (https://github.com/mozilla/sccache/issues/2062).
-cc = "=1.8.0"
+cc = "=1.10.0"
 
 [workspace.metadata.typos]
 files.extend-exclude = ["CHANGELOG.md", "crates/benchmarks/queries/tpcds/*.sql"]
