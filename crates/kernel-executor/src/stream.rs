@@ -9,7 +9,7 @@
 
 use datafusion::execution::SendableRecordBatchStream;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
-use delta_kernel::{DeltaResultIteratorStatic, EngineData};
+use delta_kernel::{EngineData, KernelResultIteratorStatic as DeltaResultIteratorStatic};
 use futures::StreamExt;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
