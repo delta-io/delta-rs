@@ -299,17 +299,9 @@ impl TablePropertiesExt for TableProperties {
 
     /// Return the check constraints on the current table
     fn get_constraints(&self) -> Vec<Constraint> {
-        // TODO: upstream parsing of constraints to delta-kernel
-        self.unknown_properties
+        self.check_constraints
             .iter()
-            .filter_map(|(field, value)| {
-                if field.starts_with("delta.constraints") {
-                    let constraint_name = field.replace("delta.constraints.", "");
-                    Some(Constraint::new(&constraint_name, value))
-                } else {
-                    None
-                }
-            })
+            .map(|constraint| Constraint::new(constraint.name(), constraint.raw_sql()))
             .collect()
     }
 }
