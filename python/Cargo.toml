@@ -44,7 +44,7 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 env_logger = "0"
 thiserror = { workspace = true }
-parking_lot = "0.12"
+parking_lot = "0.13"
 
 # runtime
 futures = { workspace = true }
