@@ -1503,16 +1503,14 @@ mod tests {
                 range.end - range.start == METADATA_SIZE_HINT && parquet_sizes.contains(&range.end)
             };
             match op {
-                RecordedObjectStoreOperation::GetRange(kind, range)
-                    if matches!(kind, RecordedPathKind::Data | RecordedPathKind::Other) =>
-                {
-                    is_prefetch(range)
-                }
-                RecordedObjectStoreOperation::GetRanges(kind, ranges)
-                    if matches!(kind, RecordedPathKind::Data | RecordedPathKind::Other) =>
-                {
-                    ranges.iter().any(is_prefetch)
-                }
+                RecordedObjectStoreOperation::GetRange(
+                    RecordedPathKind::Data | RecordedPathKind::Other,
+                    range,
+                ) => is_prefetch(range),
+                RecordedObjectStoreOperation::GetRanges(
+                    RecordedPathKind::Data | RecordedPathKind::Other,
+                    ranges,
+                ) => ranges.iter().any(is_prefetch),
                 _ => false,
             }
         });
