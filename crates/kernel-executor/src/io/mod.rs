@@ -9,7 +9,7 @@
 //! [`DataFusionFileFormatHandler`]: self::file_formats::DataFusionFileFormatHandler
 
 use delta_kernel::plans::{IoOperation, PlanResult};
-use delta_kernel::{DeltaResult, ParquetHandler as _, StorageHandler as _};
+use delta_kernel::{KernelResult as DeltaResult, ParquetHandler as _, StorageHandler as _};
 
 use crate::DataFusionPlanExecutor;
 

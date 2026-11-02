@@ -13,7 +13,7 @@ use std::sync::Arc;
 use datafusion::common::DataFusionError;
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::LogicalPlan;
-use delta_kernel::DeltaResult;
+use delta_kernel::KernelResult as DeltaResult;
 use delta_kernel::plans::PlanResult;
 use delta_kernel::plans::ir::plan::Plan;
 
