@@ -319,6 +319,15 @@ fn extract_file_statistics(
                             extract_precision(&min_values, f.name()),
                             scan_config,
                         );
+                        // Parquet statistics leave NaN out of float min/max, so equal
+                        // Exact bounds plus an Exact(0) null count do not prove every
+                        // row holds that value, yet that is exactly the combination
+                        // DataFusion constant-folds a column from: NaN rows were
+                        // rewritten to the bound value (#5007). Downgrade the null
+                        // count for equal-bound float columns so the file is read row
+                        // by row; bound-based pruning still applies.
+                        let null_count =
+                            adjust_float_null_count(&min_value, &max_value, null_count);
 
                         ColumnStatistics {
                             null_count,
@@ -369,6 +378,39 @@ fn extract_precision(data: &Option<StructData>, name: impl AsRef<str>) -> Precis
             .unwrap_or_default()
     } else {
         Precision::Absent
+    }
+}
+
+/// Downgrade the null count for a float column whose min and max bounds are
+/// equal.
+///
+/// Parquet statistics exclude NaN from float min/max, so a file holding
+/// `[NaN, 9.0]` is recorded with min = max = 9.0 and 0 nulls. Together with
+/// an Exact null count, DataFusion treats that combination as proof the
+/// column is constant and replaces it with the bound value, silently
+/// rewriting NaN rows on reads and on write-back (#5007). Reporting the
+/// null count as inexact breaks exactly that combination while leaving the
+/// bounds Exact, so file pruning by min/max still works.
+fn adjust_float_null_count(
+    min_value: &Precision<ScalarValue>,
+    max_value: &Precision<ScalarValue>,
+    null_count: Precision<usize>,
+) -> Precision<usize> {
+    let equal_bounds = matches!(
+        (min_value, max_value),
+        (Precision::Exact(min), Precision::Exact(max)) if min == max && !min.is_null()
+    );
+    let is_float = matches!(
+        min_value,
+        Precision::Exact(ScalarValue::Float32(_)) | Precision::Exact(ScalarValue::Float64(_))
+    );
+    if is_float && equal_bounds {
+        match null_count {
+            Precision::Exact(n) => Precision::Inexact(n),
+            other => other,
+        }
+    } else {
+        null_count
     }
 }
 
@@ -543,7 +585,9 @@ mod tests {
     use delta_kernel::scan::state::{DvInfo, ScanFile};
     use url::Url;
 
-    use super::{ScanContext, visit_scan_file};
+    use datafusion::{common::stats::Precision, scalar::ScalarValue};
+
+    use super::{adjust_float_null_count, visit_scan_file, ScanContext};
 
     fn scan_file(path: impl Into<String>) -> ScanFile {
         ScanFile {
@@ -574,6 +618,47 @@ mod tests {
         assert_eq!(
             ctx.files[0].file_url.as_str(),
             "file:///tmp/delta/part-000.parquet"
+        );
+    }
+
+    #[test]
+    fn test_adjust_float_null_count_downgrades_equal_float_bounds() {
+        let min = Precision::Exact(ScalarValue::Float64(Some(9.0)));
+        let max = Precision::Exact(ScalarValue::Float64(Some(9.0)));
+        assert_eq!(
+            adjust_float_null_count(&min, &max, Precision::Exact(0)),
+            Precision::Inexact(0)
+        );
+        let min32 = Precision::Exact(ScalarValue::Float32(Some(9.0)));
+        let max32 = Precision::Exact(ScalarValue::Float32(Some(9.0)));
+        assert_eq!(
+            adjust_float_null_count(&min32, &max32, Precision::Exact(5)),
+            Precision::Inexact(5)
+        );
+    }
+
+    #[test]
+    fn test_adjust_float_null_count_keeps_other_cases_exact() {
+        // Unequal float bounds cannot constant-fold, so nothing changes.
+        let min = Precision::Exact(ScalarValue::Float64(Some(9.0)));
+        let max = Precision::Exact(ScalarValue::Float64(Some(10.0)));
+        assert_eq!(
+            adjust_float_null_count(&min, &max, Precision::Exact(0)),
+            Precision::Exact(0)
+        );
+        // Non-float columns have no NaN gap in their bounds.
+        let min = Precision::Exact(ScalarValue::Int64(Some(3)));
+        let max = Precision::Exact(ScalarValue::Int64(Some(3)));
+        assert_eq!(
+            adjust_float_null_count(&min, &max, Precision::Exact(0)),
+            Precision::Exact(0)
+        );
+        // Absent null counts stay absent.
+        let min = Precision::Exact(ScalarValue::Float64(Some(9.0)));
+        let max = Precision::Exact(ScalarValue::Float64(Some(9.0)));
+        assert_eq!(
+            adjust_float_null_count(&min, &max, Precision::Absent),
+            Precision::Absent
         );
     }
 }
