@@ -155,8 +155,9 @@ fn array_has_expr(
     ))
 }
 
-/// Lowers a junction (`And`/`Or`) by converting each child and folding left-associatively. An
-/// empty junction lowers `AND` to `true` and `OR` to `false`, keeping kernel semantics.
+/// Lowers a junction (`And`/`Or`) by converting each child and folding them with
+/// [`fold_terms`]. An empty junction lowers `AND` to `true` and `OR` to `false`, keeping kernel
+/// semantics.
 fn junction_to_df(junction: &JunctionPredicate, input_schema: &StructType) -> DeltaResult<Expr> {
     let JunctionPredicate { op, preds } = junction;
     let df_exprs: Vec<_> = preds
@@ -164,15 +165,32 @@ fn junction_to_df(junction: &JunctionPredicate, input_schema: &StructType) -> De
         .map(|e| to_datafusion_predicate_expr(e, input_schema))
         .try_collect()?;
     match op {
-        JunctionPredicateOp::And => Ok(df_exprs
-            .into_iter()
-            .reduce(|a, b| a.and(b))
-            .unwrap_or(lit(true))),
-        JunctionPredicateOp::Or => Ok(df_exprs
-            .into_iter()
-            .reduce(|a, b| a.or(b))
-            .unwrap_or(lit(false))),
+        JunctionPredicateOp::And => Ok(fold_terms(df_exprs, Expr::and, lit(true))),
+        JunctionPredicateOp::Or => Ok(fold_terms(df_exprs, Expr::or, lit(false))),
     }
+}
+
+/// Junctions up to this many terms keep the left-deep shape a hand-written chain has.
+const BALANCED_FOLD_THRESHOLD: usize = 256;
+
+/// Folds terms left-associatively, or pairwise past [`BALANCED_FOLD_THRESHOLD`] so tree depth is
+/// O(log n): a left-deep tree of thousands of terms overflows the stack when walked.
+fn fold_terms(mut terms: Vec<Expr>, combine: fn(Expr, Expr) -> Expr, empty: Expr) -> Expr {
+    if terms.len() <= BALANCED_FOLD_THRESHOLD {
+        return terms.into_iter().reduce(combine).unwrap_or(empty);
+    }
+    while terms.len() > 1 {
+        let mut next = Vec::with_capacity(terms.len().div_ceil(2));
+        let mut iter = terms.into_iter();
+        while let Some(a) = iter.next() {
+            next.push(match iter.next() {
+                Some(b) => combine(a, b),
+                None => a,
+            });
+        }
+        terms = next;
+    }
+    terms.pop().unwrap_or(empty)
 }
 
 #[cfg(test)]
@@ -356,6 +374,24 @@ mod predicate_tests {
     )]
     fn predicate_lowers_to_expected(#[case] kernel: KernelPred, #[case] expected: &str) {
         assert_eq!(lower(kernel), expected);
+    }
+
+    #[test]
+    fn long_junction_lowers_without_stack_overflow() {
+        // Pin the stack to the 2 MiB default so RUST_MIN_STACK cannot hide a regression.
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let n = 10_000i64;
+                let terms = || (0..n).map(|i| column_expr!("a").eq(lit(i)));
+                let expected = |op| (0..n).map(|i| format!("a = Int64({i})")).join(op);
+                // Display recurses over the whole tree, and checks every term is kept in order.
+                assert_eq!(lower(KernelPred::or_from(terms())), expected(" OR "));
+                assert_eq!(lower(KernelPred::and_from(terms())), expected(" AND "));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[rstest]

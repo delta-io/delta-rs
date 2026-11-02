@@ -46,6 +46,7 @@ fn inner_to_py_err(err: DeltaTableError) -> PyErr {
         DeltaTableError::Io { source } => PyIOError::new_err(source.to_string()),
 
         DeltaTableError::Arrow { source } => arrow_to_py(source),
+        DeltaTableError::SchemaMismatch { .. } => SchemaMismatchError::new_err(err.to_string()),
 
         // catch all
         _ => DeltaError::new_err(err.to_string()),
