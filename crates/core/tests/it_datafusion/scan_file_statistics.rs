@@ -81,15 +81,15 @@ fn collect(
     total_capacity: &mut usize,
     files: &mut usize,
 ) {
-    if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-        if let Some(config) = exec.data_source().downcast_ref::<FileScanConfig>() {
-            for group in config.file_groups.iter() {
-                for partitioned_file in group.files() {
-                    *files += 1;
-                    if let Some(stats) = &partitioned_file.statistics {
-                        *total_column_stats += stats.column_statistics.len();
-                        *total_capacity += stats.column_statistics.capacity();
-                    }
+    if let Some(exec) = plan.downcast_ref::<DataSourceExec>()
+        && let Some(config) = exec.data_source().downcast_ref::<FileScanConfig>()
+    {
+        for group in config.file_groups.iter() {
+            for partitioned_file in group.files() {
+                *files += 1;
+                if let Some(stats) = &partitioned_file.statistics {
+                    *total_column_stats += stats.column_statistics.len();
+                    *total_capacity += stats.column_statistics.capacity();
                 }
             }
         }
