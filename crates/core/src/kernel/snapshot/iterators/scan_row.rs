@@ -100,6 +100,36 @@ where
     }
 }
 
+/// Build the evaluator that normalizes cached scan-row batches, using `input_schema` as the
+/// evaluator's declared input.
+///
+/// The input schema must describe the batches actually evaluated. Cached batches may lack
+/// `partitionValues_parsed` even when the snapshot's metadata is partitioned (for example after
+/// an overwrite changed the partition columns), so callers should pass the batch's own schema.
+pub(crate) fn scan_row_in_eval_for_schema(
+    input_schema: &Arc<Schema>,
+) -> DeltaResult<Arc<dyn ExpressionEvaluator>> {
+    static EXPRESSION: LazyLock<Arc<Expression>> = LazyLock::new(|| {
+        Expression::struct_from(
+            scan_row_schema()
+                .fields()
+                .map(|field| Expression::column([field.name.clone()])),
+        )
+        .into()
+    });
+    static OUT_TYPE: LazyLock<DataType> =
+        LazyLock::new(|| DataType::Struct(Box::new(scan_row_schema().as_ref().clone())));
+
+    let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
+
+    Ok(ARROW_HANDLER.new_expression_evaluator(
+        input_schema,
+        EXPRESSION.clone(),
+        OUT_TYPE.clone(),
+    )?)
+}
+
+#[cfg(test)]
 pub(crate) fn scan_row_in_eval(
     snapshot: &KernelSnapshot,
 ) -> DeltaResult<Arc<dyn ExpressionEvaluator>> {
