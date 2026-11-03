@@ -1749,7 +1749,7 @@ mod tests {
         let err = adapter
             .adapt(source)
             .expect_err("invalid value cast should fail under DataFusion default cast semantics");
-        match err {
+        match err.find_root() {
             DataFusionError::ArrowError(inner, _) => {
                 assert!(
                     matches!(inner.as_ref(), ArrowError::CastError(_)),
@@ -1806,7 +1806,7 @@ mod tests {
         let err = adapter
             .adapt(source)
             .expect_err("overflow cast should fail under DataFusion default cast semantics");
-        match err {
+        match err.find_root() {
             DataFusionError::ArrowError(inner, _) => {
                 assert!(
                     matches!(inner.as_ref(), ArrowError::CastError(_)),

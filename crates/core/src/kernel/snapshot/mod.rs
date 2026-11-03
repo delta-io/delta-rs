@@ -53,7 +53,7 @@ use crate::{DeltaResult, DeltaTableError};
 pub use self::log_data::*;
 use self::stats_projection::FIELD_STATS;
 pub(crate) use self::stats_projection::{
-    FIELD_STATS_PARSED, FileStatsMaterialization, StatsProjection,
+    FIELD_PARTITION_VALUES_PARSED, FIELD_STATS_PARSED, FileStatsMaterialization, StatsProjection,
 };
 pub use iterators::*;
 pub use scan::*;

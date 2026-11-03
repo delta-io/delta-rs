@@ -806,8 +806,9 @@ pub async fn get_latest_version(
     .await
     .map_err(|e| DeltaTableError::Generic(e.to_string()))?
     .map_err(|e| {
-        if e.to_string()
-            .contains(&format!("to have version {current_version}"))
+        if matches!(e, delta_kernel::KernelError::EmptyLog)
+            || e.to_string()
+                .contains(&format!("to have version {current_version}"))
         {
             DeltaTableError::InvalidVersion(current_version)
         } else {

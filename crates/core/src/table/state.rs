@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use crate::kernel::Action;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
-use crate::kernel::snapshot::FIELD_STATS_PARSED;
+use crate::kernel::snapshot::{FIELD_PARTITION_VALUES_PARSED, FIELD_STATS_PARSED};
 use crate::kernel::{
     ARROW_HANDLER, DataType, EagerSnapshot, LogDataHandler, Metadata, Protocol, Snapshot,
     TombstoneView, Version,
@@ -479,16 +479,27 @@ fn add_missing_stats_parsed(
     batch: &RecordBatch,
     input_schema: &ArrowSchema,
 ) -> DeltaResult<RecordBatch> {
-    if batch.schema().field_with_name(FIELD_STATS_PARSED).is_ok() {
+    // Batches cached before the current metadata (e.g. from before the table was replaced with a
+    // partitioned one) can lack either parsed column. The kernel validates the data against the
+    // input schema, so back-fill them with nulls.
+    let mut fields = batch.schema().fields().to_vec();
+    let mut columns = batch.columns().to_vec();
+    for name in [FIELD_STATS_PARSED, FIELD_PARTITION_VALUES_PARSED] {
+        if batch.schema().field_with_name(name).is_ok() {
+            continue;
+        }
+        let field = match input_schema.field_with_name(name) {
+            Ok(field) => field,
+            // Only the partition values are optional: they exist for partitioned tables only.
+            Err(_) if name == FIELD_PARTITION_VALUES_PARSED => continue,
+            Err(err) => return Err(err.into()),
+        };
+        columns.push(new_null_array(field.data_type(), batch.num_rows()));
+        fields.push(Arc::new(field.clone()));
+    }
+    if columns.len() == batch.num_columns() {
         return Ok(batch.clone());
     }
-
-    let stats_field = input_schema.field_with_name(FIELD_STATS_PARSED)?.clone();
-    let mut fields = batch.schema().fields().to_vec();
-    fields.push(Arc::new(stats_field.clone()));
-
-    let mut columns = batch.columns().to_vec();
-    columns.push(new_null_array(stats_field.data_type(), batch.num_rows()));
 
     Ok(RecordBatch::try_new(
         Arc::new(ArrowSchema::new(fields)),

@@ -120,8 +120,9 @@ mod datafusion {
     use arrow_array::{Array, StringArray};
     use arrow_array::{ArrayRef, BooleanArray, UInt64Array};
     use arrow_schema::DataType as ArrowDataType;
+    use delta_kernel::engine::arrow_conversion::TryFromArrow;
     use delta_kernel::expressions::Expression;
-    use delta_kernel::schema::{DataType, PrimitiveType};
+    use delta_kernel::schema::{DataType, PrimitiveType, StructType};
     use delta_kernel::{EvaluationHandler, ExpressionEvaluator};
     use itertools::Itertools;
 
@@ -133,6 +134,38 @@ mod datafusion {
     use crate::kernel::snapshot::ceil_timestamps;
 
     impl LogDataHandler<'_> {
+        /// Evaluate `expression` over every batch and concatenate the results.
+        ///
+        /// The evaluator's input schema is taken from the batches themselves: the kernel
+        /// validates it against the data, and the cached file batches are the flat file view
+        /// (`path`, `stats_parsed`, ...) and not the Delta log schema.
+        fn evaluate_column(
+            &self,
+            expression: Expression,
+            output_type: DataType,
+        ) -> Option<ArrayRef> {
+            let input_schema =
+                Arc::new(StructType::try_from_arrow(self.data.first()?.schema().as_ref()).ok()?);
+            let evaluator = ARROW_HANDLER
+                .new_expression_evaluator(input_schema, expression.into(), output_type)
+                .ok()?;
+            let results: Vec<_> = self
+                .data
+                .iter()
+                .map(|data| -> DeltaResult<_> {
+                    Ok(evaluator.evaluate_arrow(data.clone())?.column(0).clone())
+                })
+                .try_collect()
+                .ok()?;
+            concat(
+                &results
+                    .iter()
+                    .map(|result| result.as_ref())
+                    .collect::<Vec<_>>(),
+            )
+            .ok()
+        }
+
         fn pick_stats(&self, column: &Column, stats_field: &'static str) -> Option<ArrayRef> {
             let schema = self.config.logical_schema();
             let field = schema.field(&column.name)?;
@@ -150,29 +183,7 @@ mod datafusion {
             } else {
                 Expression::column(["stats_parsed", stats_field, &column.name])
             };
-            let evaluator = ARROW_HANDLER
-                .new_expression_evaluator(
-                    crate::kernel::models::fields::log_schema_ref().clone(),
-                    expression.into(),
-                    field.data_type().clone(),
-                )
-                .ok()?;
-
-            let results: Vec<_> = self
-                .data
-                .iter()
-                .map(|data| -> DeltaResult<_> {
-                    Ok(evaluator.evaluate_arrow(data.clone())?.column(0).clone())
-                })
-                .try_collect()
-                .ok()?;
-            concat(
-                &results
-                    .iter()
-                    .map(|result| result.as_ref())
-                    .collect::<Vec<_>>(),
-            )
-            .ok()
+            self.evaluate_column(expression, field.data_type().clone())
         }
 
         /// Evaluate the raw partition values for a `Binary`-typed partition column.
@@ -195,28 +206,7 @@ mod datafusion {
                 return None;
             }
             let expression = Expression::column(["partitionValues_parsed", &column.name]);
-            let evaluator = ARROW_HANDLER
-                .new_expression_evaluator(
-                    crate::kernel::models::fields::log_schema_ref().clone(),
-                    expression.into(),
-                    field.data_type().clone(),
-                )
-                .ok()?;
-            let results: Vec<_> = self
-                .data
-                .iter()
-                .map(|data| -> DeltaResult<_> {
-                    Ok(evaluator.evaluate_arrow(data.clone())?.column(0).clone())
-                })
-                .try_collect()
-                .ok()?;
-            concat(
-                &results
-                    .iter()
-                    .map(|result| result.as_ref())
-                    .collect::<Vec<_>>(),
-            )
-            .ok()
+            self.evaluate_column(expression, field.data_type().clone())
         }
 
         /// Evaluate whether each file's binary partition value is a member of `values`.

@@ -527,10 +527,9 @@ impl Scan {
         existing_predicate: Option<PredicateRef>,
     ) -> SendableScanMetadataStream {
         let inner = self.inner.clone();
-        let snapshot = self.inner.snapshot().clone();
 
         // process our stored / cached data to conform to the expected input for log replay
-        let evaluator = match scan_row_in_eval(&snapshot) {
+        let evaluator = match scan_row_in_eval() {
             Ok(scan_row_in_eval) => scan_row_in_eval,
             Err(err) => return Box::pin(once(ready(Err(err)))),
         };
