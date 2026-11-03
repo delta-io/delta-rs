@@ -437,3 +437,239 @@ mod delete_expired_delta_log_in_checkpoint {
         Ok(())
     }
 }
+
+mod post_commit_reload_is_best_effort {
+    use super::*;
+    use std::collections::HashMap;
+    use std::fmt;
+    use std::fs::{FileTimes, OpenOptions};
+    use std::ops::Sub;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, SystemTime};
+
+    use ::object_store::path::Path as ObjectStorePath;
+    use ::object_store::{
+        CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+    };
+    use deltalake_core::TableProperty;
+    use futures::stream::BoxStream;
+
+    /// Delegates to a local file store. Once any object has been deleted, reads of `_delta_log/`
+    /// fail. Log cleanup is the only delete in the write path, so the failure lands on the
+    /// reload that follows it.
+    #[derive(Debug)]
+    struct FailLogReadsAfterDelete {
+        inner: Arc<dyn ObjectStore>,
+        armed: Arc<AtomicBool>,
+        deleted: Arc<AtomicBool>,
+    }
+
+    impl fmt::Display for FailLogReadsAfterDelete {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("FailLogReadsAfterDelete")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for FailLogReadsAfterDelete {
+        async fn put_opts(
+            &self,
+            location: &ObjectStorePath,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.inner.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &ObjectStorePath,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &ObjectStorePath,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            if self.armed.load(Ordering::SeqCst)
+                && self.deleted.load(Ordering::SeqCst)
+                && location.as_ref().contains("_delta_log/")
+            {
+                return Err(object_store::Error::Generic {
+                    store: "FailLogReadsAfterDelete",
+                    source: "injected read failure after log cleanup".into(),
+                });
+            }
+            self.inner.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<ObjectStorePath>>,
+        ) -> BoxStream<'static, object_store::Result<ObjectStorePath>> {
+            let deleted = self.deleted.clone();
+            let locations = futures::StreamExt::map(locations, move |location| {
+                if location.is_ok() {
+                    deleted.store(true, Ordering::SeqCst);
+                }
+                location
+            });
+            self.inner
+                .delete_stream(futures::StreamExt::boxed(locations))
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&ObjectStorePath>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&ObjectStorePath>,
+        ) -> object_store::Result<ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &ObjectStorePath,
+            to: &ObjectStorePath,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+
+        async fn rename_opts(
+            &self,
+            from: &ObjectStorePath,
+            to: &ObjectStorePath,
+            options: RenameOptions,
+        ) -> object_store::Result<()> {
+            self.inner.rename_opts(from, to, options).await
+        }
+    }
+
+    fn set_log_last_modified(table_path: &std::path::Path, version: usize, age: Duration) {
+        let path = table_path
+            .join("_delta_log")
+            .join(format!("{version:020}.json"));
+        let file = OpenOptions::new().write(true).open(path).unwrap();
+        let when = SystemTime::now().sub(age);
+        file.set_times(FileTimes::new().set_modified(when).set_accessed(when))
+            .unwrap();
+    }
+
+    /// A post-commit reload failure after log cleanup must not fail the write: the commit is
+    /// already durable. Regression for the reload `?` in `PostCommit::run_post_commit_hook`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_reload_after_post_commit_cleanup_does_not_fail_the_commit()
+    -> deltalake_core::DeltaResult<()> {
+        // Zero retention lets cleanup delete version 0 once it is aged.
+        let mut table = fs_common::create_table(
+            "../test/tests/data/post_commit_reload_best_effort",
+            Some(HashMap::from([
+                (
+                    TableProperty::LogRetentionDuration.as_ref().into(),
+                    Some("interval 0 minute".to_string()),
+                ),
+                (
+                    TableProperty::EnableExpiredLogCleanup.as_ref().into(),
+                    Some("true".to_string()),
+                ),
+                (
+                    TableProperty::CheckpointInterval.as_ref().into(),
+                    Some("1".to_string()),
+                ),
+            ])),
+        )
+        .await;
+        let table_path = table
+            .table_url()
+            .to_file_path()
+            .expect("Failed to convert the table's Url to a file path");
+
+        // Two commits. The first is made old so cleanup can expire it.
+        let a1 = fs_common::add(0);
+        let a2 = fs_common::add(0);
+        assert_eq!(1, fs_common::commit_add(&mut table, &a1).await);
+        set_log_last_modified(&table_path, 0, Duration::from_secs(60 * 60));
+        set_log_last_modified(&table_path, 1, Duration::from_secs(60 * 60));
+
+        // A complete checkpoint at version 1 gives cleanup a safe boundary to delete behind.
+        deltalake_core::checkpoints::create_checkpoint(&table)
+            .await
+            .expect("create checkpoint at version 1");
+
+        // Third commit goes through a store that fails log reads once cleanup has deleted.
+        let local: Arc<dyn ObjectStore> = table.log_store().root_object_store();
+        let armed = Arc::new(AtomicBool::new(false));
+        let deleted = Arc::new(AtomicBool::new(false));
+        let wrapped: Arc<dyn ObjectStore> = Arc::new(FailLogReadsAfterDelete {
+            inner: local,
+            armed: armed.clone(),
+            deleted: deleted.clone(),
+        });
+        let table_url = table.table_url().clone();
+        let log_store = deltalake_core::logstore::logstore_with(
+            wrapped,
+            &table_url,
+            deltalake_core::logstore::StorageConfig::default(),
+        )
+        .expect("build log store over the failing store");
+        let mut writer = deltalake_core::DeltaTable::new(log_store);
+        writer
+            .load()
+            .await
+            .expect("load table through the failing store");
+        // Arm the failure only for the commit under test, after the table is loaded.
+        armed.store(true, Ordering::SeqCst);
+
+        // Drive the commit directly: the helper also calls `update_state()` on this table, which
+        // reads the log through the failing store and is not the post-commit path under test.
+        let snapshot = writer.snapshot().unwrap().clone();
+        let committed = deltalake_core::kernel::transaction::CommitBuilder::default()
+            .with_actions(vec![deltalake_core::kernel::Action::Add(a2.clone())])
+            .build(
+                Some(&snapshot),
+                writer.log_store().clone(),
+                deltalake_core::protocol::DeltaOperation::Write {
+                    mode: deltalake_core::protocol::SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await
+            .expect("commit must succeed even though the post-commit reload fails");
+        let version = committed.version();
+        assert_eq!(
+            version, 2,
+            "commit must be durable even though reload fails"
+        );
+        assert!(
+            deleted.load(Ordering::SeqCst),
+            "cleanup must have deleted expired log entries for the reload to fail"
+        );
+        assert!(
+            !table_path
+                .join("_delta_log")
+                .join(format!("{:020}.json", 0))
+                .exists(),
+            "expired version 0 commit should have been removed"
+        );
+
+        // A fresh reader sees the durable commit.
+        let mut reloaded = deltalake_core::DeltaTableBuilder::from_url(table_url.clone())?
+            .load()
+            .await?;
+        assert_eq!(reloaded.version(), Some(2));
+        reloaded.load_version(2).await?;
+        Ok(())
+    }
+}

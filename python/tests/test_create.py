@@ -6,6 +6,7 @@ from arro3.core import Table
 
 from deltalake import CommitProperties, DeltaTable, Field, Schema, write_deltalake
 from deltalake.exceptions import DeltaError
+from deltalake.query import QueryBuilder
 from deltalake.schema import PrimitiveType, VariantType
 
 if TYPE_CHECKING:
@@ -273,3 +274,43 @@ def test_create_positional_and_keyword_raise_if_key_not_exists_conflict_raises(
             False,
             raise_if_key_not_exists=True,
         )
+
+
+@pytest.mark.pyarrow
+def test_concurrent_create_loser_fails(tmp_path: pathlib.Path):
+    """https://github.com/delta-io/delta-rs/issues/4982
+
+    When two creates race for version 0, the loser must fail instead of
+    committing its own protocol and metaData over the winner's.
+    """
+    import threading
+
+    import pyarrow as pa
+
+    table_path = tmp_path / "t"
+    barrier = threading.Barrier(2)
+    errors: list[Exception] = []
+
+    def create(data: "pa.Table") -> None:
+        barrier.wait()
+        try:
+            write_deltalake(table_path, data)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=create, args=(data,))
+        for data in (pa.table({"x": [1]}), pa.table({"y": [2]}))
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    # one create wins version 0, the other raises as it does when run second
+    assert len(errors) == 1
+
+    dt = DeltaTable(table_path)
+    assert dt.version() == 0
+    result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
+    assert result.num_rows == 1

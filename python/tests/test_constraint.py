@@ -101,8 +101,9 @@ def test_add_constraint(tmp_path, sample_table: Table, sql_string: str):
     last_action = next(dt.history(1))
     assert last_action["operation"] == "ADD CONSTRAINT"
     assert dt.version() == 1
+    # Stored Spark-compatible: backtick-quoted, never double-quoted (delta-rs#4993).
     assert dt.metadata().configuration == {
-        "delta.constraints.check_price": '"high price" >= 0'
+        "delta.constraints.check_price": "`high price` >= 0"
     }
     assert dt.protocol().min_writer_version == 3
 
@@ -137,8 +138,8 @@ def test_add_multiple_constraint(tmp_path, sample_table: Table):
     assert last_action["operation"] == "ADD CONSTRAINT"
     assert dt.version() == 1
     assert dt.metadata().configuration == {
-        "delta.constraints.check_price": '"high price" >= 0',
-        "delta.constraints.min_price": '"high price" < 5'
+        "delta.constraints.check_price": "`high price` >= 0",
+        "delta.constraints.min_price": "`high price` < 5"
 
     }
     assert dt.protocol().min_writer_version == 3
@@ -185,3 +186,23 @@ Preview of invalid data:
         write_deltalake(tmp_path, invalid, mode="append")
 
     assert str(exc_info.value) == expected
+
+
+@pytest.mark.pyarrow
+def test_add_constraint_stores_spark_parseable_expression(tmp_path):
+    """https://github.com/delta-io/delta-rs/issues/4993
+
+    A constraint on a mixed-case column must be stored so delta-spark parses
+    the column as an identifier: delta-spark reads a double-quoted "Value" as
+    a string literal, which makes `Value IS NOT NULL` always true and lets a
+    NULL commit.
+    """
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, pa.table({"Value": [5]}))
+    dt = DeltaTable(tmp_path)
+    dt.alter.add_constraint({"c": "Value IS NOT NULL"})
+
+    stored = dt.metadata().configuration["delta.constraints.c"]
+    assert '"Value"' not in stored
+    assert stored == "Value IS NOT NULL"
