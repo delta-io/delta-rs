@@ -9,7 +9,7 @@
 
 use datafusion::execution::SendableRecordBatchStream;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
-use delta_kernel::{DeltaResultIteratorStatic, EngineData};
+use delta_kernel::{EngineData, KernelResultIteratorStatic};
 use futures::StreamExt;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
@@ -23,7 +23,7 @@ const BATCH_QUEUE_DEPTH: usize = 2;
 pub fn into_engine_data(
     handle: &Handle,
     mut stream: SendableRecordBatchStream,
-) -> DeltaResultIteratorStatic<Box<dyn EngineData>> {
+) -> KernelResultIteratorStatic<Box<dyn EngineData>> {
     let (sender, mut receiver) = mpsc::channel(BATCH_QUEUE_DEPTH);
     handle.spawn(async move {
         while let Some(batch) = stream.next().await {

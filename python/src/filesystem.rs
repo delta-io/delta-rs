@@ -216,6 +216,7 @@ impl DeltaFileSystemHandler {
                     Ok(ListResult {
                         common_prefixes: vec![],
                         objects: vec![],
+                        extensions: Default::default(),
                     })
                 } else {
                     Err(ObjectStoreError::NotFound { path, source })

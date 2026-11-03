@@ -31,7 +31,7 @@ impl std::fmt::Display for ColumnMappingOperation {
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTableError {
     #[error("Kernel error: {0}")]
-    KernelError(#[from] delta_kernel::error::Error),
+    KernelError(#[from] delta_kernel::error::KernelError),
 
     /// Error returned when reading the delta log object failed.
     #[error("Failed to read delta log object: {}", .source)]

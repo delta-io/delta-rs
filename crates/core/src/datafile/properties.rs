@@ -93,7 +93,9 @@ impl ReaderProperties {
         session: &dyn datafusion::catalog::Session,
     ) -> datafusion::config::TableParquetOptions {
         let mut global = session.config().options().execution.parquet.clone();
-        global.coerce_int96.get_or_insert_with(|| "us".to_string());
+        global
+            .coerce_int96
+            .get_or_insert(datafusion::common::parquet_config::DFTimeUnit::Microsecond);
         datafusion::config::TableParquetOptions {
             global,
             ..Default::default()

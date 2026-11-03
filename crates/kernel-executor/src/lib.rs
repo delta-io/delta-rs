@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion::execution::TaskContext;
-use delta_kernel::DeltaResult;
+use delta_kernel::KernelResult;
 use delta_kernel::plans::{Operation, PlanExecutor, PlanResult};
 use tokio::runtime::Handle;
 
@@ -114,7 +114,7 @@ impl DataFusionPlanExecutor {
 }
 
 impl PlanExecutor for DataFusionPlanExecutor {
-    fn execute_op(&self, op: Operation) -> DeltaResult<PlanResult> {
+    fn execute_op(&self, op: Operation) -> KernelResult<PlanResult> {
         match op {
             Operation::IoOperation(op) => io::execute(self, op),
             Operation::QueryPlan(plan) => query::execute(self, plan),

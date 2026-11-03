@@ -65,7 +65,7 @@ impl TableProvider for DeltaCdfTableProvider {
     async fn scan(
         &self,
         session: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
@@ -88,7 +88,7 @@ impl TableProvider for DeltaCdfTableProvider {
 
         if let Some(projection) = projection {
             let current_projection = (0..plan.schema().fields().len()).collect::<Vec<usize>>();
-            if projection != &current_projection {
+            if projection != current_projection {
                 let fields: DeltaResult<Vec<(Arc<dyn PhysicalExpr>, String)>> = projection
                     .iter()
                     .map(|i| {

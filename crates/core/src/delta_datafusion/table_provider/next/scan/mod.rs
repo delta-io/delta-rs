@@ -497,9 +497,9 @@ fn validate_dv_parquet_metadata(
     }
     let mut total = 0_u64;
     for (group_index, group) in metadata.row_groups().iter().enumerate() {
-        let Ok(expected) = i16::try_from(group_index) else {
+        let Ok(expected) = i32::try_from(group_index) else {
             return plan_err!(
-                "Parquet row-group index {group_index} exceeds i16 for file id '{id}'"
+                "Parquet row-group index {group_index} exceeds i32 for file id '{id}'"
             );
         };
         if group.ordinal() != Some(expected) {
