@@ -38,7 +38,7 @@ def test_datafusion_table_provider_incompatible_version_errors(
                 "incompatible consumers must be rejected before accessing their session"
             )
 
-    with pytest.raises(RuntimeError, match="datafusion==55"):
+    with pytest.raises(RuntimeError, match="datafusion==56"):
         dt.__datafusion_table_provider__(session=UnreachableSession())
     assert calls == ["datafusion"]
 
@@ -122,10 +122,10 @@ def test_datafusion_table_provider(tmp_path):
             "DataFusion Python integration tests are disabled by default; set DELTALAKE_RUN_DATAFUSION_TESTS=1"
         )
 
-    # Skip until matching wheels are available; the runtime guard requires major 55.
+    # Skip until matching wheels are available; the runtime guard requires major 56.
     datafusion_major = _datafusion_major_version()
-    if datafusion_major != 55:
-        pytest.skip("DataFusion Python integration requires datafusion==55.x wheels")
+    if datafusion_major != 56:
+        pytest.skip("DataFusion Python integration requires datafusion==56.x wheels")
     nrows = 5
     table = Table(
         {

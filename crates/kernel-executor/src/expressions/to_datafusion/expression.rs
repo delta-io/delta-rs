@@ -407,6 +407,13 @@ fn map_to_struct_to_df(
     input_schema: &StructType,
     output_type: Option<&DataType>,
 ) -> KernelResult<Expr> {
+    // The options (e.g. the timezone offset-less timestamps are read in) aren't lowered yet;
+    // rejecting them keeps the executor from silently disagreeing with the kernel evaluator.
+    if !map_to_struct.options.is_default() {
+        return Err(KernelError::unsupported(
+            "MapToStruct options are not supported by the DataFusion executor",
+        ));
+    }
     let target = require_struct_output(output_type, "MapToStruct")?;
     let map = to_datafusion_expr(&map_to_struct.map_expr, input_schema, None)?;
     lower_default_map_to_struct(map, target)
@@ -1080,6 +1087,21 @@ mod expression_tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains(expected_message), "{err}");
+    }
+
+    #[test]
+    fn map_to_struct_with_options_is_an_error() {
+        let options = delta_kernel::expressions::MapToStructOptions::default()
+            .with_timestamp_timezone("+02:00");
+        let kernel = KernelExpr::map_to_struct(column_expr!("pv"), options);
+        let target = DataType::from(schema([nullable("ts", DataType::TIMESTAMP)]));
+        let err = to_datafusion_expr(&kernel, &pv_map_schema(), Some(&target))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("MapToStruct options are not supported"),
+            "{err}"
+        );
     }
 
     #[test]

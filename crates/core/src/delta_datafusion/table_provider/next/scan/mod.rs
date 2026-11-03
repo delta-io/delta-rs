@@ -1268,27 +1268,25 @@ mod tests {
     }
 
     #[test]
-    fn test_dv_rejects_row_group_index_beyond_i16() -> TestResult {
+    fn test_dv_accepts_row_group_index_beyond_i16() -> TestResult {
         use parquet::file::metadata::{FileMetaData, RowGroupMetaData};
         use parquet::schema::types::{SchemaDescriptor, Type};
 
         let schema = Arc::new(SchemaDescriptor::new(Arc::new(
             Type::group_type_builder("schema").build()?,
         )));
-        let mut groups = (0..=i16::MAX)
+        // Parquet row-group ordinals are i32, so indices past i16::MAX are valid.
+        let groups = (0..=i32::from(i16::MAX) + 1)
             .map(|ordinal| {
                 RowGroupMetaData::builder(Arc::clone(&schema))
                     .set_ordinal(ordinal)
                     .build()
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        groups.push(RowGroupMetaData::builder(Arc::clone(&schema)).build()?);
         let metadata =
             ParquetMetaData::new(FileMetaData::new(1, 0, None, None, schema, None), groups);
 
-        let err = validate_dv_parquet_metadata(&metadata, None, 0, "f0", "file_id")
-            .expect_err("row-group index must fit i16");
-        assert!(err.to_string().contains("row-group index"));
+        validate_dv_parquet_metadata(&metadata, None, 0, "f0", "file_id")?;
         Ok(())
     }
 
