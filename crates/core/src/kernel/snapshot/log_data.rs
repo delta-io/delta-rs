@@ -151,9 +151,13 @@ mod datafusion {
             } else {
                 Expression::column(["stats_parsed", stats_field, &column.name])
             };
+            // The materialized batches are the flattened file-level rows, not the nested log
+            // schema, so derive the evaluator's input schema from the batch itself.
+            let batch_schema = self.data.first()?.schema();
+            let input_schema = Arc::new(batch_schema.as_ref().try_into_kernel().ok()?);
             let evaluator = ARROW_HANDLER
                 .new_expression_evaluator(
-                    crate::kernel::models::fields::log_schema_ref().clone(),
+                    input_schema,
                     expression.into(),
                     field.data_type().clone(),
                 )
