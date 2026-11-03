@@ -14,7 +14,7 @@ def _datafusion_major_version() -> int | None:
         return None
 
 
-@pytest.mark.parametrize("installed", ["53.0.0", "54.0.0", "56.0.0", "invalid"])
+@pytest.mark.parametrize("installed", ["53.0.0", "54.0.0", "55.0.0", "invalid"])
 def test_datafusion_table_provider_incompatible_version_errors(
     tmp_path, monkeypatch, installed
 ):
@@ -69,7 +69,7 @@ def test_datafusion_table_provider_accepts_session_keyword_argument(
 ):
     def fake_version(pkg: str) -> str:
         assert pkg == "datafusion"
-        return "55.0.0"
+        return "56.0.0"
 
     monkeypatch.setattr("importlib.metadata.version", fake_version)
 
@@ -91,7 +91,7 @@ def test_datafusion_table_provider_invalid_task_ctx_capsule_name_errors(
 
     def fake_version(pkg: str) -> str:
         assert pkg == "datafusion"
-        return "55.0.0"
+        return "56.0.0"
 
     monkeypatch.setattr("importlib.metadata.version", fake_version)
 
