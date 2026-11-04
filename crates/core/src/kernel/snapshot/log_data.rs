@@ -130,6 +130,7 @@ mod datafusion {
     use crate::{DeltaResult, DeltaTableError};
 
     use crate::kernel::ARROW_HANDLER;
+    use crate::kernel::snapshot::ceil_timestamps;
 
     impl LogDataHandler<'_> {
         fn pick_stats(&self, column: &Column, stats_field: &'static str) -> Option<ArrayRef> {
@@ -288,7 +289,16 @@ mod datafusion {
         /// return the maximum values for the named column, if known.
         /// Note: the returned array must contain `num_containers()` rows.
         fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-            self.pick_stats(column, "maxValues")
+            let max = self.pick_stats(column, "maxValues")?;
+            if self
+                .config
+                .metadata()
+                .partition_columns()
+                .contains(&column.name)
+            {
+                return Some(max);
+            }
+            Some(ceil_timestamps(max))
         }
 
         /// return the number of containers (e.g. row groups) being

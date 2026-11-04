@@ -1671,6 +1671,40 @@ pub(crate) mod tests {
         Ok(())
     }
 
+    /// The fixture's only data file has three row groups of 100 rows each. Version 2 deletes
+    /// rows 5, 150 and 299 with a deletion vector and version 3 deletes rows 99, 100 and 200,
+    /// so every row group and both edges of each row group boundary are covered. The expected
+    /// rows match Spark's `table_changes` for the same versions.
+    #[tokio::test]
+    async fn test_cdf_with_dv_on_multi_row_group_file() -> TestResult {
+        let ctx = SessionContext::new();
+        let table_path = Path::new("../test/tests/data/cdf-table-dv-multi-row-group");
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+        let builder = table.scan_cdf().with_starting_version(2);
+        ctx.register_table("cdf", Arc::new(DeltaCdfTableProvider::try_new(builder)?))?;
+
+        let batches = ctx
+            .sql("SELECT id, _change_type, _commit_version FROM cdf")
+            .await?
+            .collect()
+            .await?;
+
+        assert_batches_sorted_eq! {[
+            "+-----+--------------+-----------------+",
+            "| id  | _change_type | _commit_version |",
+            "+-----+--------------+-----------------+",
+            "| 100 | delete       | 3               |",
+            "| 150 | delete       | 2               |",
+            "| 200 | delete       | 3               |",
+            "| 299 | delete       | 2               |",
+            "| 5   | delete       | 2               |",
+            "| 99  | delete       | 3               |",
+            "+-----+--------------+-----------------+",
+        ], &batches }
+        Ok(())
+    }
+
     /// Regression test for <https://github.com/delta-io/delta-rs/issues/4864>:
     /// the CDF scan must apply the DataFusion session's
     /// `datafusion.execution.parquet.metadata_size_hint` to its `ParquetSource`s so
