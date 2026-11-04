@@ -533,6 +533,7 @@ impl ProtocolInner {
         new_properties: &HashMap<String, String>,
         raise_if_not_exists: bool,
     ) -> DeltaResult<Self> {
+        let original_min_writer_version = self.min_writer_version;
         let mut parsed_properties: HashMap<TableProperty, String> = HashMap::new();
 
         for (key, value) in new_properties {
@@ -669,6 +670,7 @@ impl ProtocolInner {
         // If the minWriterVersion has been set to 7 then there are additional writer features
         // which must be applied
         if self.min_writer_version >= 7
+            && original_min_writer_version < 7
             && let Some(features) = writer_features_for_version(self.min_writer_version)
         {
             self = self.append_writer_features(features);
