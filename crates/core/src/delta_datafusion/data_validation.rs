@@ -78,6 +78,18 @@ impl ValidationCheck {
     }
 }
 
+/// A single validation check after physical planning: the simplified
+/// physical expression plus the label reported when it fails. This is the
+/// physical counterpart of [`ValidationCheck`], used only on the failure
+/// path to name the checks a refused write violated.
+#[derive(Debug, Clone)]
+pub(crate) struct PhysicalValidationCheck {
+    /// The simplified physical expression that must hold for every row.
+    pub expr: Arc<dyn PhysicalExpr>,
+    /// Human-readable name of the check, e.g. `check constraint \`v_positive\``.
+    pub label: String,
+}
+
 /// Logical plan node for data validation
 ///
 /// This node represents a data validation step in the logical plan,
@@ -521,10 +533,11 @@ pub struct DataValidationExec {
     check_expression: Arc<dyn PhysicalExpr>,
     /// The individual checks behind `check_expression`, each with the label
     /// reported when it fails. Empty when the plan was built from a single
-    /// combined expression, in which case the error keeps its old shape.
-    /// These are only evaluated on the failure path, against the rows that
-    /// already failed the combined check, so valid rows cost nothing extra.
-    check_labels: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    /// combined expression, in which case the error cannot name the failed
+    /// checks. These are only evaluated on the failure path, against the
+    /// rows that already failed the combined check, so valid rows cost
+    /// nothing extra.
+    labeled_checks: Vec<PhysicalValidationCheck>,
     /// Plan properties including the schema after validation
     /// (may have updated nullability)
     properties: Arc<PlanProperties>,
@@ -544,6 +557,7 @@ impl DataValidationExec {
                 input,
                 check_expression,
                 Some(validated_schema),
+                Vec::new(),
             )?));
         }
         Ok(input)
@@ -561,37 +575,33 @@ impl DataValidationExec {
         let exprs: Vec<Expr> = checks.iter().map(|check| check.expr.clone()).collect();
         if let Some(validation_expr) = conjunction(simplify_predicates(exprs)?) {
             let check_expression = simplify_expr(session, df_schema.clone(), validation_expr)?;
-            let mut check_labels = Vec::with_capacity(checks.len());
+            let mut labeled_checks = Vec::with_capacity(checks.len());
             for check in &checks {
-                let physical = simplify_expr(session, df_schema.clone(), check.expr.clone())?;
-                check_labels.push((physical, check.label.clone()));
+                let expr = simplify_expr(session, df_schema.clone(), check.expr.clone())?;
+                labeled_checks.push(PhysicalValidationCheck {
+                    expr,
+                    label: check.label.clone(),
+                });
             }
-            return Ok(Arc::new(Self::try_new_with_labels(
+            return Ok(Arc::new(Self::try_new(
                 input,
                 check_expression,
                 None,
-                check_labels,
+                labeled_checks,
             )?));
         }
         Ok(input)
     }
 
-    /// Create a new [`DataValidationExec`]
+    /// Create a new [`DataValidationExec`]. The per-check expressions in
+    /// `labeled_checks` are used only to name the failing checks on the
+    /// failure path; pass an empty vec when the plan was built from a
+    /// single combined expression.
     pub fn try_new(
         input: Arc<dyn ExecutionPlan>,
         check_expression: Arc<dyn PhysicalExpr>,
         validated_schema: Option<SchemaRef>,
-    ) -> Result<Self> {
-        Self::try_new_with_labels(input, check_expression, validated_schema, Vec::new())
-    }
-
-    /// Create a new [`DataValidationExec`] with per-check expressions used
-    /// only to name the failing checks on the failure path.
-    fn try_new_with_labels(
-        input: Arc<dyn ExecutionPlan>,
-        check_expression: Arc<dyn PhysicalExpr>,
-        validated_schema: Option<SchemaRef>,
-        check_labels: Vec<(Arc<dyn PhysicalExpr>, String)>,
+        labeled_checks: Vec<PhysicalValidationCheck>,
     ) -> Result<Self> {
         let result_type = check_expression.data_type(input.schema().as_ref())?;
         if !matches!(result_type, DataType::Boolean) {
@@ -610,7 +620,7 @@ impl DataValidationExec {
         Ok(Self {
             input,
             check_expression,
-            check_labels,
+            labeled_checks,
             properties,
         })
     }
@@ -619,17 +629,17 @@ impl DataValidationExec {
         Self {
             input,
             check_expression: Arc::clone(&self.check_expression),
-            check_labels: self.check_labels.clone(),
+            labeled_checks: self.labeled_checks.clone(),
             properties: Arc::clone(&self.properties),
         }
     }
 
     fn try_with_new_input(&self, input: Arc<dyn ExecutionPlan>) -> Result<Self> {
-        Self::try_new_with_labels(
+        Self::try_new(
             input,
             Arc::clone(&self.check_expression),
             Some(self.schema()),
-            self.check_labels.clone(),
+            self.labeled_checks.clone(),
         )
     }
 }
@@ -702,7 +712,7 @@ impl ExecutionPlan for DataValidationExec {
             self.input.execute(partition, context)?,
             self.schema(),
             Arc::clone(&self.check_expression),
-            self.check_labels.clone(),
+            self.labeled_checks.clone(),
         )))
     }
 
@@ -786,7 +796,7 @@ pin_project! {
         check_expression: Arc<dyn PhysicalExpr>,
 
         // The individual checks behind `check_expression`, with labels.
-        check_labels: Vec<(Arc<dyn PhysicalExpr>, String)>,
+        labeled_checks: Vec<PhysicalValidationCheck>,
 
         // The schema of the output stream
         schema: SchemaRef,
@@ -803,11 +813,11 @@ impl<S> DataValidationStream<S> {
         stream: S,
         schema: SchemaRef,
         check_expression: Arc<dyn PhysicalExpr>,
-        check_labels: Vec<(Arc<dyn PhysicalExpr>, String)>,
+        labeled_checks: Vec<PhysicalValidationCheck>,
     ) -> DataValidationStream<S> {
         DataValidationStream {
             check_expression,
-            check_labels,
+            labeled_checks,
             schema,
             stream,
         }
@@ -818,15 +828,13 @@ impl<S> DataValidationStream<S> {
 /// given. A check that cannot be evaluated on the failing rows (it should not
 /// happen, since the rows already failed the combined check) is skipped
 /// rather than replacing the validation error with a new one.
-fn failed_check_labels(
-    checks: &[(Arc<dyn PhysicalExpr>, String)],
-    batch: &RecordBatch,
-) -> Vec<String> {
+fn failed_check_labels(checks: &[PhysicalValidationCheck], batch: &RecordBatch) -> Vec<String> {
     let mut failed = Vec::new();
-    for (expr, label) in checks {
-        let Ok(evaluated) = expr.evaluate(batch) else {
+    for check in checks {
+        let Ok(evaluated) = check.expr.evaluate(batch) else {
             continue;
         };
+        let label = &check.label;
         let check_failed = match evaluated {
             ColumnarValue::Array(array) => array
                 .as_boolean()
@@ -864,7 +872,7 @@ where
                             let invalid_slice =
                                 invalid_data.slice(0, invalid_data.num_rows().min(5));
                             let preview = pretty_format_batches(&[invalid_slice])?;
-                            let failed = failed_check_labels(this.check_labels, &invalid_data);
+                            let failed = failed_check_labels(this.labeled_checks, &invalid_data);
                             let failed_line = if failed.is_empty() {
                                 String::new()
                             } else {
