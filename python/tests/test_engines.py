@@ -185,3 +185,13 @@ def test_datafusion_engine_does_not_warn(edge_table):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         edge_table.to_pyarrow_table(engine="datafusion")
+
+
+def test_datafusion_engine_reads_without_pyarrow_allocation(edge_table):
+    import pyarrow as pa
+
+    allocated_before = pa.total_allocated_bytes()
+    table = edge_table.to_pyarrow_table(engine="datafusion")
+
+    assert table.schema.field("s").type == pa.string()
+    assert pa.total_allocated_bytes() == allocated_before
