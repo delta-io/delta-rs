@@ -203,6 +203,21 @@ def _sql_filter_literal(literal: FilterLiteralType) -> str:
             return f"{ident} {op} {_sql_literal(value)}"
 
 
+def filters_to_sql_predicate(filters: FilterType) -> str:
+    """Compile tuple filters to a SQL predicate.
+
+    A flat list is treated as a conjunction (AND), while a list of lists is an
+    OR across parenthesized conjunctions.
+
+    Args:
+        filters: A list of (column, op, value) tuples or a list of such lists.
+
+    Returns:
+        A SQL predicate string.
+    """
+    return _filters_to_sql_predicate(filters)
+
+
 def _filters_to_sql_predicate(filters: FilterType) -> str:
     """Compile tuple filters to a DataFusion SQL predicate: a flat list is a
     conjunction (AND), a list of lists an OR across parenthesized ANDs."""
@@ -1009,7 +1024,7 @@ class DeltaTable:
         updates: dict[str, str] | None = None,
         new_values: dict[str, int | float | str | datetime | bool | list[Any]]
         | None = None,
-        predicate: str | None = None,
+        predicate: str | FilterType | None = None,
         writer_properties: WriterProperties | None = None,
         error_on_type_mismatch: bool = True,
         *args: Any,
@@ -1111,6 +1126,8 @@ class DeltaTable:
             raise ValueError(
                 "Either updates or new_values need to be passed to update the table."
             )
+        if predicate is not None and not isinstance(predicate, str):
+            predicate = _filters_to_sql_predicate(predicate)
         metrics = self._table.update(
             updates,
             predicate,
@@ -1739,7 +1756,7 @@ class DeltaTable:
 
     def delete(
         self,
-        predicate: str | None = None,
+        predicate: str | FilterType | None = None,
         writer_properties: WriterProperties | None = None,
         *args: Any,
         commit_properties: CommitProperties | None = None,
@@ -1776,6 +1793,8 @@ class DeltaTable:
                 legacy_order=("post_commithook_properties", "commit_properties"),
             )
         )
+        if predicate is not None and not isinstance(predicate, str):
+            predicate = _filters_to_sql_predicate(predicate)
         metrics = self._table.delete(
             predicate,
             writer_properties,

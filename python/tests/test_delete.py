@@ -292,3 +292,26 @@ def test_delete_partition_predicate_follows_sql_semantics(
     )
     assert sorted(remaining) == expected_remaining
     assert metrics["num_deleted_rows"] == 4 - len(expected_remaining)
+
+
+def test_delete_tuple_predicate(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    data = pa.table(
+        {
+            "id": pa.array([1, 2, 3, 4, 5]),
+            "part": pa.array(["a", "a", "b", "b", "c"]),
+        }
+    )
+    write_deltalake(tmp_path, data, partition_by=["part"])
+    dt = DeltaTable(tmp_path)
+
+    # Delete with flat conjunction filter
+    dt.delete(predicate=[("id", ">", 3)])
+    res = dt.to_pyarrow_table()
+    assert sorted(res["id"].to_pylist()) == [1, 2, 3]
+
+    # Delete with DNF filter (list of lists)
+    dt.delete(predicate=[[("part", "=", "a")], [("id", "=", 3)]])
+    res = dt.to_pyarrow_table()
+    assert res["id"].to_pylist() == []
