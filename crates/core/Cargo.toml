@@ -129,7 +129,7 @@ datafusion = [
 ]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
-python = ["arrow/pyarrow"]
+python = []
 native-tls = ["delta_kernel_default_engine/native-tls"]
 rustls = ["delta_kernel_default_engine/rustls"]
 cloud = ["object_store/cloud-base", "dep:humantime"]
