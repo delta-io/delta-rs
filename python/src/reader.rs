@@ -93,11 +93,17 @@ impl RecordBatchReader for StreamToReaderAdapter {
     }
 }
 
-/// Converts a [`SendableRecordBatchStream`] into a lazy RecordBatchReader
+/// Converts a [`SendableRecordBatchStream`] into a lazy RecordBatchReader.
+/// Uses top-level string and binary view types when `schema_force_view_types` is true.
 pub(crate) fn convert_stream_to_reader(
     stream: SendableRecordBatchStream,
+    schema_force_view_types: bool,
 ) -> Box<dyn RecordBatchReader + Send> {
-    let (schema, cast_targets, needs_cast) = view_type_contract(&stream.schema());
+    let (schema, cast_targets, needs_cast) = if schema_force_view_types {
+        view_type_contract(&stream.schema())
+    } else {
+        (stream.schema(), Vec::new(), false)
+    };
     Box::new(StreamToReaderAdapter {
         schema,
         cast_targets,

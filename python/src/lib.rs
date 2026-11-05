@@ -1211,17 +1211,18 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
 
         py.detach(|| {
-            let stream = convert_stream_to_reader(stream);
+            let stream = convert_stream_to_reader(stream, true);
             Ok(stream.into())
         })
     }
 
-    #[pyo3(signature = (columns=None, predicate=None))]
+    #[pyo3(signature = (columns=None, predicate=None, schema_force_view_types=true))]
     pub fn scan(
         &self,
         py: Python,
         columns: Option<Vec<String>>,
         predicate: Option<String>,
+        schema_force_view_types: bool,
     ) -> PyResult<Arro3RecordBatchReader> {
         let snapshot = self.cloned_state()?;
         let log_store = self.log_store()?;
@@ -1232,7 +1233,10 @@ impl RawDeltaTable {
             let ctx = DeltaSessionContext::new().into_inner();
             ctx.register_object_store(log_store.root_url(), log_store.root_object_store());
 
-            let config = DeltaScanConfig::new().with_wrap_partition_values(false);
+            let config = DeltaScanConfig {
+                schema_force_view_types,
+                ..DeltaScanConfig::new().with_wrap_partition_values(false)
+            };
             let provider =
                 Arc::new(DeltaScanNext::new(snapshot.clone(), config).map_err(PythonError::from)?)
                     as Arc<dyn TableProvider>;
@@ -1252,7 +1256,7 @@ impl RawDeltaTable {
             let stream = rt()
                 .block_on(df.execute_stream())
                 .map_err(PythonError::from)?;
-            Ok(convert_stream_to_reader(stream).into())
+            Ok(convert_stream_to_reader(stream, schema_force_view_types).into())
         })
     }
 
