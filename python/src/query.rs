@@ -73,7 +73,7 @@ impl PyQueryBuilder {
             .map_err(PythonError::from)
         })?;
 
-        let stream = convert_stream_to_reader(stream);
+        let stream = convert_stream_to_reader(stream, true);
         Ok(PyRecordBatchReader::new(stream))
     }
 }

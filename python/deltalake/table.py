@@ -1552,9 +1552,11 @@ class DeltaTable:
                 'pyarrow expressions require engine="pyarrow"'
             )
 
-        reader = self._table.scan(columns=columns, predicate=predicate)
+        # Avoid copying string and binary buffers in the final cast.
+        reader = self._table.scan(
+            columns=columns, predicate=predicate, schema_force_view_types=False
+        )
         table = pyarrow.RecordBatchReader.from_stream(reader).read_all()
-        # the engine emits arrow view types; cast back to the table's logical schema
         target = pyarrow.schema(self.schema().to_arrow())
         if columns is not None:
             target = pyarrow.schema([target.field(name) for name in columns])
