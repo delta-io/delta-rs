@@ -304,6 +304,57 @@ fn get_field_keys_follow_a_list_element() {
     assert_eq!(shown, "get_field(array_element(l_old@1, 1), old)");
 }
 
+/// The file keeps the names of `l` and `s.a` and renames only their child `y` to `old`. A function
+/// over them must not keep a return type that still names `y`.
+#[test]
+fn get_field_keys_follow_a_child_renamed_under_kept_names() {
+    let logical = schema(vec![
+        with_id(
+            Field::new("l", DataType::List(element(one_child("y"))), true),
+            1,
+        ),
+        struct_field(
+            "s",
+            2,
+            vec![with_id(Field::new("a", one_child("y"), true), 3)],
+        ),
+    ]);
+    let physical = schema(vec![
+        with_id(
+            Field::new("l", DataType::List(element(one_child("old"))), true),
+            1,
+        ),
+        struct_field(
+            "s",
+            2,
+            vec![with_id(Field::new("a", one_child("old"), true), 3)],
+        ),
+    ]);
+    let adapter = FieldIdAdapter::try_new(Arc::clone(&logical), physical).unwrap();
+
+    let item = function(
+        array_element_udf(),
+        vec![Arc::new(Column::new("l", 0)), lit(1i64)],
+        &logical,
+    );
+    let list_access = function(get_field(), vec![item, lit("y")], &logical);
+    assert_eq!(
+        adapter.rewrite(list_access).unwrap().to_string(),
+        "get_field(array_element(l@0, 1), old)"
+    );
+
+    let a = function(
+        get_field(),
+        vec![Arc::new(Column::new("s", 1)), lit("a")],
+        &logical,
+    );
+    let struct_access = function(get_field(), vec![a, lit("y")], &logical);
+    assert_eq!(
+        adapter.rewrite(struct_access).unwrap().to_string(),
+        "get_field(get_field(s@1, a), old)"
+    );
+}
+
 /// `m['k'].y` reads `m_old['k'].old`: the map key is a value and stays.
 #[test]
 fn get_field_keys_follow_a_map_value() {

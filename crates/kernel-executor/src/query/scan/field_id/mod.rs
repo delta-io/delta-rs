@@ -87,11 +87,15 @@ impl FieldIdAdapter {
             };
             // `renamed` keeps the order of `logical`: the same index is the same field, with the
             // name of the file column it matched.
-            let name = self.renamed.field(index).name();
-            if name == column.name() {
+            let renamed = self.renamed.field(index);
+            if renamed.name() == column.name()
+                && renamed.data_type() == self.logical.field(index).data_type()
+            {
                 return Ok(Arc::clone(expr));
             }
-            return Ok(Arc::new(Column::new(name, index)));
+            // A new node also when only the children are renamed, so the functions above it are
+            // built again and do not keep a return type that names the requested children.
+            return Ok(Arc::new(Column::new(renamed.name(), index)));
         }
 
         let children = expr.children();
