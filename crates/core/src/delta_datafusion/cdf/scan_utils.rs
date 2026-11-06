@@ -166,6 +166,7 @@ async fn push_pair_selection(
     }
     let access_plan = access_plan_for_selection(
         selection,
+        true,
         &pair.add.path,
         pair.add.size as u64,
         Arc::clone(&cache),
@@ -409,6 +410,7 @@ fn access_plan_from_treemap(
 
 async fn access_plan_for_selection(
     selection: roaring::RoaringTreemap,
+    keep_marked: bool,
     file_path_str: &str,
     file_size: u64,
     cache: Arc<CachedParquetFileReaderFactory>,
@@ -419,12 +421,14 @@ async fn access_plan_for_selection(
     Ok(access_plan_from_treemap(
         &selection,
         &parquet_metadata,
-        true,
+        keep_marked,
     ))
 }
 
 /// This function is a side effect of having 2 separate types of data at points in the scan
 /// process, but this exists for any actions that aren't paired up add/remove actions.
+/// The deletion vector of such an action marks the rows that are not part of the file, so the
+/// plan reads the unmarked rows.
 pub async fn create_file_scan_plan<F: FileAction>(
     engine: Arc<dyn Engine>,
     file_action: F,
@@ -437,6 +441,7 @@ pub async fn create_file_scan_plan<F: FileAction>(
         return Ok(Some(
             access_plan_for_selection(
                 tree_map,
+                false,
                 &file_action.path(),
                 file_action.size()? as u64,
                 cache,
