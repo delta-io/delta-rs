@@ -1,6 +1,3 @@
-use std::fmt::Debug;
-use std::sync::Arc;
-
 use crate::UnityCatalogError;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -15,6 +12,9 @@ use deltalake_core::logstore::{
     CatalogLogTail, CommitOrBytes, CommitResponse, Committer, LogStore, LogStoreConfig,
     ObjectStoreRef, PayloadKind, commit_uri_from_version,
 };
+use std::fmt::Debug;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use tracing::warn;
@@ -59,6 +59,7 @@ pub struct UnityCommitCoordinator {
     table: String,
     table_uuid: String,
     store: ObjectStoreRef,
+    last_published_version: AtomicU64,
 }
 
 impl UnityCommitCoordinator {
@@ -79,6 +80,7 @@ impl UnityCommitCoordinator {
             table: table.into(),
             table_uuid: table_uuid.into(),
             store,
+            last_published_version: AtomicU64::new(0),
         }
     }
 
@@ -86,11 +88,22 @@ impl UnityCommitCoordinator {
         TableIdentifier::new(&self.catalog, &self.schema, &self.table)
     }
 
-    fn update_request(&self, update: DeltaTableUpdate) -> UpdateTableRequest {
+    fn update_request(
+        &self,
+        update: DeltaTableUpdate,
+    ) -> Result<UpdateTableRequest, TransactionError> {
         let reqs = DeltaTableRequirement::AssertTableUuid {
             uuid: self.table_uuid.clone(),
         };
-        UpdateTableRequest::new(vec![reqs], vec![update]).unwrap()
+        let last_version = DeltaTableUpdate::SetLatestBackfilledVersion {
+            latest_published_version: self.last_published_version.load(Ordering::Relaxed) as i64,
+        };
+        UpdateTableRequest::new(vec![reqs], vec![update, last_version]).map_err(|e| {
+            TransactionError::LogStoreError {
+                msg: e.to_string(),
+                source: Box::new(e),
+            }
+        })
     }
 }
 
@@ -152,7 +165,7 @@ impl Committer for UnityCommitCoordinator {
             file_size,
             modified,
         );
-        let request = self.update_request(DeltaTableUpdate::AddCommit { commit });
+        let request = self.update_request(DeltaTableUpdate::AddCommit { commit })?;
         let target = self.target();
 
         let mut outcome = self.update.update_table(&target, request.clone()).await;
@@ -227,6 +240,8 @@ impl CommitCoordinator for UnityCommitCoordinator {
         } else {
             raw_max_version as u64
         };
+        self.last_published_version
+            .store(max_version, Ordering::Relaxed);
 
         Ok(CommitList {
             commits: resp.commits,

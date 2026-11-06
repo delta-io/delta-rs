@@ -983,19 +983,29 @@ impl<'a> IntoFuture for PreparedCommit<'a> {
                         // Calculate current retry count (attempt 1 = 0 retries, attempt 2 = 1 retry, etc.)
                         let current_retries = (attempt_number - 1) as u64;
 
+                        let prev_ict = read_snapshot
+                            .snapshot()
+                            .in_commit_timestamp(log_store.as_ref())
+                            .await?;
+                        let changed = data.update_commit_info(current_retries, prev_ict);
+
                         let payload = match &commit_or_bytes {
                             CommitOrBytes::LogBytes(bytes) => {
-                                let prev_ict = read_snapshot
-                                    .snapshot()
-                                    .in_commit_timestamp(log_store.as_ref())
-                                    .await?;
-                                if data.update_commit_info(current_retries, prev_ict) {
+                                if changed {
                                     CommitOrBytes::LogBytes(data.get_bytes()?)
                                 } else {
                                     CommitOrBytes::LogBytes(bytes.clone())
                                 }
                             }
-                            CommitOrBytes::TmpCommit(_path) => commit_or_bytes.clone(),
+                            CommitOrBytes::TmpCommit(path) => {
+                                if changed {
+                                    log_store
+                                        .object_store()
+                                        .put(path, data.get_bytes()?.into())
+                                        .await?;
+                                }
+                                commit_or_bytes.clone()
+                            }
                         };
 
                         match committer.commit(version, payload, data.commit_info()).await {
