@@ -1089,7 +1089,10 @@ async fn execute(
     // Apply the early filter only to file skipping.
     let file_skipping_predicates =
         build_file_skipping_predicates(target_subset_filter, target_alias.as_deref());
-    let needs_duplicate_match_validation = !match_operations.is_empty();
+    // NOT MATCHED BY SOURCE clauses rewrite files that also hold matched rows, so every
+    // duplicate match of a target row would otherwise be copied out again
+    let needs_duplicate_match_validation =
+        !match_operations.is_empty() || !not_match_source_operations.is_empty();
 
     let target_provider = {
         let mut builder = DeltaScanNext::builder()
@@ -5269,6 +5272,55 @@ mod tests {
             "+----+-------+------------+------------------+-----------------+",
         ];
         assert_batches_sorted_eq!(&expected_cdf, &batches);
+    }
+
+    #[tokio::test]
+    async fn test_merge_not_matched_by_source_keeps_one_copy_of_multiply_matched_row() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+        let table = write_data(table, &schema).await;
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "B", "E"])),
+                Arc::new(arrow::array::Int32Array::from(vec![11, 12, 50])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-05",
+                    "2023-07-06",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, _) = table
+            .merge(source, "target.id = source.id")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", "source.id")
+                    .set("value", "source.value")
+                    .set("modified", "source.modified")
+            })
+            .unwrap()
+            .when_not_matched_by_source_delete(|delete| delete)
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| B  | 10    | 2021-02-01 |",
+            "| E  | 50    | 2023-07-06 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 
     #[tokio::test]
