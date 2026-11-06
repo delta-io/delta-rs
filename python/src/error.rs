@@ -40,7 +40,9 @@ fn inner_to_py_err(err: DeltaTableError) -> PyErr {
         },
         // delta-kernel-rs error propagation
         DeltaTableError::KernelError(source) => match source {
-            delta_kernel::Error::ObjectStore(e) => object_store_to_py(e, Some("Kernel error")),
+            delta_kernel::KernelError::ObjectStore(e) => {
+                object_store_to_py(e, Some("Kernel error"))
+            }
             other => DeltaError::new_err(DeltaTableError::KernelError(other).to_string()),
         },
         DeltaTableError::Io { source } => PyIOError::new_err(source.to_string()),

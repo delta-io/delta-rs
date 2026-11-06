@@ -1,6 +1,6 @@
-//! Crate errors and their mapping to [`delta_kernel::Error`].
+//! Crate errors and their mapping to [`delta_kernel::KernelError`].
 //!
-//! Kernel entry points return [`delta_kernel::DeltaResult`], so every public function in this
+//! Kernel entry points return [`delta_kernel::KernelResult`], so every public function in this
 //! crate converts its [`Error`] into a kernel error at the boundary.
 
 /// Errors raised while compiling or running a kernel plan on DataFusion.
@@ -20,7 +20,7 @@ pub enum Error {
 
     /// An error raised by the kernel while the executor adapted its data.
     #[error(transparent)]
-    Kernel(#[from] delta_kernel::Error),
+    Kernel(#[from] delta_kernel::KernelError),
 }
 
 /// Shorthand for results inside this crate.
@@ -33,12 +33,12 @@ impl Error {
     }
 }
 
-impl From<Error> for delta_kernel::Error {
+impl From<Error> for delta_kernel::KernelError {
     fn from(err: Error) -> Self {
         match err {
-            Error::Unsupported(msg) => delta_kernel::Error::unsupported(msg),
+            Error::Unsupported(msg) => delta_kernel::KernelError::unsupported(msg),
             Error::Kernel(err) => err,
-            other => delta_kernel::Error::generic_err(other),
+            other => delta_kernel::KernelError::generic_err(other),
         }
     }
 }

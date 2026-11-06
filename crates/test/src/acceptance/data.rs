@@ -5,7 +5,7 @@ use arrow_cast::pretty::pretty_format_batches;
 use arrow_ord::sort::{lexsort_to_indices, SortColumn};
 use arrow_schema::{DataType, Schema};
 use arrow_select::{concat::concat_batches, take::take};
-use delta_kernel::DeltaResult;
+use delta_kernel::KernelResult as DeltaResult;
 use deltalake_core::logstore::parquet_reader::ParquetObjectReader;
 use futures::{stream::TryStreamExt, StreamExt};
 use object_store::{local::LocalFileSystem, ObjectStore};

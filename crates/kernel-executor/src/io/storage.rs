@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use dashmap::mapref::one::Ref;
 use datafusion::execution::TaskContext;
 use datafusion::execution::object_store::{ObjectStoreRegistry, ObjectStoreUrl};
-use delta_kernel::{DeltaResult, Error as DeltaError, FileMeta, FileSlice, StorageHandler};
+use delta_kernel::{FileMeta, FileSlice, KernelError as DeltaError, KernelResult, StorageHandler};
 use delta_kernel_default_engine::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
@@ -41,7 +41,7 @@ impl DataFusionStorageHandler {
     fn get_or_create(
         &self,
         url: ObjectStoreUrl,
-    ) -> DeltaResult<Ref<'_, ObjectStoreUrl, Arc<dyn StorageHandler>>> {
+    ) -> KernelResult<Ref<'_, ObjectStoreUrl, Arc<dyn StorageHandler>>> {
         if let Some(handler) = self.registry.get(&url) {
             return Ok(handler);
         }
@@ -71,7 +71,7 @@ impl StorageHandler for DataFusionStorageHandler {
     fn list_from(
         &self,
         path: &Url,
-    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<FileMeta>>>> {
+    ) -> KernelResult<Box<dyn Iterator<Item = KernelResult<FileMeta>> + Send>> {
         self.get_or_create(path.as_object_store_url())?
             .list_from(path)
     }
@@ -79,7 +79,7 @@ impl StorageHandler for DataFusionStorageHandler {
     fn read_files(
         &self,
         files: Vec<FileSlice>,
-    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<Bytes>>>> {
+    ) -> KernelResult<Box<dyn Iterator<Item = KernelResult<Bytes>> + Send>> {
         let grouped_files = group_by_store(files);
         Ok(Box::new(
             grouped_files
@@ -94,21 +94,23 @@ impl StorageHandler for DataFusionStorageHandler {
         ))
     }
 
-    fn copy_atomic(&self, _from: &Url, _to: &Url) -> DeltaResult<()> {
+    fn copy_atomic(&self, _from: &Url, _to: &Url) -> KernelResult<()> {
         // TODO: Implement atomic copy operation
-        Err(delta_kernel::Error::generic("copy_atomic not implemented"))
+        Err(delta_kernel::KernelError::generic(
+            "copy_atomic not implemented",
+        ))
     }
 
-    fn put(&self, path: &Url, data: Bytes, overwrite: bool) -> DeltaResult<()> {
+    fn put(&self, path: &Url, data: Bytes, overwrite: bool) -> KernelResult<()> {
         self.get_or_create(path.as_object_store_url())?
             .put(path, data, overwrite)
     }
 
-    fn head(&self, _path: &Url) -> DeltaResult<FileMeta> {
+    fn head(&self, _path: &Url) -> KernelResult<FileMeta> {
         // TODO: Implement atomic copy operation
-        Err(delta_kernel::Error::generic("head not implemented"))
+        Err(delta_kernel::KernelError::generic("head not implemented"))
     }
-    fn delete(&self, _: &Url) -> DeltaResult<()> {
+    fn delete(&self, _: &Url) -> KernelResult<()> {
         todo!("delete is not implemented");
     }
 }

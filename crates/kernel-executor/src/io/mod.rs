@@ -9,7 +9,7 @@
 //! [`DataFusionFileFormatHandler`]: self::file_formats::DataFusionFileFormatHandler
 
 use delta_kernel::plans::{IoOperation, PlanResult};
-use delta_kernel::{DeltaResult, ParquetHandler as _, StorageHandler as _};
+use delta_kernel::{KernelResult, ParquetHandler as _, StorageHandler as _};
 
 use crate::DataFusionPlanExecutor;
 
@@ -17,7 +17,7 @@ pub mod file_formats;
 pub mod storage;
 
 /// Runs one I/O operation and returns its result in the shape the kernel expects.
-pub fn execute(executor: &DataFusionPlanExecutor, op: IoOperation) -> DeltaResult<PlanResult> {
+pub fn execute(executor: &DataFusionPlanExecutor, op: IoOperation) -> KernelResult<PlanResult> {
     let storage = executor.storage();
     match op {
         // The `StorageHandler` iterators are not `Send`, which `PlanResult` requires, so both

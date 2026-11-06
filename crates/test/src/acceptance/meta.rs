@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use delta_kernel::{Error, Version};
+use delta_kernel::{KernelError as Error, Version};
 use serde::{Deserialize, Serialize};
 use url::Url;
 

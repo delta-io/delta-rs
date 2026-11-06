@@ -7,7 +7,6 @@ use arrow::array::{Array as _, *};
 use arrow_schema::{DataType as ArrowDataType, Field as ArrowField, Fields};
 use arrow_schema::{Field, Schema};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
-use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine::parse_json;
 use delta_kernel::expressions::Scalar;
@@ -100,9 +99,7 @@ where
     }
 }
 
-pub(crate) fn scan_row_in_eval(
-    snapshot: &KernelSnapshot,
-) -> DeltaResult<Arc<dyn ExpressionEvaluator>> {
+pub(crate) fn scan_row_in_eval() -> DeltaResult<Arc<dyn ExpressionEvaluator>> {
     static EXPRESSION: LazyLock<Arc<Expression>> = LazyLock::new(|| {
         Expression::struct_from(
             scan_row_schema()
@@ -114,11 +111,11 @@ pub(crate) fn scan_row_in_eval(
     static OUT_TYPE: LazyLock<DataType> =
         LazyLock::new(|| DataType::Struct(Box::new(scan_row_schema().as_ref().clone())));
 
-    let input_schema = snapshot.scan_row_parsed_schema_arrow()?;
-    let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
-
+    // The expression only reads the raw scan row columns. Declaring the parsed schema as the
+    // input would make the kernel reject cached batches written under different metadata (e.g.
+    // before the table became partitioned), which lack the parsed columns.
     Ok(ARROW_HANDLER.new_expression_evaluator(
-        input_schema,
+        scan_row_schema().clone(),
         EXPRESSION.clone(),
         OUT_TYPE.clone(),
     )?)
@@ -1237,7 +1234,7 @@ mod tests {
         )?;
         // Keep this guard so cached batches still pass through the kernel evaluator
         // without rebuilding raw `stats` from `ToJson`.
-        let evaluator = scan_row_in_eval(snapshot.inner.as_ref())?;
+        let evaluator = scan_row_in_eval()?;
         let reparsed = evaluator.evaluate_arrow(projected)?;
 
         assert_eq!(raw_stats_string(reparsed, 0), Some(raw_stats.to_string()));

@@ -497,9 +497,9 @@ fn validate_dv_parquet_metadata(
     }
     let mut total = 0_u64;
     for (group_index, group) in metadata.row_groups().iter().enumerate() {
-        let Ok(expected) = i16::try_from(group_index) else {
+        let Ok(expected) = i32::try_from(group_index) else {
             return plan_err!(
-                "Parquet row-group index {group_index} exceeds i16 for file id '{id}'"
+                "Parquet row-group index {group_index} exceeds i32 for file id '{id}'"
             );
         };
         if group.ordinal() != Some(expected) {
@@ -1273,27 +1273,25 @@ mod tests {
     }
 
     #[test]
-    fn test_dv_rejects_row_group_index_beyond_i16() -> TestResult {
+    fn test_dv_accepts_row_group_index_beyond_i16() -> TestResult {
         use parquet::file::metadata::{FileMetaData, RowGroupMetaData};
         use parquet::schema::types::{SchemaDescriptor, Type};
 
         let schema = Arc::new(SchemaDescriptor::new(Arc::new(
             Type::group_type_builder("schema").build()?,
         )));
-        let mut groups = (0..=i16::MAX)
+        // Parquet row-group ordinals are i32, so indices past i16::MAX are valid.
+        let groups = (0..=i32::from(i16::MAX) + 1)
             .map(|ordinal| {
                 RowGroupMetaData::builder(Arc::clone(&schema))
                     .set_ordinal(ordinal)
                     .build()
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        groups.push(RowGroupMetaData::builder(Arc::clone(&schema)).build()?);
         let metadata =
             ParquetMetaData::new(FileMetaData::new(1, 0, None, None, schema, None), groups);
 
-        let err = validate_dv_parquet_metadata(&metadata, None, 0, "f0", "file_id")
-            .expect_err("row-group index must fit i16");
-        assert!(err.to_string().contains("row-group index"));
+        validate_dv_parquet_metadata(&metadata, None, 0, "f0", "file_id")?;
         Ok(())
     }
 
@@ -1756,7 +1754,7 @@ mod tests {
         let err = adapter
             .adapt(source)
             .expect_err("invalid value cast should fail under DataFusion default cast semantics");
-        match err {
+        match err.find_root() {
             DataFusionError::ArrowError(inner, _) => {
                 assert!(
                     matches!(inner.as_ref(), ArrowError::CastError(_)),
@@ -1813,7 +1811,7 @@ mod tests {
         let err = adapter
             .adapt(source)
             .expect_err("overflow cast should fail under DataFusion default cast semantics");
-        match err {
+        match err.find_root() {
             DataFusionError::ArrowError(inner, _) => {
                 assert!(
                     matches!(inner.as_ref(), ArrowError::CastError(_)),

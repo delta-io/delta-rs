@@ -411,7 +411,7 @@ impl ConvertToDeltaBuilder {
 
             // Arrow schema of Parquet files may have conflicting metadata
             // Since Arrow schema metadata is not used to generate Delta table schema, we set the metadata field to an empty HashMap
-            arrow_schema.metadata = HashMap::new();
+            arrow_schema.metadata = HashMap::new().into();
             arrow_schemas.push(arrow_schema);
         }
 
@@ -480,7 +480,7 @@ fn parse_partition_value(
     let decoded = percent_decode_str(value).decode_utf8()?;
     match field.data_type() {
         DataType::Primitive(p) => p.parse_scalar(decoded.as_ref()),
-        _ => Err(delta_kernel::Error::Generic(format!(
+        _ => Err(delta_kernel::KernelError::Generic(format!(
             "Expected primitive type, found: {:?}",
             field.data_type()
         ))),

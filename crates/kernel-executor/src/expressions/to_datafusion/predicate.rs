@@ -9,7 +9,7 @@ use delta_kernel::expressions::{
     JunctionPredicateOp, Scalar, UnaryPredicate, UnaryPredicateOp,
 };
 use delta_kernel::schema::{DataType, StructType};
-use delta_kernel::{DeltaResult, Error as KernelError};
+use delta_kernel::{KernelError, KernelResult};
 use itertools::Itertools;
 
 use super::expression::to_datafusion_expr;
@@ -25,7 +25,7 @@ use super::scalar::to_datafusion_scalar;
 pub fn to_datafusion_predicate_expr(
     predicate: &Predicate,
     input_schema: &StructType,
-) -> DeltaResult<Expr> {
+) -> KernelResult<Expr> {
     match predicate {
         Predicate::BooleanExpression(expr) => to_datafusion_expr(expr, input_schema, None),
         Predicate::Not(expr) => Ok(!(to_datafusion_predicate_expr(expr, input_schema)?)),
@@ -41,7 +41,7 @@ pub fn to_datafusion_predicate_expr(
     }
 }
 
-fn unary_pred_to_df(unary: &UnaryPredicate, input_schema: &StructType) -> DeltaResult<Expr> {
+fn unary_pred_to_df(unary: &UnaryPredicate, input_schema: &StructType) -> KernelResult<Expr> {
     let UnaryPredicate { op, expr } = unary;
     let df_expr = to_datafusion_expr(expr, input_schema, None)?;
     Ok(match op {
@@ -49,7 +49,7 @@ fn unary_pred_to_df(unary: &UnaryPredicate, input_schema: &StructType) -> DeltaR
     })
 }
 
-fn binary_pred_to_df(bin: &BinaryPredicate, input_schema: &StructType) -> DeltaResult<Expr> {
+fn binary_pred_to_df(bin: &BinaryPredicate, input_schema: &StructType) -> KernelResult<Expr> {
     let BinaryPredicate { left, op, right } = bin;
     if let BinaryPredicateOp::In = op {
         return in_to_df_predicate_expr(left, right, input_schema);
@@ -99,7 +99,7 @@ fn in_to_df_predicate_expr(
     value: &Expression,
     list: &Expression,
     input_schema: &StructType,
-) -> DeltaResult<Expr> {
+) -> KernelResult<Expr> {
     // Kernel's Arrow evaluator accepts `IN` only with a literal left operand (a column left
     // operand errors), so reject anything else to match it exactly.
     let Expression::Literal(_) = value else {
@@ -123,12 +123,12 @@ fn in_to_df_predicate_expr(
 /// Builds `value IN (<elements>)` from a literal array. Null elements stay in the list: they can
 /// never match under logical equality, and the caller's `IS TRUE` collapses the null they would
 /// otherwise contribute down to false.
-fn in_list_expr(value: Expr, array: &ArrayData) -> DeltaResult<Expr> {
+fn in_list_expr(value: Expr, array: &ArrayData) -> KernelResult<Expr> {
     let elements: Vec<Expr> = array
         .array_elements()
         .iter()
         .map(|scalar| Ok(lit(to_datafusion_scalar(scalar)?)))
-        .collect::<DeltaResult<_>>()?;
+        .collect::<KernelResult<_>>()?;
     let in_expr = Expr::InList(InList::new(Box::new(value), elements, false));
     Ok(in_expr)
 }
@@ -143,7 +143,7 @@ fn array_has_expr(
     column: &Expression,
     name: &ColumnName,
     input_schema: &StructType,
-) -> DeltaResult<Expr> {
+) -> KernelResult<Expr> {
     let DataType::Array(_) = input_schema.field_at(name)?.data_type else {
         return Err(KernelError::unsupported(
             "converting an IN predicate against a column requires an array-typed column",
@@ -158,7 +158,7 @@ fn array_has_expr(
 /// Lowers a junction (`And`/`Or`) by converting each child and folding them with
 /// [`fold_terms`]. An empty junction lowers `AND` to `true` and `OR` to `false`, keeping kernel
 /// semantics.
-fn junction_to_df(junction: &JunctionPredicate, input_schema: &StructType) -> DeltaResult<Expr> {
+fn junction_to_df(junction: &JunctionPredicate, input_schema: &StructType) -> KernelResult<Expr> {
     let JunctionPredicate { op, preds } = junction;
     let df_exprs: Vec<_> = preds
         .iter()
