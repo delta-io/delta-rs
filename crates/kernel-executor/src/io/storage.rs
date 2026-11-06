@@ -88,11 +88,15 @@ impl StorageHandler for DataFusionStorageHandler {
         &self,
         files: Vec<FileSlice>,
     ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<Bytes>>>> {
-        let grouped_files = group_by_store(files);
+        // Results must come back in input order, so only consecutive files of one store share a
+        // call. A single-store input is still one call.
+        let runs = files
+            .into_iter()
+            .chunk_by(|file| file.as_object_store_url());
         Ok(Box::new(
-            grouped_files
+            (&runs)
                 .into_iter()
-                .map(|(url, files)| self.handler_for(url)?.read_files(files))
+                .map(|(url, files)| self.handler_for(url)?.read_files(files.collect()))
                 // TODO: this should not do any blocking operations, since this should
                 // happen when the iterators are polled and we are just creating a vec of iterators.
                 // Is this correct?
@@ -252,6 +256,45 @@ mod tests {
         assert_eq!(data[1], Bytes::from("data"));
         assert_eq!(data[2], Bytes::from("el-da"));
 
+        Ok(())
+    }
+
+    /// Results must come back in input order even when the files span two object stores.
+    #[tokio::test]
+    async fn read_files_keeps_input_order_across_stores() -> TestResult {
+        let session = SessionContext::new();
+        let ctx = session.task_ctx();
+        let store_a = Arc::new(object_store::memory::InMemory::new());
+        let store_b = Arc::new(object_store::memory::InMemory::new());
+        let url_a = Url::parse("memory://store-a/")?;
+        let url_b = Url::parse("memory://store-b/")?;
+        ctx.runtime_env()
+            .register_object_store(&url_a, store_a.clone());
+        ctx.runtime_env()
+            .register_object_store(&url_b, store_b.clone());
+        store_a
+            .put(&Path::from("a1"), Bytes::from("a1").into())
+            .await?;
+        store_a
+            .put(&Path::from("a2"), Bytes::from("a2").into())
+            .await?;
+        store_b
+            .put(&Path::from("b1"), Bytes::from("b1").into())
+            .await?;
+
+        let storage = DataFusionStorageHandler::new(ctx, Handle::current());
+        // Interleaved: store-a, store-b, store-a.
+        let slices: Vec<FileSlice> = vec![
+            (url_a.join("a1")?, None),
+            (url_b.join("b1")?, None),
+            (url_a.join("a2")?, None),
+        ];
+        let data: Vec<Bytes> = storage.read_files(slices)?.try_collect()?;
+
+        assert_eq!(
+            data,
+            vec![Bytes::from("a1"), Bytes::from("b1"), Bytes::from("a2")],
+        );
         Ok(())
     }
 
