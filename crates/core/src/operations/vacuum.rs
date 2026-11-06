@@ -40,8 +40,8 @@ use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
-    ActiveAddOptions, AddStatsPolicy, EagerSnapshot, LogicalFileView, Snapshot, TombstoneView,
-    Version, resolve_snapshot,
+    ActiveAddOptions, AddStatsPolicy, DeletionVectorDescriptor, EagerSnapshot, Snapshot,
+    TombstoneView, Version, resolve_snapshot,
 };
 use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef};
@@ -85,17 +85,24 @@ async fn collect_active_paths(
             },
         )
         .try_fold(HashSet::new(), |mut paths, file| {
-            ready(deletion_vector_path(&file, table_root).map(|dv_path| {
-                paths.insert(file.object_store_path());
-                paths.extend(dv_path);
-                paths
-            }))
+            ready(
+                deletion_vector_path(file.deletion_vector_descriptor(), table_root).map(
+                    |dv_path| {
+                        paths.insert(file.object_store_path());
+                        paths.extend(dv_path);
+                        paths
+                    },
+                ),
+            )
         })
         .await
 }
 
-fn deletion_vector_path(file: &LogicalFileView, table_root: &Url) -> DeltaResult<Option<Path>> {
-    let Some(dv) = file.deletion_vector_descriptor() else {
+fn deletion_vector_path(
+    dv: Option<DeletionVectorDescriptor>,
+    table_root: &Url,
+) -> DeltaResult<Option<Path>> {
+    let Some(dv) = dv else {
         return Ok(None);
     };
     let dv = KernelDeletionVectorDescriptor::try_from(dv)?;
@@ -381,15 +388,8 @@ impl VacuumBuilder {
         let mut file_count = 0;
 
         let tombstone_retention_timestamp = now_millis - retention_period.num_milliseconds();
-        let (expired_tombstones, tombstone_path_sets) = if self.mode == VacuumMode::Full {
-            collect_full_mode_tombstones(snapshot, tombstone_retention_timestamp, &self.log_store)
-                .await?
-        } else {
-            (
-                get_stale_files(snapshot, retention_period, now_millis, &self.log_store).await?,
-                TombstonePathSets::default(),
-            )
-        };
+        let (expired_tombstones, tombstone_path_sets) =
+            collect_tombstones(snapshot, tombstone_retention_timestamp, &self.log_store).await?;
         let valid_files = collect_active_paths(snapshot, self.log_store.as_ref()).await?;
 
         let partition_columns = snapshot.metadata().partition_columns();
@@ -398,10 +398,12 @@ impl VacuumBuilder {
         let mut file_sizes = vec![];
 
         // VacuumMode::Lite file set
-        // Expired tombstones are *always deleted (*unless in keep list)
+        // Expired tombstones are deleted unless the file is still in use or kept for time travel
         for tombs in expired_tombstones.iter() {
             let path = tombstone_object_store_path(tombs);
-            if ok_to_delete(&path, &valid_files, &keep_files, partition_columns)? {
+            if !tombstone_path_sets.retained_paths.contains(&path)
+                && ok_to_delete(&path, &valid_files, &keep_files, partition_columns)?
+            {
                 files_to_delete.push(path);
                 file_sizes.push(tombs.size().unwrap_or(0));
             }
@@ -682,18 +684,24 @@ impl VacuumPlan {
     }
 }
 
+/// The protocol identifies a removed file by its path and deletion vector, so several tombstones
+/// can reference the same file. Files referenced by any unexpired tombstone are retained so time
+/// travel within the retention period keeps working.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct TombstonePathSets {
     expired_tombstone_paths: HashSet<Path>,
-    all_tombstone_paths: HashSet<Path>,
+    retained_paths: HashSet<Path>,
 }
 
 impl TombstonePathSets {
-    fn record(&mut self, path: Path, is_expired: bool) {
+    /// Returns false when an expired tombstone for the same path was already recorded.
+    fn record(&mut self, path: Path, is_expired: bool) -> bool {
         if is_expired {
-            self.expired_tombstone_paths.insert(path.clone());
+            self.expired_tombstone_paths.insert(path)
+        } else {
+            self.retained_paths.insert(path);
+            true
         }
-        self.all_tombstone_paths.insert(path);
     }
 }
 
@@ -763,7 +771,7 @@ fn consider_orphan_for_deletion(
     }
 
     if tombstone_path_sets
-        .all_tombstone_paths
+        .retained_paths
         .contains(&obj_meta.location)
     {
         debug!(
@@ -952,11 +960,12 @@ fn list_orphans_under_prefix(
         })
 }
 
-async fn collect_full_mode_tombstones(
+async fn collect_tombstones(
     snapshot: &Snapshot,
     tombstone_retention_timestamp: i64,
     store: &dyn LogStore,
 ) -> DeltaResult<(Vec<TombstoneView>, TombstonePathSets)> {
+    let table_root = snapshot.table_configuration().table_root();
     snapshot
         .active_tombstones(store)
         .try_fold(
@@ -964,33 +973,23 @@ async fn collect_full_mode_tombstones(
             |(mut expired_tombstones, mut tombstone_path_sets), tombstone| {
                 let is_expired = is_tombstone_expired(&tombstone, tombstone_retention_timestamp);
                 let path = tombstone_object_store_path(&tombstone);
-                tombstone_path_sets.record(path, is_expired);
+                let is_new_path = tombstone_path_sets.record(path, is_expired);
                 if is_expired {
-                    expired_tombstones.push(tombstone);
+                    if is_new_path {
+                        expired_tombstones.push(tombstone);
+                    }
+                    return ready(Ok((expired_tombstones, tombstone_path_sets)));
                 }
-                ready(Ok((expired_tombstones, tombstone_path_sets)))
+                ready(
+                    deletion_vector_path(tombstone.deletion_vector_descriptor(), table_root).map(
+                        |dv_path| {
+                            tombstone_path_sets.retained_paths.extend(dv_path);
+                            (expired_tombstones, tombstone_path_sets)
+                        },
+                    ),
+                )
             },
         )
-        .await
-}
-
-/// List files no longer referenced by a Delta table and are older than the retention threshold.
-async fn get_stale_files(
-    snapshot: &Snapshot,
-    retention_period: Duration,
-    now_timestamp_millis: i64,
-    store: &dyn LogStore,
-) -> DeltaResult<Vec<TombstoneView>> {
-    let tombstone_retention_timestamp = now_timestamp_millis - retention_period.num_milliseconds();
-    snapshot
-        .active_tombstones(store)
-        .try_filter(|tombstone| {
-            ready(is_tombstone_expired(
-                tombstone,
-                tombstone_retention_timestamp,
-            ))
-        })
-        .try_collect::<Vec<_>>()
         .await
 }
 
@@ -1389,21 +1388,13 @@ mod tests {
         let retention = Duration::milliseconds(1_000);
 
         assert!(!lazy.has_materialized_files_for_test());
-        let eager_stale =
-            get_stale_files(eager.snapshot(), retention, now_millis, log_store.as_ref()).await?;
-        let lazy_stale = get_stale_files(&lazy, retention, now_millis, log_store.as_ref()).await?;
-        assert_eq!(tombstone_paths(eager_stale), vec![expired_path]);
-        assert_eq!(tombstone_paths(lazy_stale), vec![expired_path]);
-
         let cutoff = now_millis - retention.num_milliseconds();
         let (eager_expired, eager_sets) =
-            collect_full_mode_tombstones(eager.snapshot(), cutoff, log_store.as_ref()).await?;
+            collect_tombstones(eager.snapshot(), cutoff, log_store.as_ref()).await?;
         let (lazy_expired, lazy_sets) =
-            collect_full_mode_tombstones(&lazy, cutoff, log_store.as_ref()).await?;
-        assert_eq!(
-            tombstone_paths(eager_expired),
-            tombstone_paths(lazy_expired)
-        );
+            collect_tombstones(&lazy, cutoff, log_store.as_ref()).await?;
+        assert_eq!(tombstone_paths(eager_expired), vec![expired_path]);
+        assert_eq!(tombstone_paths(lazy_expired), vec![expired_path]);
         assert_eq!(eager_sets, lazy_sets);
         assert!(
             lazy_sets
@@ -1412,7 +1403,7 @@ mod tests {
         );
         assert!(
             lazy_sets
-                .all_tombstone_paths
+                .retained_paths
                 .contains(&object_store::path::Path::from(recent_path))
         );
         assert!(!lazy.has_materialized_files_for_test());
@@ -1479,6 +1470,95 @@ mod tests {
         assert!(
             result.files_deleted.is_empty(),
             "full vacuum would delete files referenced by the table: {:?}",
+            result.files_deleted
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn test_vacuum_keeps_files_of_unexpired_tombstones_with_deletion_vectors()
+    -> DeltaResult<()> {
+        use arrow_array::cast::AsArray;
+        use arrow_array::types::Int64Type;
+        use datafusion::prelude::SessionContext;
+
+        async fn read_ids(table: &DeltaTable) -> DeltaResult<Vec<i64>> {
+            let ctx = SessionContext::new();
+            table.update_datafusion_session(&ctx.state())?;
+            ctx.register_table("test", table.table_provider().await?)?;
+            let batches = ctx
+                .sql("SELECT id FROM test ORDER BY id")
+                .await?
+                .collect()
+                .await?;
+            Ok(batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(0)
+                        .as_primitive::<Int64Type>()
+                        .values()
+                        .to_vec()
+                })
+                .collect())
+        }
+
+        let data_file = "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet";
+        let dv_file = "deletion_vector_a2084964-69d4-4e1e-95f5-9bbd6571d5c3.bin";
+        let expired_dv_file = "deletion_vector_8e4ca8be-7615-43cf-bc06-5d131148683f.bin";
+        let temp_dir = tempfile::tempdir().unwrap();
+        fs_extra::dir::copy(
+            "../test/tests/data/table_with_deletion_logs",
+            temp_dir.path(),
+            &Default::default(),
+        )
+        .unwrap();
+        let table_dir = temp_dir.path().join("table_with_deletion_logs");
+        let now = SystemTime::now();
+        let month = StdDuration::from_secs(30 * 24 * 60 * 60);
+        set_last_modified(&table_dir.join(dv_file), now - month);
+        set_last_modified(&table_dir.join(expired_dv_file), now - month);
+        let table_url = Url::from_directory_path(table_dir.canonicalize().unwrap()).unwrap();
+
+        let table = open_table(table_url.clone()).await?;
+        let version_before_delete = table.version().unwrap();
+        let ids_before_delete = read_ids(&table).await?;
+        assert!(!ids_before_delete.is_empty());
+
+        let (table, _) = table.delete().await?;
+        let (table, result) = table.vacuum().with_mode(VacuumMode::Lite).await?;
+        assert!(
+            result.files_deleted.is_empty(),
+            "lite vacuum deleted files of an unexpired tombstone: {:?}",
+            result.files_deleted
+        );
+        let (table, result) = table.vacuum().with_mode(VacuumMode::Full).await?;
+        assert_eq!(result.files_deleted, vec![expired_dv_file.to_string()]);
+        let time_travel = crate::open_table_with_version(table_url, version_before_delete).await?;
+        assert_eq!(read_ids(&time_travel).await?, ids_before_delete);
+
+        let after_retention = (now + month)
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let (_table, result) = table
+            .vacuum()
+            .with_mode(VacuumMode::Full)
+            .with_dry_run(true)
+            .with_clock(Arc::new(MockClock::new(after_retention)))
+            .await?;
+        let deleted_count = |file: &str| {
+            result
+                .files_deleted
+                .iter()
+                .filter(|path| *path == file)
+                .count()
+        };
+        assert_eq!(
+            (deleted_count(data_file), deleted_count(dv_file)),
+            (1, 1),
+            "files of an expired tombstone should be vacuumed once: {:?}",
             result.files_deleted
         );
         Ok(())
@@ -1875,6 +1955,68 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_vacuum_keeps_restored_file_removed_again_within_retention() -> DeltaResult<()> {
+        async fn commit(table: &mut DeltaTable, actions: Vec<Action>) -> DeltaResult<()> {
+            let operation = DeltaOperation::Delete { predicate: None };
+            CommitBuilder::default()
+                .with_actions(actions)
+                .build(Some(table.snapshot()?), table.log_store(), operation)
+                .await?;
+            table.update_state().await
+        }
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut table = create_initialized_table(temp_dir.path().to_str().unwrap(), &[]).await;
+        let now = SystemTime::now();
+        let now_millis = now.duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
+        let day_millis = 24 * 60 * 60 * 1000;
+
+        let mut writer = JsonWriter::for_table(&table)?;
+        writer
+            .write(vec![
+                json!({"id": "A", "value": 1, "modified": "2021-02-01"}),
+            ])
+            .await?;
+        writer.flush_and_commit(&mut table).await?;
+        let file = table.snapshot()?.log_data().into_iter().next().unwrap();
+        let remove = file.remove_action(true);
+        let path = file.object_store_path().to_string();
+        set_last_modified(
+            &temp_dir.path().join(&path),
+            now - StdDuration::from_secs(2 * 86400),
+        );
+
+        let remove_at = |deletion_timestamp| {
+            let mut remove = remove.clone();
+            remove.deletion_timestamp = Some(deletion_timestamp);
+            Action::Remove(remove)
+        };
+        commit(&mut table, vec![remove_at(now_millis - 2 * day_millis)]).await?;
+        let version_with_file = table.version().unwrap() - 1;
+        let (mut table, _) = table
+            .restore()
+            .with_version_to_restore(version_with_file)
+            .await?;
+        commit(&mut table, vec![remove_at(now_millis)]).await?;
+
+        for mode in [VacuumMode::Lite, VacuumMode::Full] {
+            let (_table, result) =
+                VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                    .with_retention_period(Duration::days(1))
+                    .with_enforce_retention_duration(false)
+                    .with_dry_run(true)
+                    .with_mode(mode.clone())
+                    .with_clock(Arc::new(MockClock::new(now_millis)))
+                    .await?;
+            assert!(
+                !result.files_deleted.contains(&path),
+                "{mode:?} vacuum deleted a file whose newest tombstone is within retention"
+            );
+        }
+        Ok(())
+    }
+
     /// Test that recently written uncommitted files are protected from deletion in Full mode
     /// This tests the fix for the race condition where concurrent writer's files could be deleted
     #[tokio::test]
@@ -1989,13 +2131,14 @@ mod tests {
         let expired_path = object_store::path::Path::from("expired.parquet");
         let recent_path = object_store::path::Path::from("recent.parquet");
 
-        sets.record(expired_path.clone(), true);
-        sets.record(recent_path.clone(), false);
+        assert!(sets.record(expired_path.clone(), true));
+        assert!(!sets.record(expired_path.clone(), true));
+        assert!(sets.record(recent_path.clone(), false));
 
         assert!(sets.expired_tombstone_paths.contains(&expired_path));
         assert!(!sets.expired_tombstone_paths.contains(&recent_path));
-        assert!(sets.all_tombstone_paths.contains(&expired_path));
-        assert!(sets.all_tombstone_paths.contains(&recent_path));
+        assert!(!sets.retained_paths.contains(&expired_path));
+        assert!(sets.retained_paths.contains(&recent_path));
     }
 
     /// The `DELTARS_VACUUM_LIST_CONCURRENCY` env var is only read once, on the
