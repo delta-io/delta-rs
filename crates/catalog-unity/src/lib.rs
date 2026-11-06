@@ -989,6 +989,7 @@ impl ObjectStoreFactory for UnityCatalogFactory {
         config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
         let store = if let Some(managed) = resolve_managed_table(config, table_uri)?
+            && is_table_managed(&managed)
             && let Some(client) = managed.uc.delta_rest_client()
         {
             let credentials = |operation| {
@@ -1057,6 +1058,7 @@ impl LogStoreFactory for UnityCatalogFactory {
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
         if let Some(managed) = resolve_managed_table(options, location)?
+            && is_table_managed(&managed)
             && let Some(rc) = managed.uc.delta_rest_client()
             && let Some(uc) = managed.uc.delta_update_client()
         {
@@ -1084,6 +1086,16 @@ impl LogStoreFactory for UnityCatalogFactory {
             options,
         ))
     }
+}
+
+pub(crate) fn is_table_managed(table: &ManagedTable) -> bool {
+    table
+        .loaded
+        .metadata
+        .properties
+        .get("delta.feature.catalogManaged")
+        .map(|feat| feat == "supported")
+        .unwrap_or(false)
 }
 
 pub(crate) fn storage_credentials_to_options(
@@ -1139,6 +1151,7 @@ fn resolve_managed_table(
         let loaded =
             UnityCatalogBuilder::execute_uc_future(client.load_table(&catalog, &schema, &table))?
                 .map_err(UnityCatalogError::from)?;
+
         return Ok(Some(ManagedTable {
             uc,
             catalog,

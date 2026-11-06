@@ -4,17 +4,17 @@ use bytes::Bytes;
 use chrono::Utc;
 use delta_kernel::LogPath;
 use deltalake_core::kernel::transaction::TransactionError;
-use deltalake_core::kernel::{CommitInfo, Version};
+use deltalake_core::kernel::{Action, CommitInfo, Version};
 use deltalake_core::logstore::object_store::{
     Error as ObjectStoreError, ObjectStore, ObjectStoreExt, PutMode,
 };
 use deltalake_core::logstore::{
     CatalogLogTail, CommitOrBytes, CommitResponse, Committer, LogStore, LogStoreConfig,
-    ObjectStoreRef, PayloadKind, commit_uri_from_version,
+    ObjectStoreRef, PayloadKind, commit_uri_from_version, get_actions,
 };
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use tracing::warn;
@@ -59,7 +59,7 @@ pub struct UnityCommitCoordinator {
     table: String,
     table_uuid: String,
     store: ObjectStoreRef,
-    last_published_version: AtomicU64,
+    last_published_version: AtomicI64,
 }
 
 impl UnityCommitCoordinator {
@@ -80,7 +80,7 @@ impl UnityCommitCoordinator {
             table: table.into(),
             table_uuid: table_uuid.into(),
             store,
-            last_published_version: AtomicU64::new(0),
+            last_published_version: AtomicI64::new(-1),
         }
     }
 
@@ -95,14 +95,18 @@ impl UnityCommitCoordinator {
         let reqs = DeltaTableRequirement::AssertTableUuid {
             uuid: self.table_uuid.clone(),
         };
-        let last_version = DeltaTableUpdate::SetLatestBackfilledVersion {
-            latest_published_version: self.last_published_version.load(Ordering::Relaxed) as i64,
-        };
-        UpdateTableRequest::new(vec![reqs], vec![update, last_version]).map_err(|e| {
-            TransactionError::LogStoreError {
-                msg: e.to_string(),
-                source: Box::new(e),
-            }
+        let mut updates = vec![update];
+        let latest_published_version = self.last_published_version.load(Ordering::Relaxed);
+        if latest_published_version >= 0 {
+            let last_version = DeltaTableUpdate::SetLatestBackfilledVersion {
+                latest_published_version,
+            };
+            updates.push(last_version);
+        }
+
+        UpdateTableRequest::new(vec![reqs], updates).map_err(|e| TransactionError::LogStoreError {
+            msg: e.to_string(),
+            source: Box::new(e),
         })
     }
 }
@@ -123,15 +127,42 @@ fn commit_failed(msg: String) -> TransactionError {
     }
 }
 
-fn classify_attempt(
+async fn classify_attempt(
+    store: &dyn ObjectStore,
     version: Version,
     file_name: &str,
+    txn_id: Option<&str>,
     list: &CommitList,
 ) -> Option<CommitResponse> {
-    let commit = list.commits.iter().find(|c| c.version as u64 == version)?;
-    match staged_file_name(&commit.file_name) {
-        Ok(name) if name == file_name => Some(CommitResponse::Committed),
-        _ => Some(CommitResponse::Conflict { version }),
+    if let Some(commit) = list.commits.iter().find(|c| c.version as u64 == version) {
+        return match staged_file_name(&commit.file_name) {
+            Ok(name) if name == file_name => Some(CommitResponse::Committed),
+            _ => Some(CommitResponse::Conflict { version }),
+        };
+    }
+    if list.max_version < version || txn_id.is_none() {
+        return None;
+    }
+
+    let bytes = store
+        .get(&commit_uri_from_version(Some(version)))
+        .await
+        .ok()?
+        .bytes()
+        .await
+        .ok()?;
+    let published_txn_id = get_actions(version, &bytes)
+        .ok()?
+        .into_iter()
+        .find_map(|action| match action {
+            Action::CommitInfo(info) => Some(info.txn_id),
+            _ => None,
+        })?;
+
+    if published_txn_id.as_deref() == txn_id {
+        Some(CommitResponse::Committed)
+    } else {
+        Some(CommitResponse::Conflict { version })
     }
 }
 
@@ -165,10 +196,12 @@ impl Committer for UnityCommitCoordinator {
             file_size,
             modified,
         );
-        let request = self.update_request(DeltaTableUpdate::AddCommit { commit })?;
+        let request = self.update_request(DeltaTableUpdate::AddCommit {
+            commit: commit.clone(),
+        })?;
         let target = self.target();
 
-        let mut outcome = self.update.update_table(&target, request.clone()).await;
+        let mut outcome = self.update.update_table(&target, request).await;
         // TODO: this is not correct, need to stop it from doubling up on requests
         if matches!(
             outcome,
@@ -178,9 +211,10 @@ impl Committer for UnityCommitCoordinator {
                 version,
                 "UC reports too many unpublished commits; publishing then retrying ratify"
             );
-            if let Err(e) = self.publish(&self.store, version.saturating_sub(1)).await {
-                warn!(error = %e, "publish before ratify retry failed");
-            }
+            self.publish(&self.store, version.saturating_sub(1))
+                .await
+                .map_err(|e| commit_failed(format!("Failed to publish changes: {}", e)))?;
+            let request = self.update_request(DeltaTableUpdate::AddCommit { commit })?;
             outcome = self.update.update_table(&target, request).await;
         }
 
@@ -189,18 +223,23 @@ impl Committer for UnityCommitCoordinator {
             // Not sure what to do on conflicts right now from the catalog, not even sure what the catalog returns
             // when a conflict occurs
             // Err(err) if is_version_conflict(&err) => Ok(CommitResponse::Conflict { version }),
-            Err(err) => self
-                .get_commits()
-                .await
-                .ok()
-                .and_then(|list| classify_attempt(version, &file_name, &list))
-                .ok_or_else(|| {
+            Err(err) => {
+                let txn_id = commit_info.and_then(|info| info.txn_id.as_deref());
+                let resolved = match self.get_commits().await {
+                    Ok(list) => {
+                        classify_attempt(self.store.as_ref(), version, &file_name, txn_id, &list)
+                            .await
+                    }
+                    Err(_) => None,
+                };
+                resolved.ok_or_else(|| {
                     commit_failed(format!(
                         "UC update_table failed for version {version}: {err}. The staged commit \
                          {file_name} is kept because the catalog may still ratify it; reload the \
                          table to see whether version {version} was committed before retrying"
                     ))
-                }),
+                })
+            }
         }
     }
 
@@ -235,13 +274,21 @@ impl CommitCoordinator for UnityCommitCoordinator {
             .or(resp.metadata.last_commit_version)
             .unwrap_or(-1);
 
+        let last_published_version = resp
+            .commits
+            .iter()
+            .map(|c| c.version - 1)
+            .min()
+            .unwrap_or(raw_max_version);
+
+        self.last_published_version
+            .fetch_max(last_published_version, Ordering::Relaxed);
+
         let max_version = if raw_max_version < 0 {
             0
         } else {
             raw_max_version as u64
         };
-        self.last_published_version
-            .store(max_version, Ordering::Relaxed);
 
         Ok(CommitList {
             commits: resp.commits,
@@ -251,9 +298,9 @@ impl CommitCoordinator for UnityCommitCoordinator {
 
     async fn publish(&self, store: &ObjectStoreRef, up_to: Version) -> DeltaResult<()> {
         let list = self.get_commits().await?;
-        let mut published = 0;
         let mut commits = list.commits.to_vec();
         commits.sort_by_key(|c| c.version);
+        let mut published = commits.first().map(|c| c.version - 1).unwrap_or(0) as Version;
         for commit in commits {
             let version = commit.version as u64;
             if version > up_to {
@@ -277,6 +324,8 @@ impl CommitCoordinator for UnityCommitCoordinator {
                 }
             }
             published = version;
+            self.last_published_version
+                .fetch_max(published as i64, Ordering::Relaxed);
         }
 
         Ok(())
@@ -575,28 +624,93 @@ mod tests {
         }
     }
 
-    #[test]
-    fn classify_listed_attempt_by_staged_file_name() {
+    const OUR_TXN: &str = "our-txn-id";
+
+    fn all_published(max_version: Version) -> CommitList {
+        CommitList {
+            commits: vec![],
+            max_version,
+        }
+    }
+
+    async fn publish_commit(store: &ObjectStoreRef, version: Version, txn_id: Option<&str>) {
+        let info = CommitInfo {
+            txn_id: txn_id.map(str::to_owned),
+            ..Default::default()
+        };
+        let bytes = serde_json::to_string(&Action::CommitInfo(info)).unwrap();
+        store
+            .put(&commit_uri_from_version(Some(version)), bytes.into())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn classify_listed_attempt_by_staged_file_name() {
+        let store = store();
         let list = listed(3, OURS, 3);
         assert_eq!(
-            classify_attempt(3, OURS, &list),
+            classify_attempt(store.as_ref(), 3, OURS, Some(OUR_TXN), &list).await,
             Some(CommitResponse::Committed)
         );
         let prefixed = listed(3, &format!("_staged_commits/{OURS}"), 3);
         assert_eq!(
-            classify_attempt(3, OURS, &prefixed),
+            classify_attempt(store.as_ref(), 3, OURS, Some(OUR_TXN), &prefixed).await,
             Some(CommitResponse::Committed)
         );
         let lost = listed(3, THEIRS, 3);
         assert_eq!(
-            classify_attempt(3, OURS, &lost),
+            classify_attempt(store.as_ref(), 3, OURS, Some(OUR_TXN), &lost).await,
             Some(CommitResponse::Conflict { version: 3 })
         );
     }
 
-    #[test]
-    fn classify_unratified_attempt_is_unknown() {
+    #[tokio::test]
+    async fn classify_unratified_attempt_is_unknown() {
         let list = listed(2, "00000000000000000002.x.json", 2);
-        assert_eq!(classify_attempt(3, OURS, &list), None);
+        assert_eq!(
+            classify_attempt(store().as_ref(), 3, OURS, Some(OUR_TXN), &list).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn classify_published_attempt_by_txn_id() {
+        let ours = store();
+        publish_commit(&ours, 3, Some(OUR_TXN)).await;
+        assert_eq!(
+            classify_attempt(ours.as_ref(), 3, OURS, Some(OUR_TXN), &all_published(4)).await,
+            Some(CommitResponse::Committed)
+        );
+
+        let theirs = store();
+        publish_commit(&theirs, 3, Some("their-txn-id")).await;
+        assert_eq!(
+            classify_attempt(theirs.as_ref(), 3, OURS, Some(OUR_TXN), &all_published(3)).await,
+            Some(CommitResponse::Conflict { version: 3 })
+        );
+
+        let untagged = store();
+        publish_commit(&untagged, 3, None).await;
+        assert_eq!(
+            classify_attempt(untagged.as_ref(), 3, OURS, Some(OUR_TXN), &all_published(3)).await,
+            Some(CommitResponse::Conflict { version: 3 })
+        );
+    }
+
+    #[tokio::test]
+    async fn classify_published_attempt_without_evidence_is_unknown() {
+        let missing = store();
+        assert_eq!(
+            classify_attempt(missing.as_ref(), 3, OURS, Some(OUR_TXN), &all_published(3)).await,
+            None
+        );
+
+        let published = store();
+        publish_commit(&published, 3, Some(OUR_TXN)).await;
+        assert_eq!(
+            classify_attempt(published.as_ref(), 3, OURS, None, &all_published(3)).await,
+            None
+        );
     }
 }

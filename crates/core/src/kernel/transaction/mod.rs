@@ -500,13 +500,17 @@ impl CommitData {
                 .entry("clientVersion".to_string())
                 .or_insert(Value::String(format!("delta-rs.{}", crate_version())));
 
-            if !app_metadata.contains_key("txnId") && commit_info.txn_id.is_none() {
-                commit_info.txn_id = Some(uuid::Uuid::new_v4().to_string());
-            }
-
             assign_commit_info_metadata(&mut commit_info, &mut app_metadata);
             // commit info should be the first action to support in-commit timestamps.
             actions.insert(0, Action::CommitInfo(commit_info));
+        }
+
+        if let Some(Action::CommitInfo(commit_info)) = actions
+            .iter_mut()
+            .find(|action| matches!(action, Action::CommitInfo(..)))
+            && commit_info.txn_id.is_none()
+        {
+            commit_info.txn_id = Some(uuid::Uuid::new_v4().to_string());
         }
 
         for txn in &app_transactions {
@@ -1597,6 +1601,41 @@ mod tests {
 
         let info = commit_info(&data);
         assert_eq!(info.txn_id.as_deref(), Some(supplied_txn_id));
+    }
+
+    #[test]
+    fn test_txn_id_generated_for_caller_commit_info() {
+        let data = CommitData::new(
+            vec![Action::CommitInfo(CommitInfo::default())],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::new(),
+            vec![],
+        );
+
+        let info = commit_info(&data);
+        assert!(uuid::Uuid::parse_str(info.txn_id.as_deref().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn test_txn_id_kept_on_caller_commit_info() {
+        let data = CommitData::new(
+            vec![Action::CommitInfo(CommitInfo {
+                txn_id: Some("typed-txn-id".to_owned()),
+                ..Default::default()
+            })],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::new(),
+            vec![],
+        );
+        assert_eq!(commit_info(&data).txn_id.as_deref(), Some("typed-txn-id"));
+
+        let data = CommitData::new(
+            vec![Action::CommitInfo(CommitInfo::default())],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::from([("txnId".to_owned(), json!("app-txn-id"))]),
+            vec![],
+        );
+        assert_eq!(commit_info(&data).txn_id.as_deref(), Some("app-txn-id"));
     }
 
     fn append() -> DeltaOperation {
