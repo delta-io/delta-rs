@@ -231,6 +231,40 @@ mod tests {
         .await;
     }
 
+    /// On a current-thread runtime, a caller on the runtime's own thread can pull the read
+    /// iterators: the plans must not run on the thread the caller blocks.
+    #[test]
+    fn reads_complete_on_a_current_thread_runtime_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let parquet_files = vec![write_parquet(&dir.path().join("a.parquet"), "x", &[1, 2])];
+        let json_files = vec![write_json(&dir.path().join("b.json"), &[r#"{"x": 3}"#])];
+        let (done, result) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let per_batch = runtime.block_on(async move {
+                let engine = engine();
+                let parquet = engine
+                    .parquet_handler()
+                    .read_parquet_files(&parquet_files, x_schema(), None)
+                    .unwrap();
+                let json = engine
+                    .json_handler()
+                    .read_json_files(&json_files, x_schema(), None)
+                    .unwrap();
+                (x_per_batch(parquet), x_per_batch(json))
+            });
+            done.send(per_batch).ok();
+        });
+        let (parquet, json) = result
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("the reads did not finish: they panicked or deadlocked");
+        assert_eq!(parquet, [vec![1, 2]]);
+        assert_eq!(json, [vec![3]]);
+    }
+
     /// `JsonHandler` contract: batches arrive in file order and never span files.
     #[tokio::test]
     async fn read_json_files_keeps_file_order_with_one_plan_per_file() {

@@ -6,13 +6,37 @@
 //! result back over a channel, and wait for it with [`tokio::task::block_in_place`] when the
 //! caller is a multi-thread runtime worker.
 //!
-//! The runtime behind the [`Handle`] must be driven by other threads while the caller waits: a
-//! multi-thread runtime, or a current-thread runtime running on its own thread.
+//! The runtime behind the [`Handle`] must be driven by other threads while the caller waits.
+//! A current-thread runtime runs its tasks only on the thread that drives it, and that can be
+//! the caller's thread, so [`query_handle`] moves query execution to a background runtime, as
+//! the default engine's `TokioBackgroundExecutor` does.
 
 use std::future::Future;
-use std::sync::mpsc;
+use std::sync::{OnceLock, mpsc};
 
-use tokio::runtime::{Handle, RuntimeFlavor};
+use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
+
+/// The handle to run queries on for an executor built with `handle`.
+///
+/// A multi-thread runtime keeps running tasks while one worker waits, so it is used as is. For
+/// a current-thread runtime this is a background runtime shared by every executor, which is
+/// never dropped, so no executor drops a runtime from inside an async context.
+pub(crate) fn query_handle(handle: &Handle) -> Handle {
+    static BACKGROUND: OnceLock<Runtime> = OnceLock::new();
+    match handle.runtime_flavor() {
+        RuntimeFlavor::CurrentThread => BACKGROUND
+            .get_or_init(|| {
+                tokio::runtime::Builder::new_multi_thread()
+                    .thread_name("deltalake-kernel-executor")
+                    .enable_all()
+                    .build()
+                    .expect("failed to build the executor's background runtime")
+            })
+            .handle()
+            .clone(),
+        _ => handle.clone(),
+    }
+}
 
 /// Runs `wait`, a call that blocks the current thread until a spawned task delivers a result.
 ///

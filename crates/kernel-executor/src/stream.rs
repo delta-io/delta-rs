@@ -34,7 +34,9 @@ pub fn into_engine_data(
         }
     });
     Box::new(std::iter::from_fn(move || {
-        block_in_place(|| receiver.blocking_recv()).map(|batch| {
+        // Not `blocking_recv`: it panics on a current-thread runtime's thread, where the kernel
+        // can pull this iterator while the stream task runs on a background runtime.
+        block_in_place(|| futures::executor::block_on(receiver.recv())).map(|batch| {
             batch
                 .map(|batch| Box::new(ArrowEngineData::new(batch)) as Box<dyn EngineData>)
                 .map_err(|err| crate::ExecutorError::from(err).into())

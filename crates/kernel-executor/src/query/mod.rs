@@ -30,7 +30,8 @@ pub fn execute(executor: &DataFusionPlanExecutor, plan: Plan) -> DeltaResult<Pla
     // interleave its rows, and the kernel's handler contract wants them in file order.
     config.options_mut().optimizer.repartition_file_scans = false;
     let session = SessionContext::new_with_config_rt(config, ctx.runtime_env());
-    let stream = crate::runtime::block_on(executor.handle(), async move {
+    let handle = crate::runtime::query_handle(executor.handle());
+    let stream = crate::runtime::block_on(&handle, async move {
         session
             .execute_logical_plan(logical)
             .await?
@@ -40,8 +41,7 @@ pub fn execute(executor: &DataFusionPlanExecutor, plan: Plan) -> DeltaResult<Pla
     .map_err(ExecutorError::from)?;
 
     Ok(PlanResult::Data(crate::stream::into_engine_data(
-        executor.handle(),
-        stream,
+        &handle, stream,
     )))
 }
 

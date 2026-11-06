@@ -15,8 +15,8 @@
 //!
 //! `execute_op` is synchronous. The executor spawns its async work on the tokio [`Handle`] it
 //! was built with and waits for results over channels ([`runtime`]), so it can be called from a
-//! runtime worker or from a plain thread. The runtime must be multi-threaded, or driven by a
-//! thread other than the caller.
+//! runtime worker or from a plain thread. On a current-thread runtime, queries run on a shared
+//! background runtime, so the caller can also be the runtime's own thread.
 
 use std::sync::Arc;
 
