@@ -339,7 +339,14 @@ fn struct_scalar(data: &StructArray) -> Result<Scalar> {
     let values = data
         .columns()
         .iter()
-        .map(|column| datafusion_scalar_to_scalar(&ScalarValue::try_from_array(column, 0)?))
+        .map(|column| {
+            // A NULL child is a typed NULL whatever its type, also an array or map, which has
+            // no kernel scalar when set.
+            if column.is_null(0) {
+                return Ok(Scalar::Null(column.data_type().try_into_kernel()?));
+            }
+            datafusion_scalar_to_scalar(&ScalarValue::try_from_array(column, 0)?)
+        })
         .collect::<Result<Vec<_>>>()?;
     let data = StructData::try_new(fields, values).map_err(|e| plan_datafusion_err!("{e}"))?;
     Ok(Scalar::Struct(data))

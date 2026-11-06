@@ -5,6 +5,7 @@ use datafusion::{
     logical_expr::{binary_expr, col, lit},
 };
 use delta_kernel::expressions::{BinaryExpressionOp, JunctionPredicateOp, Scalar};
+use delta_kernel::schema::{ArrayType, MapType};
 
 fn assert_junction_expr(expr: &Expr, expected_op: JunctionPredicateOp, expected_children: usize) {
     let delta_expr = to_delta_expression(expr).unwrap();
@@ -740,4 +741,29 @@ fn test_struct_scalar_round_trip() {
         let df_scalar = crate::expressions::to_datafusion_scalar(&scalar).unwrap();
         assert_eq!(datafusion_scalar_to_scalar(&df_scalar).unwrap(), scalar);
     }
+}
+
+/// A NULL array or map field of a struct literal converts to a typed NULL, though a set array or
+/// map has no kernel scalar.
+#[test]
+fn test_struct_scalar_with_null_collection_fields() {
+    let array = DataType::Array(Box::new(ArrayType::new(DataType::LONG, true)));
+    let map = DataType::Map(Box::new(MapType::new(
+        DataType::STRING,
+        DataType::LONG,
+        true,
+    )));
+    let scalar = Scalar::Struct(
+        StructData::try_new(
+            vec![
+                StructField::nullable("a", DataType::INTEGER),
+                StructField::nullable("list", array.clone()),
+                StructField::nullable("map", map.clone()),
+            ],
+            vec![Scalar::Integer(1), Scalar::Null(array), Scalar::Null(map)],
+        )
+        .unwrap(),
+    );
+    let df_scalar = crate::expressions::to_datafusion_scalar(&scalar).unwrap();
+    assert_eq!(datafusion_scalar_to_scalar(&df_scalar).unwrap(), scalar);
 }
