@@ -3,23 +3,24 @@
 //! DataFusion's own `JsonSource` cannot turn on arrow-json's `coerce_primitive`. The kernel's
 //! default engine reads with it, so a bare `false` or number still lands in a string column.
 //! [`CoercingJsonSource`] is `JsonSource` with that one setting: projection and the per-file values
-//! go through DataFusion's `ProjectionOpener` as in `JsonSource`, and the opener reads each file
-//! whole. A file is never split by byte range, so its rows keep file order, as the kernel's
-//! `JsonHandler` contract requires.
+//! go through DataFusion's `ProjectionOpener` as in `JsonSource`, and the opener streams each file
+//! from start to end. A file is never split by byte range, so its rows keep file order, as the
+//! kernel's `JsonHandler` contract requires.
 
-use std::io::Cursor;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::json::ReaderBuilder;
-use datafusion::common::Result as DFResult;
 use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::common::{DataFusionError, Result as DFResult};
+use datafusion::datasource::file_format::json::JsonDecoder;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, FileSource};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_plan::apply_expression_roots;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::{PartitionedFile, TableSchema};
@@ -130,7 +131,7 @@ impl FileSource for CoercingJsonSource {
     }
 }
 
-/// Reads one file whole and decodes it one batch per poll, in file order.
+/// Streams one file from start to end and decodes its bytes as they arrive, in file order.
 struct CoercingJsonOpener {
     object_store: Arc<dyn ObjectStore>,
     /// The file columns the projection reads.
@@ -141,13 +142,19 @@ struct CoercingJsonOpener {
 impl FileOpener for CoercingJsonOpener {
     fn open(&self, file: PartitionedFile) -> DFResult<FileOpenFuture> {
         let store = Arc::clone(&self.object_store);
-        let reader = ReaderBuilder::new(Arc::clone(&self.read_schema))
+        let decoder = ReaderBuilder::new(Arc::clone(&self.read_schema))
             .with_coerce_primitive(true)
-            .with_batch_size(self.batch_size);
+            .with_batch_size(self.batch_size)
+            .build_decoder()?;
         Ok(Box::pin(async move {
-            let bytes = store.get(&file.object_meta.location).await?.bytes().await?;
-            let batches = reader.build(Cursor::new(bytes))?;
-            Ok(futures::stream::iter(batches).map_err(Into::into).boxed())
+            let input = store
+                .get(&file.object_meta.location)
+                .await?
+                .into_stream()
+                .map_err(DataFusionError::from);
+            let batches =
+                deserialize_stream(input, DecoderDeserializer::new(JsonDecoder::new(decoder)));
+            Ok(batches.map_err(Into::into).boxed())
         }))
     }
 }
