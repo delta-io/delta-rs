@@ -12,30 +12,41 @@
 //! the default engine's `TokioBackgroundExecutor` does.
 
 use std::future::Future;
-use std::sync::{OnceLock, mpsc};
+use std::sync::{Mutex, PoisonError, mpsc};
 
 use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
+
+use crate::{ExecutorError, Result};
 
 /// The handle to run queries on for an executor built with `handle`.
 ///
 /// A multi-thread runtime keeps running tasks while one worker waits, so it is used as is. For
 /// a current-thread runtime this is a background runtime shared by every executor, which is
 /// never dropped, so no executor drops a runtime from inside an async context.
-pub(crate) fn query_handle(handle: &Handle) -> Handle {
-    static BACKGROUND: OnceLock<Runtime> = OnceLock::new();
-    match handle.runtime_flavor() {
-        RuntimeFlavor::CurrentThread => BACKGROUND
-            .get_or_init(|| {
-                tokio::runtime::Builder::new_multi_thread()
-                    .thread_name("deltalake-kernel-executor")
-                    .enable_all()
-                    .build()
-                    .expect("failed to build the executor's background runtime")
-            })
-            .handle()
-            .clone(),
-        _ => handle.clone(),
+///
+/// # Errors
+///
+/// [`ExecutorError::BackgroundRuntime`] if the background runtime cannot be built. A later call
+/// tries again.
+pub(crate) fn query_handle(handle: &Handle) -> Result<Handle> {
+    // A mutex, not a `OnceLock`: the build can fail, and two first calls must not both build a
+    // runtime, as dropping the extra one would block inside an async context.
+    static BACKGROUND: Mutex<Option<Runtime>> = Mutex::new(None);
+    if handle.runtime_flavor() != RuntimeFlavor::CurrentThread {
+        return Ok(handle.clone());
     }
+    let mut background = BACKGROUND.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(runtime) = background.as_ref() {
+        return Ok(runtime.handle().clone());
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_name("deltalake-kernel-executor")
+        .enable_all()
+        .build()
+        .map_err(ExecutorError::BackgroundRuntime)?;
+    let query_handle = runtime.handle().clone();
+    *background = Some(runtime);
+    Ok(query_handle)
 }
 
 /// Runs `wait`, a call that blocks the current thread until a spawned task delivers a result.

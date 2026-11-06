@@ -21,6 +21,11 @@ pub enum ExecutorError {
     /// An error raised by the kernel while the executor adapted its data.
     #[error(transparent)]
     Kernel(#[from] delta_kernel::Error),
+
+    /// The background runtime that runs queries for a current-thread runtime could not be built,
+    /// for example because the process cannot start more threads.
+    #[error("failed to build the executor's background runtime: {0}")]
+    BackgroundRuntime(#[source] std::io::Error),
 }
 
 /// Shorthand for results inside this crate.
