@@ -62,8 +62,9 @@ pub struct FileSystemCheckMetrics {
 }
 
 struct FileSystemCheckPlan {
-    /// Files that no longer exists in undlying ObjectStore but have active add actions
-    pub files_to_remove: Vec<Add>,
+    /// Files that no longer exists in undlying ObjectStore but have active add actions, with
+    /// their paths as stored in the log
+    pub files_to_remove: Vec<(Add, String)>,
 }
 
 // Custom serialization function that serializes metric details as a string
@@ -119,7 +120,7 @@ impl FileSystemCheckBuilder {
     }
 
     async fn create_fsck_plan(&self, snapshot: &Snapshot) -> DeltaResult<FileSystemCheckPlan> {
-        let mut files_relative: HashMap<String, Add> = HashMap::new();
+        let mut files_relative: HashMap<String, (Add, String)> = HashMap::new();
         let log_store = self.log_store.clone();
         let mut file_stream = snapshot
             .active_adds(
@@ -129,15 +130,15 @@ impl FileSystemCheckBuilder {
                     stats: AddStatsPolicy::None,
                 },
             )
-            .map_ok(|f| f.to_add());
+            .map_ok(|f| (f.to_add(), f.path_raw().to_string()));
         while let Some(active) = file_stream.next().await {
-            let active = active?;
+            let (active, log_path) = active?;
             if is_absolute_path(&active.path)? {
                 return Err(DeltaTableError::Generic(
                     "Filesystem check does not support absolute paths".to_string(),
                 ));
             } else {
-                files_relative.insert(active.path.clone(), active);
+                files_relative.insert(active.path.clone(), (active, log_path));
             }
         }
 
@@ -161,7 +162,7 @@ impl FileSystemCheckBuilder {
             "filesystem check listing completed"
         );
 
-        let files_to_remove: Vec<Add> = files_relative
+        let files_to_remove: Vec<(Add, String)> = files_relative
             .into_values()
             .map(|file| file.to_owned())
             .collect();
@@ -180,7 +181,7 @@ impl FileSystemCheckPlan {
         let mut actions = Vec::with_capacity(self.files_to_remove.len());
         let mut removed_file_paths = Vec::with_capacity(self.files_to_remove.len());
 
-        for file in self.files_to_remove {
+        for (file, log_path) in self.files_to_remove {
             let deletion_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
             let deletion_time = deletion_time.as_millis() as i64;
             removed_file_paths.push(file.path.clone());
@@ -195,6 +196,7 @@ impl FileSystemCheckPlan {
                 tags: file.tags,
                 base_row_id: file.base_row_id,
                 default_row_commit_version: file.default_row_commit_version,
+                log_path: Some(log_path),
             }));
         }
         let metrics = FileSystemCheckMetrics {
@@ -238,7 +240,11 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
                 return Ok((
                     DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot)),
                     FileSystemCheckMetrics {
-                        files_removed: plan.files_to_remove.into_iter().map(|f| f.path).collect(),
+                        files_removed: plan
+                            .files_to_remove
+                            .into_iter()
+                            .map(|(f, _)| f.path)
+                            .collect(),
                         dry_run: true,
                     },
                 ));

@@ -127,7 +127,6 @@ impl LogicalFileView {
     }
 
     /// Returns the raw file path as stored in the log, without URL decoding.
-    #[cfg(any(test, feature = "datafusion"))]
     pub(crate) fn path_raw(&self) -> &str {
         get_string_value(
             self.files
@@ -380,7 +379,6 @@ impl LogicalFileView {
     /// Converts this file view into a Remove action for log operations.
     pub fn remove_action(&self, data_change: bool) -> Remove {
         Remove {
-            // TODO use the raw (still encoded) path here once we reconciled serde ...
             path: self.path().to_string(),
             data_change,
             deletion_timestamp: Some(Utc::now().timestamp_millis()),
@@ -391,6 +389,7 @@ impl LogicalFileView {
             tags: None,
             base_row_id: None,
             default_row_commit_version: None,
+            log_path: Some(self.path_raw().to_string()),
         }
     }
 }

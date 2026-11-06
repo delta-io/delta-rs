@@ -135,6 +135,8 @@ pub enum TestTables {
     LatestNotCheckpointed,
     /// A small table that uses deletion vectors.
     WithDvSmall,
+    /// A Spark-written table partitioned by non-ASCII strings, which Spark logs unescaped.
+    SparkNonAsciiPartitions,
     /// A custom, caller-named table (path resolution is not provided).
     Custom(String),
 }
@@ -154,6 +156,7 @@ impl TestTables {
             Self::Checkpoints => data_path.join("checkpoints"),
             Self::LatestNotCheckpointed => data_path.join("latest_not_checkpointed"),
             Self::WithDvSmall => data_path.join("table-with-dv-small"),
+            Self::SparkNonAsciiPartitions => data_path.join("spark-non-ascii-partitions"),
             // the data path for upload does not apply to custom tables.
             Self::Custom(_) => todo!(),
         }
@@ -172,6 +175,7 @@ impl TestTables {
             Self::Checkpoints => "checkpoints".into(),
             Self::LatestNotCheckpointed => "latest_not_checkpointed".into(),
             Self::WithDvSmall => "table-with-dv-small".into(),
+            Self::SparkNonAsciiPartitions => "spark-non-ascii-partitions".into(),
             Self::Custom(name) => name.to_owned(),
         }
     }

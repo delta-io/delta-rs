@@ -21,4 +21,5 @@ mod operation_scope;
 mod read_delta_log_test;
 mod read_delta_partitions_test;
 mod scan_file_statistics;
+mod spark_non_ascii_partitions;
 mod timestamp_statistics;
