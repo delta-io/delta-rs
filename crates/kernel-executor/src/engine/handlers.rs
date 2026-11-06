@@ -107,6 +107,10 @@ impl JsonHandler for PlanBasedJsonHandler {
         delta_kernel::engine::parse_json(json_strings, output_schema)
     }
 
+    /// Reads `files` as newline-delimited JSON, one plan per file, in file order.
+    ///
+    /// **The `predicate` argument is ignored.** There is no plan shape yet that puts a filter over
+    /// a scan, so every row of every file is returned and the caller must filter them.
     fn read_json_files(
         &self,
         files: &[FileMeta],
@@ -141,6 +145,10 @@ pub(super) struct PlanBasedParquetHandler {
 }
 
 impl ParquetHandler for PlanBasedParquetHandler {
+    /// Reads `files` as Parquet, one plan per file, in file order.
+    ///
+    /// **The `predicate` argument is ignored.** There is no plan shape yet that puts a filter over
+    /// a scan, so every row of every file is returned and the caller must filter them.
     fn read_parquet_files(
         &self,
         files: &[FileMeta],
