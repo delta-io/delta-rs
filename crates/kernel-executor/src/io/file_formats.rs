@@ -43,60 +43,67 @@ impl DataFusionFileFormatHandler {
         self.ctx.runtime_env().object_store_registry.clone()
     }
 
-    fn get_or_create_pq(
+    fn parquet_handler_for(
         &self,
         url: ObjectStoreUrl,
     ) -> KernelResult<Ref<'_, ObjectStoreUrl, Arc<dyn ParquetHandler>>> {
         if let Some(handler) = self.pq_registry.get(&url) {
             return Ok(handler);
         }
-        let store = self
-            .registry()
-            .get_store(url.as_ref())
-            .map_err(delta_kernel::Error::generic_err)?;
+        // The entry holds the shard's write lock, so concurrent first calls build one handler.
+        let handler = self.pq_registry.entry(url.clone()).or_try_insert_with(|| {
+            let store = self
+                .registry()
+                .get_store(url.as_ref())
+                .map_err(delta_kernel::Error::generic_err)?;
 
-        let handler: Arc<dyn ParquetHandler> = match self.handle.runtime_flavor() {
-            RuntimeFlavor::MultiThread => Arc::new(DefaultParquetHandler::new(
-                store,
-                Arc::new(TokioMultiThreadExecutor::new(self.handle.clone())),
-            )),
-            RuntimeFlavor::CurrentThread => Arc::new(DefaultParquetHandler::new(
-                store,
-                Arc::new(TokioBackgroundExecutor::new()),
-            )),
-            _ => panic!("unsupported runtime flavor"),
-        };
-
-        self.pq_registry.insert(url.clone(), handler);
-        Ok(self.pq_registry.get(&url).unwrap())
+            let handler: Arc<dyn ParquetHandler> = match self.handle.runtime_flavor() {
+                RuntimeFlavor::MultiThread => Arc::new(DefaultParquetHandler::new(
+                    store,
+                    Arc::new(TokioMultiThreadExecutor::new(self.handle.clone())),
+                )),
+                RuntimeFlavor::CurrentThread => Arc::new(DefaultParquetHandler::new(
+                    store,
+                    Arc::new(TokioBackgroundExecutor::new()),
+                )),
+                _ => panic!("unsupported runtime flavor"),
+            };
+            Ok::<_, delta_kernel::Error>(handler)
+        })?;
+        Ok(handler.downgrade())
     }
 
-    fn get_or_create_json(
+    fn json_handler_for(
         &self,
         url: ObjectStoreUrl,
     ) -> KernelResult<Ref<'_, ObjectStoreUrl, Arc<dyn JsonHandler>>> {
         if let Some(handler) = self.json_registry.get(&url) {
             return Ok(handler);
         }
-        let store = self
-            .registry()
-            .get_store(url.as_ref())
-            .map_err(delta_kernel::Error::generic_err)?;
+        // The entry holds the shard's write lock, so concurrent first calls build one handler.
+        let handler = self
+            .json_registry
+            .entry(url.clone())
+            .or_try_insert_with(|| {
+                let store = self
+                    .registry()
+                    .get_store(url.as_ref())
+                    .map_err(delta_kernel::Error::generic_err)?;
 
-        let handler: Arc<dyn JsonHandler> = match self.handle.runtime_flavor() {
-            RuntimeFlavor::MultiThread => Arc::new(DefaultJsonHandler::new(
-                store,
-                Arc::new(TokioMultiThreadExecutor::new(self.handle.clone())),
-            )),
-            RuntimeFlavor::CurrentThread => Arc::new(DefaultJsonHandler::new(
-                store,
-                Arc::new(TokioBackgroundExecutor::new()),
-            )),
-            _ => panic!("unsupported runtime flavor"),
-        };
-
-        self.json_registry.insert(url.clone(), handler);
-        Ok(self.json_registry.get(&url).unwrap())
+                let handler: Arc<dyn JsonHandler> = match self.handle.runtime_flavor() {
+                    RuntimeFlavor::MultiThread => Arc::new(DefaultJsonHandler::new(
+                        store,
+                        Arc::new(TokioMultiThreadExecutor::new(self.handle.clone())),
+                    )),
+                    RuntimeFlavor::CurrentThread => Arc::new(DefaultJsonHandler::new(
+                        store,
+                        Arc::new(TokioBackgroundExecutor::new()),
+                    )),
+                    _ => panic!("unsupported runtime flavor"),
+                };
+                Ok::<_, delta_kernel::Error>(handler)
+            })?;
+        Ok(handler.downgrade())
     }
 }
 
@@ -112,7 +119,7 @@ impl ParquetHandler for DataFusionFileFormatHandler {
             grouped_files
                 .into_iter()
                 .map(|(url, files)| {
-                    self.get_or_create_pq(url)?.read_parquet_files(
+                    self.parquet_handler_for(url)?.read_parquet_files(
                         &files.to_vec(),
                         physical_schema.clone(),
                         predicate.clone(),
@@ -129,14 +136,15 @@ impl ParquetHandler for DataFusionFileFormatHandler {
 
     fn write_parquet_file(
         &self,
-        _location: url::Url,
-        _data: Box<dyn Iterator<Item = KernelResult<Box<dyn EngineData>>> + Send>,
+        location: url::Url,
+        data: Box<dyn Iterator<Item = KernelResult<Box<dyn EngineData>>> + Send>,
     ) -> KernelResult<()> {
-        todo!("write parquet file")
+        self.parquet_handler_for(location.as_object_store_url())?
+            .write_parquet_file(location, data)
     }
 
     fn read_parquet_footer(&self, file: &FileMeta) -> KernelResult<delta_kernel::ParquetFooter> {
-        self.get_or_create_pq(file.as_object_store_url())?
+        self.parquet_handler_for(file.as_object_store_url())?
             .read_parquet_footer(file)
     }
 }
@@ -161,7 +169,7 @@ impl JsonHandler for DataFusionFileFormatHandler {
             grouped_files
                 .into_iter()
                 .map(|(url, files)| {
-                    self.get_or_create_json(url)?.read_json_files(
+                    self.json_handler_for(url)?.read_json_files(
                         &files.to_vec(),
                         physical_schema.clone(),
                         predicate.clone(),
@@ -182,7 +190,7 @@ impl JsonHandler for DataFusionFileFormatHandler {
         data: Box<dyn Iterator<Item = KernelResult<FilteredEngineData>> + Send + '_>,
         overwrite: bool,
     ) -> KernelResult<u64> {
-        self.get_or_create_json(path.as_object_store_url())?
+        self.json_handler_for(path.as_object_store_url())?
             .write_json_file(path, data, overwrite)
     }
 }
