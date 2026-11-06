@@ -95,6 +95,85 @@ fn test_not_in_list_rewrites_to_and_of_inequalities() {
 }
 
 #[test]
+fn test_large_in_list_converts_to_flat_junction() {
+    // Pin the stack to the 2 MiB default so RUST_MIN_STACK cannot hide a regression.
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let n = 10_000i64;
+            let list: Vec<Expr> = (0..n).map(lit).collect();
+            let other = col("p").eq(lit(1));
+            for negated in [false, true] {
+                let in_list = col("id").in_list(list.clone(), negated);
+                let terms = (0..n).map(|i| {
+                    let eq = Predicate::eq(
+                        Expression::Column(ColumnName::new(["id"])),
+                        Expression::Literal(Scalar::Long(i)),
+                    );
+                    if negated { Predicate::not(eq) } else { eq }
+                });
+                let expected = if negated {
+                    Predicate::and_from(terms)
+                } else {
+                    Predicate::or_from(terms)
+                };
+                assert_eq!(to_delta_predicate(&in_list).unwrap(), expected);
+
+                let nested = other.clone().and(in_list);
+                assert_eq!(
+                    to_delta_predicate(&nested).unwrap(),
+                    Predicate::and_from([to_delta_predicate(&other).unwrap(), expected])
+                );
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// Drops a left-deep chain one node at a time. DataFusion's recursive `Drop` can overflow
+/// a 2 MiB stack on a 10,000-deep chain (seen on Windows CI).
+fn drop_chain(mut expr: Expr) {
+    while let Expr::BinaryExpr(BinaryExpr { left, .. }) = expr {
+        expr = *left;
+    }
+}
+
+#[test]
+fn test_long_junction_chain_converts_to_flat_junction() {
+    // Pin the stack to the 2 MiB default so RUST_MIN_STACK cannot hide a regression.
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let n = 10_000i64;
+            let term = |i| col("id").eq(lit(i));
+            let expected_terms = || {
+                (0..n).map(|i| {
+                    Predicate::eq(
+                        Expression::Column(ColumnName::new(["id"])),
+                        Expression::Literal(Scalar::Long(i)),
+                    )
+                })
+            };
+            let or_chain = (1..n).fold(term(0), |acc, i| acc.or(term(i)));
+            assert_eq!(
+                to_delta_predicate(&or_chain).unwrap(),
+                Predicate::or_from(expected_terms())
+            );
+            drop_chain(or_chain);
+            let and_chain = (1..n).fold(term(0), |acc, i| acc.and(term(i)));
+            assert_eq!(
+                to_delta_predicate(&and_chain).unwrap(),
+                Predicate::and_from(expected_terms())
+            );
+            drop_chain(and_chain);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn test_empty_in_list_rewrites_to_boolean_constant() {
     let expr = col("part").in_list(Vec::<Expr>::new(), false);
     assert_eq!(
@@ -110,17 +189,24 @@ fn test_empty_in_list_rewrites_to_boolean_constant() {
 }
 
 #[test]
-fn test_normalize_delta_predicate_expr_leaves_non_literal_in_list_unchanged() {
+fn test_non_literal_in_list_is_not_converted() {
     let expr = col("part").in_list(vec![lit("a"), col("other")], false);
 
-    assert_eq!(normalize_delta_predicate_expr(&expr).unwrap(), expr);
+    assert!(to_delta_predicate(&expr).is_err());
 }
 
 #[test]
-fn test_normalize_delta_predicate_expr_leaves_not_in_list_with_null_unchanged() {
+fn test_not_in_list_with_null_is_not_converted() {
     let expr = col("part").in_list(vec![lit("a"), lit(ScalarValue::Utf8(None))], true);
 
-    assert_eq!(normalize_delta_predicate_expr(&expr).unwrap(), expr);
+    assert!(to_delta_predicate(&expr).is_err());
+}
+
+#[test]
+fn test_single_item_in_list_converts_to_bare_predicate() {
+    let expr = col("part").in_list(vec![lit("a")], false);
+
+    assert_string_equality_predicate(&to_delta_predicate(&expr).unwrap(), "part", "a");
 }
 
 #[test]

@@ -1,12 +1,12 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use arrow::datatypes::Int32Type;
 use arrow_array::cast::AsArray;
-use arrow_array::types::Int64Type;
-use arrow_array::{Array, MapArray, RecordBatch, StringArray, StructArray};
-use arrow_schema::DataType as ArrowDataType;
+use arrow_array::types::{Int64Type, TimestampMicrosecondType, TimestampNanosecondType};
+use arrow_array::{Array, ArrayRef, MapArray, RecordBatch, StringArray, StructArray};
+use arrow_schema::{DataType as ArrowDataType, TimeUnit};
 use chrono::{DateTime, Utc};
 use delta_kernel::engine::arrow_expression::evaluate_expression::to_json;
 use delta_kernel::expressions::{Scalar, StructData};
@@ -442,9 +442,26 @@ fn ceil_datetime(v: i64, ratio: i64) -> i64 {
     if remainder == 0 {
         // if nanoseconds precision remainder is 0, we assume it was truncated
         // else we use the exact stats
-        ((v as f64 / ratio as f64).floor() as i64 + 1) * ratio
+        v.saturating_add(ratio)
     } else {
         v
+    }
+}
+
+/// Applies [`ceil_datetime`] to an array of timestamp max values.
+pub(crate) fn ceil_timestamps(max: ArrayRef) -> ArrayRef {
+    match max.data_type() {
+        ArrowDataType::Timestamp(TimeUnit::Microsecond, tz) => Arc::new(
+            max.as_primitive::<TimestampMicrosecondType>()
+                .unary::<_, TimestampMicrosecondType>(|v| ceil_datetime(v, 1_000))
+                .with_timezone_opt(tz.clone()),
+        ),
+        ArrowDataType::Timestamp(TimeUnit::Nanosecond, tz) => Arc::new(
+            max.as_primitive::<TimestampNanosecondType>()
+                .unary::<_, TimestampNanosecondType>(|v| ceil_datetime(v, 1_000_000))
+                .with_timezone_opt(tz.clone()),
+        ),
+        _ => max,
     }
 }
 
@@ -909,6 +926,11 @@ mod tests {
         assert_eq!(ceil_datetime(1609459200000000, 1000000), 1609459201000000);
         assert_eq!(ceil_datetime(1609459200000123, 1000000), 1609459200000123);
         assert_eq!(ceil_datetime(0, 1000000), 1000000);
+        // Too large for an f64 to hold exactly
+        assert_eq!(
+            ceil_datetime(1700611178002000000, 1000000),
+            1700611178003000000
+        );
     }
 
     #[test]
