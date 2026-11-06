@@ -15,8 +15,8 @@ use tracing::*;
 use super::CommitOrBytes;
 use super::storage::utils::commit_uri_from_version;
 use crate::DeltaTableError;
-use crate::kernel::Version;
 use crate::kernel::transaction::TransactionError;
+use crate::kernel::{CommitInfo, Version};
 
 /// How a caller must prepare the payload it hands to [`Committer::commit`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +51,7 @@ pub trait Committer: Send + Sync {
         &self,
         version: Version,
         payload: CommitOrBytes,
+        commit_info: Option<&CommitInfo>,
     ) -> Result<CommitResponse, TransactionError>;
 
     /// Release the resources of a commit attempt that did not succeed, for example a temporary
@@ -129,6 +130,7 @@ impl Committer for FileSystemCommitter {
         &self,
         version: Version,
         payload: CommitOrBytes,
+        _commit_info: Option<&CommitInfo>,
     ) -> Result<CommitResponse, TransactionError> {
         match (self.strategy, payload) {
             (CommitStrategy::ConditionalPut, CommitOrBytes::LogBytes(bytes)) => {
@@ -196,15 +198,15 @@ mod tests {
 
         let payload = CommitOrBytes::LogBytes(bytes::Bytes::from_static(b"{}"));
         assert_eq!(
-            committer.commit(0, payload.clone()).await.unwrap(),
+            committer.commit(0, payload.clone(), None).await.unwrap(),
             CommitResponse::Committed
         );
         assert_eq!(
-            committer.commit(0, payload.clone()).await.unwrap(),
+            committer.commit(0, payload.clone(), None).await.unwrap(),
             CommitResponse::Conflict { version: 0 }
         );
         assert_eq!(
-            committer.commit(1, payload.clone()).await.unwrap(),
+            committer.commit(1, payload.clone(), None).await.unwrap(),
             CommitResponse::Committed
         );
         committer.abort(2, payload).await.unwrap();
@@ -220,7 +222,7 @@ mod tests {
         store.put(&tmp, "{}".into()).await.unwrap();
         assert_eq!(
             committer
-                .commit(0, CommitOrBytes::TmpCommit(tmp.clone()))
+                .commit(0, CommitOrBytes::TmpCommit(tmp.clone()), None)
                 .await
                 .unwrap(),
             CommitResponse::Committed
@@ -231,7 +233,7 @@ mod tests {
         store.put(&tmp, "{}".into()).await.unwrap();
         assert_eq!(
             committer
-                .commit(0, CommitOrBytes::TmpCommit(tmp.clone()))
+                .commit(0, CommitOrBytes::TmpCommit(tmp.clone()), None)
                 .await
                 .unwrap(),
             CommitResponse::Conflict { version: 0 }
@@ -298,7 +300,7 @@ mod tests {
         store.put(&tmp, "{}".into()).await.unwrap();
         assert_eq!(
             committer
-                .commit(0, CommitOrBytes::TmpCommit(tmp))
+                .commit(0, CommitOrBytes::TmpCommit(tmp), None)
                 .await
                 .unwrap(),
             CommitResponse::Committed
@@ -311,7 +313,7 @@ mod tests {
         let store = Arc::new(InMemory::new());
         let committer = FileSystemCommitter::new(store, CommitStrategy::ConditionalPut);
         let err = committer
-            .commit(0, CommitOrBytes::TmpCommit(Path::from("x")))
+            .commit(0, CommitOrBytes::TmpCommit(Path::from("x")), None)
             .await
             .unwrap_err();
         assert!(matches!(err, TransactionError::LogStoreError { .. }));

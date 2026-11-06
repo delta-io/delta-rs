@@ -24,8 +24,8 @@ use object_store::{
 };
 use url::Url;
 
-use crate::kernel::Version;
 use crate::kernel::transaction::TransactionError;
+use crate::kernel::{CommitInfo, Version};
 use crate::logstore::default_logstore::DefaultLogStore;
 use crate::logstore::{
     CommitOrBytes, CommitResponse, Committer, LogStore, LogStoreConfig, OperationContext,
@@ -247,6 +247,7 @@ impl Committer for FakeCommitter {
         &self,
         version: Version,
         payload: CommitOrBytes,
+        _commit_info: Option<&CommitInfo>,
     ) -> Result<CommitResponse, TransactionError> {
         let CommitOrBytes::LogBytes(bytes) = payload else {
             panic!("the fake isolating store only accepts commit bytes")

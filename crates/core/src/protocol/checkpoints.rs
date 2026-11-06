@@ -32,11 +32,16 @@ pub(crate) async fn create_checkpoint_for(
     let table_root = log_store.write_root_url();
     let engine = log_store.engine();
 
+    let catalog_log_tail = log_store.catalog_log_tail().await?;
     let task_engine = engine.clone();
     let snapshot = spawn_blocking_with_span(move || {
-        Snapshot::builder_for(table_root)
-            .at_version(version)
-            .build(task_engine.as_ref())
+        let mut builder = Snapshot::builder_for(table_root).at_version(version);
+        if let Some(tail) = catalog_log_tail {
+            builder = builder
+                .with_log_tail(tail.log_tail)
+                .with_max_catalog_version(tail.max_version);
+        }
+        builder.build(task_engine.as_ref())
     })
     .await
     .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
@@ -94,9 +99,13 @@ pub async fn create_checkpoint_from_table_url_and_cleanup(
     let table = open_table_with_version(table_url, version).await?;
     let snapshot = table.snapshot()?;
 
+    let catalog_managed = table.log_store().is_catalog_managed();
+    if catalog_managed && cleanup == Some(true) {
+        return Err(catalog_managed_maintenance_error("metadata cleanup"));
+    }
     let enable_expired_log_cleanup =
         cleanup.unwrap_or_else(|| snapshot.table_config().enable_expired_log_cleanup());
-    let cleanup_logs = snapshot.version() > 0 && enable_expired_log_cleanup;
+    let cleanup_logs = snapshot.version() > 0 && enable_expired_log_cleanup && !catalog_managed;
     let log_retention_timestamp = Utc::now().timestamp_millis()
         - snapshot.table_config().log_retention_duration().as_millis() as i64;
 
@@ -111,6 +120,14 @@ pub async fn create_checkpoint_from_table_url_and_cleanup(
         Ok(())
     })
     .await
+}
+
+pub(crate) fn catalog_managed_maintenance_error(operation: &str) -> DeltaTableError {
+    DeltaTableError::Generic(format!(
+        "{operation} is not allowed on a catalog-managed table: the Delta protocol prohibits \
+         maintenance operations unless the managing catalog explicitly permits the client to \
+         run them"
+    ))
 }
 
 /// Delete expired Delta log files up to a safe checkpoint boundary.
@@ -139,6 +156,9 @@ pub async fn cleanup_expired_logs_for(
     log_store: &dyn LogStore,
     cutoff_timestamp: i64,
 ) -> DeltaResult<usize> {
+    if log_store.is_catalog_managed() {
+        return Err(catalog_managed_maintenance_error("metadata cleanup"));
+    }
     debug!("called cleanup_expired_logs_for");
     let object_store = log_store.object_store();
     let log_path = log_store.log_path();
@@ -1206,5 +1226,79 @@ mod tests {
 
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod table_rule_tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::test_utils::catalog_managed::{metadata_action, open, write_commits};
+
+    fn commit_info() -> serde_json::Value {
+        json!({"commitInfo": {"timestamp": 0, "operation": "WRITE"}})
+    }
+
+    fn write_table(dir: &std::path::Path) {
+        let protocol = json!({"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}});
+        write_commits(
+            dir,
+            &[
+                vec![commit_info(), protocol, metadata_action(json!({}))],
+                vec![commit_info()],
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn metadata_cleanup_is_refused_on_catalog_managed_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        write_table(dir.path());
+        let (table, _) = open(dir.path(), true).await;
+        let err = cleanup_metadata(&table).await.unwrap_err();
+        assert!(err.to_string().contains("catalog-managed"), "{err}");
+        assert!(
+            dir.path()
+                .join("_delta_log/00000000000000000000.json")
+                .exists()
+        );
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn vacuum_and_optimize_are_refused_on_catalog_managed_tables() {
+        use crate::operations::vacuum::VacuumMode;
+
+        let dir = tempfile::tempdir().unwrap();
+        write_table(dir.path());
+        std::fs::write(dir.path().join("stray.parquet"), b"x").unwrap();
+        let (table, _) = open(dir.path(), true).await;
+
+        let (_, metrics) = table
+            .clone()
+            .vacuum()
+            .with_mode(VacuumMode::Full)
+            .with_retention_period(chrono::Duration::zero())
+            .with_enforce_retention_duration(false)
+            .with_dry_run(true)
+            .await
+            .unwrap();
+        assert_eq!(metrics.files_deleted.len(), 1);
+
+        let err = table
+            .clone()
+            .vacuum()
+            .with_mode(VacuumMode::Full)
+            .with_retention_period(chrono::Duration::zero())
+            .with_enforce_retention_duration(false)
+            .with_dry_run(false)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("VACUUM"), "{err}");
+        assert!(dir.path().join("stray.parquet").exists());
+
+        let err = table.optimize().await.unwrap_err();
+        assert!(err.to_string().contains("OPTIMIZE"), "{err}");
     }
 }
