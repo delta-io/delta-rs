@@ -126,6 +126,7 @@ datafusion = [
     "datafusion-physical-expr-adapter",
     "datafusion-proto",
     "dep:deltalake-kernel-executor",
+    "parquet/variant_experimental",
 ]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
