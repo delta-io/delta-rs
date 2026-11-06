@@ -107,8 +107,14 @@ impl StorageHandler for DataFusionStorageHandler {
     }
 
     fn copy_atomic(&self, from: &Url, to: &Url) -> DeltaResult<()> {
-        self.handler_for(from.as_object_store_url())?
-            .copy_atomic(from, to)
+        // The handler copies within its one store, so it would write `to` into `from`'s store.
+        let store_url = from.as_object_store_url();
+        if store_url != to.as_object_store_url() {
+            return Err(DeltaError::generic(format!(
+                "cannot copy {from} to {to}: the files are in different object stores"
+            )));
+        }
+        self.handler_for(store_url)?.copy_atomic(from, to)
     }
 
     fn put(&self, path: &Url, data: Bytes, overwrite: bool) -> DeltaResult<()> {
@@ -322,6 +328,32 @@ mod tests {
             storage.head(&copy),
             Err(DeltaError::FileNotFound(_))
         ));
+        Ok(())
+    }
+
+    /// A copy into another object store is refused, not written into the source store.
+    #[tokio::test]
+    async fn copy_atomic_refuses_another_store() -> TestResult {
+        let session = SessionContext::new();
+        let ctx = session.task_ctx();
+        let store_a = Arc::new(object_store::memory::InMemory::new());
+        let store_b = Arc::new(object_store::memory::InMemory::new());
+        let url_a = Url::parse("memory://store-a/")?;
+        let url_b = Url::parse("memory://store-b/")?;
+        ctx.runtime_env()
+            .register_object_store(&url_a, store_a.clone());
+        ctx.runtime_env()
+            .register_object_store(&url_b, store_b.clone());
+        store_a
+            .put(&Path::from("source"), Bytes::from("data").into())
+            .await?;
+
+        let storage = DataFusionStorageHandler::new(ctx, Handle::current());
+        let result = storage.copy_atomic(&url_a.join("source")?, &url_b.join("dest")?);
+
+        assert!(result.is_err());
+        assert!(store_a.head(&Path::from("dest")).await.is_err());
+        assert!(store_b.head(&Path::from("dest")).await.is_err());
         Ok(())
     }
 
