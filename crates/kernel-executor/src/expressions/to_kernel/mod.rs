@@ -255,7 +255,7 @@ pub fn to_delta_expression(expr: &Expr) -> Result<Expression> {
     }
 }
 
-pub fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> Result<Scalar> {
+pub(crate) fn datafusion_scalar_to_scalar(scalar: &ScalarValue) -> Result<Scalar> {
     match scalar {
         ScalarValue::Boolean(maybe_value) => match maybe_value {
             Some(value) => Ok(Scalar::Boolean(*value)),
