@@ -267,12 +267,16 @@ fn rename_fields(requested: &Fields, file: &Fields) -> Option<Fields> {
             None => by_name.push(file_field),
         }
     }
-    for file_field in by_name {
-        if let Some(index) = requested
-            .iter()
-            .position(|field| field.name() == file_field.name())
-        {
-            matched[index].get_or_insert(file_field);
+    if !by_name.is_empty() {
+        // The first requested field of each name, as `position` would find it.
+        let mut names: HashMap<&str, usize> = HashMap::with_capacity(requested.len());
+        for (index, field) in requested.iter().enumerate() {
+            names.entry(field.name().as_str()).or_insert(index);
+        }
+        for file_field in by_name {
+            if let Some(&index) = names.get(file_field.name().as_str()) {
+                matched[index].get_or_insert(file_field);
+            }
         }
     }
 
