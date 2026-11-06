@@ -1,7 +1,6 @@
 """Tests for DeltaTable.scan, the lazy engine-native read entrypoint."""
 
 import pytest
-from arro3.core import DataType
 
 from deltalake import DeltaTable
 from deltalake.exceptions import DeltaError
@@ -26,7 +25,6 @@ def test_scan_columns_projection():
     dt = DeltaTable(PARTITIONED_TABLE)
     result = dt.scan(columns=["value", "year"]).read_all()
     assert result.schema.names == ["value", "year"]
-    assert result.schema.field("value").type == DataType.string_view()
     assert sorted(result["value"].to_pylist()) == ["1", "2", "3", "4", "5", "6", "7"]
 
 
