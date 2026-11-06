@@ -126,6 +126,23 @@ fn unmatched_field_does_not_take_a_file_name() {
     assert_eq!(renamed[1].name(), "x (not in file)");
 }
 
+/// The name for an unmatched field is free in the file and in the request, so the field does not
+/// read a file column that only shares that name.
+#[test]
+fn unmatched_field_name_is_free_in_both_schemas() {
+    let renamed = rename_fields(
+        schema(vec![
+            long("other", Some(2)),
+            long("x", Some(3)),
+            long("x (not in file 2)", None),
+        ])
+        .fields(),
+        schema(vec![long("x", Some(2)), long("x (not in file)", Some(9))]).fields(),
+    )
+    .unwrap();
+    assert_eq!(renamed[1].name(), "x (not in file 3)");
+}
+
 /// A predicate on a nested field names the file's column and child.
 #[test]
 fn get_field_keys_follow_the_renamed_children() {

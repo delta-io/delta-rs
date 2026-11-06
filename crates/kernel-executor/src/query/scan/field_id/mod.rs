@@ -13,7 +13,7 @@
 //! no match is renamed away from the file's names, so DataFusion fills it with NULLs or reports it
 //! missing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -277,6 +277,8 @@ fn rename_fields(requested: &Fields, file: &Fields) -> Option<Fields> {
     }
 
     let mut changed = false;
+    // The names an unmatched field must not take, built on the first unmatched field.
+    let mut taken: Option<HashSet<String>> = None;
     let fields: Vec<FieldRef> = requested
         .iter()
         .zip(matched)
@@ -294,10 +296,19 @@ fn rename_fields(requested: &Fields, file: &Fields) -> Option<Fields> {
                         .with_name(file_field.name())
                         .with_data_type(data_type)
                 }
-                None if file.find(field.name()).is_some() => field
-                    .as_ref()
-                    .clone()
-                    .with_name(format!("{} (not in file)", field.name())),
+                None if file.find(field.name()).is_some() => {
+                    let taken = taken.get_or_insert_with(|| {
+                        requested
+                            .iter()
+                            .chain(file.iter())
+                            .map(|field| field.name().clone())
+                            .collect()
+                    });
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_name(unmatched_name(field.name(), taken))
+                }
                 None => return Arc::clone(field),
             };
             changed = true;
@@ -305,6 +316,18 @@ fn rename_fields(requested: &Fields, file: &Fields) -> Option<Fields> {
         })
         .collect();
     changed.then(|| fields.into())
+}
+
+/// A name for the unmatched field `name` that is not in `taken`, so it matches no file column.
+/// Adds the name to `taken`.
+fn unmatched_name(name: &str, taken: &mut HashSet<String>) -> String {
+    let mut candidate = format!("{name} (not in file)");
+    let mut n = 1;
+    while !taken.insert(candidate.clone()) {
+        n += 1;
+        candidate = format!("{name} (not in file {n})");
+    }
+    candidate
 }
 
 /// `requested` with its nested fields renamed to the file's, or `None` if no name changes.
