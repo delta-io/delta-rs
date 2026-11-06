@@ -1522,6 +1522,7 @@ class DeltaTable:
         columns: list[str] | None,
         filesystem: str | pa_fs.FileSystem | None,
         filters: str | FilterType | Expression | None,
+        keep_top_level_views: bool = True,
     ) -> "pyarrow.Table":
         if partitions is not None:
             raise ValueError(
@@ -1554,10 +1555,19 @@ class DeltaTable:
 
         reader = self._table.scan(columns=columns, predicate=predicate)
         table = pyarrow.RecordBatchReader.from_stream(reader).read_all()
-        # the engine emits arrow view types; cast back to the table's logical schema
         target = pyarrow.schema(self.schema().to_arrow())
         if columns is not None:
             target = pyarrow.schema([target.field(name) for name in columns])
+        if keep_top_level_views:
+            view_types = (pyarrow.string_view(), pyarrow.binary_view())
+            target = pyarrow.schema(
+                [
+                    logical_field.with_type(engine_field.type)
+                    if engine_field.type in view_types
+                    else logical_field
+                    for logical_field, engine_field in zip(target, table.schema)
+                ]
+            )
         return table.cast(target)
 
     def to_pandas(
@@ -1614,6 +1624,7 @@ class DeltaTable:
                     columns=columns,
                     filesystem=filesystem,
                     filters=filters,
+                    keep_top_level_views=False,
                 ).to_pandas(types_mapper=types_mapper)
             case "pyarrow":
                 _warn_pyarrow_engine("to_pandas")
