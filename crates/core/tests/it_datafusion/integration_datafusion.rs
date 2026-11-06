@@ -1982,6 +1982,8 @@ async fn test_create_write_validates_generated_columns() {
     assert_eq!(
         err,
         "Generic DeltaTable error: External error: Invalid data found: 1 rows failed validation check.
+Failed checks:
+- generated column `computed`
 Preview of invalid data:
 
 +----+-------+----------+-------+

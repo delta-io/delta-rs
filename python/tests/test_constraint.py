@@ -173,6 +173,8 @@ def test_constraint_null_row_preview(tmp_path, sample_table):
     )
 
     expected = """Generic DeltaTable error: External error: Invalid data found: 1 rows failed validation check.
+Failed checks:
+- check constraint `check_price`
 Preview of invalid data:
 
 +----------+------------+
