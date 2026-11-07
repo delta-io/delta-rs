@@ -97,6 +97,8 @@ type Aggregation = SpawnedTask<DataFusionResult<Vec<RecordBatch>>>;
 pub(crate) struct SourceStatsCollector {
     /// Early filter with placeholders for the source values
     filter: Expr,
+    /// Rows that the `WHEN NOT MATCHED BY SOURCE` clauses can touch, ORed onto the early filter
+    not_match_source_filter: Option<Expr>,
     /// Aggregates the placeholder values from the source batches
     aggregate: Arc<dyn ExecutionPlan>,
     state: Mutex<CollectState>,
@@ -119,11 +121,13 @@ struct CollectState {
 impl SourceStatsCollector {
     pub(crate) fn new(
         filter: StreamingEarlyFilter,
+        not_match_source_filter: Option<Expr>,
         target_schema: DFSchemaRef,
         target_alias: Option<String>,
     ) -> Arc<Self> {
         Arc::new(Self {
             filter: filter.filter,
+            not_match_source_filter,
             aggregate: filter.aggregate,
             state: Mutex::new(CollectState {
                 batch_sender: Some(filter.batch_sender),
@@ -186,11 +190,16 @@ impl SourceStatsCollector {
     async fn try_complete(&self, aggregation: Aggregation) -> DeltaResult<()> {
         let batches = flatten_join_error(aggregation.join_unwind()).await?;
         let filter = if self.source_rows.load(AtomicOrdering::Relaxed) == 0 {
-            // No source row can match a target row.
-            Some(lit(false))
+            // No source row can match a target row, so only the not matched by source rows remain.
+            Some(self.not_match_source_filter.clone().unwrap_or(lit(false)))
         } else {
             let items = concat_batches(&self.aggregate.schema(), &batches)?;
-            filter_from_placeholder_values(&self.filter, &items)?
+            filter_from_placeholder_values(&self.filter, &items)?.map(|filter| {
+                match &self.not_match_source_filter {
+                    Some(not_match_source_filter) => filter.or(not_match_source_filter.clone()),
+                    None => filter,
+                }
+            })
         };
         let Some(filter) = filter else {
             return Ok(());

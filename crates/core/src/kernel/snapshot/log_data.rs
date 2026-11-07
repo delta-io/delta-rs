@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use delta_kernel::actions::{Metadata, Protocol};
+use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
@@ -130,6 +131,7 @@ mod datafusion {
     use crate::{DeltaResult, DeltaTableError};
 
     use crate::kernel::ARROW_HANDLER;
+    use crate::kernel::snapshot::ceil_timestamps;
 
     impl LogDataHandler<'_> {
         fn pick_stats(&self, column: &Column, stats_field: &'static str) -> Option<ArrayRef> {
@@ -149,9 +151,13 @@ mod datafusion {
             } else {
                 Expression::column(["stats_parsed", stats_field, &column.name])
             };
+            // The materialized batches are the flattened file-level rows, not the nested log
+            // schema, so derive the evaluator's input schema from the batch itself.
+            let batch_schema = self.data.first()?.schema();
+            let input_schema = Arc::new(batch_schema.as_ref().try_into_kernel().ok()?);
             let evaluator = ARROW_HANDLER
                 .new_expression_evaluator(
-                    crate::kernel::models::fields::log_schema_ref().clone(),
+                    input_schema,
                     expression.into(),
                     field.data_type().clone(),
                 )
@@ -194,9 +200,13 @@ mod datafusion {
                 return None;
             }
             let expression = Expression::column(["partitionValues_parsed", &column.name]);
+            // The materialized batches are the flattened file-level rows, not the nested log
+            // schema, so derive the evaluator's input schema from the batch itself.
+            let batch_schema = self.data.first()?.schema();
+            let input_schema = Arc::new(batch_schema.as_ref().try_into_kernel().ok()?);
             let evaluator = ARROW_HANDLER
                 .new_expression_evaluator(
-                    crate::kernel::models::fields::log_schema_ref().clone(),
+                    input_schema,
                     expression.into(),
                     field.data_type().clone(),
                 )
@@ -288,7 +298,16 @@ mod datafusion {
         /// return the maximum values for the named column, if known.
         /// Note: the returned array must contain `num_containers()` rows.
         fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-            self.pick_stats(column, "maxValues")
+            let max = self.pick_stats(column, "maxValues")?;
+            if self
+                .config
+                .metadata()
+                .partition_columns()
+                .contains(&column.name)
+            {
+                return Some(max);
+            }
+            Some(ceil_timestamps(max))
         }
 
         /// return the number of containers (e.g. row groups) being

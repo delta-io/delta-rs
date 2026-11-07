@@ -13,7 +13,7 @@ use std::sync::Arc;
 use datafusion::common::DataFusionError;
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::LogicalPlan;
-use delta_kernel::DeltaResult;
+use delta_kernel::KernelResult as DeltaResult;
 use delta_kernel::plans::PlanResult;
 use delta_kernel::plans::ir::plan::Plan;
 
@@ -132,7 +132,14 @@ mod tests {
 
     #[tokio::test]
     async fn empty_plan_is_rejected() {
-        let err = to_logical_plan(&executor(), &Plan { nodes: vec![] }).unwrap_err();
+        let err = to_logical_plan(
+            &executor(),
+            &Plan {
+                schema: Arc::new(test_schema()),
+                nodes: vec![],
+            },
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("no nodes"), "{err}");
     }
 
@@ -140,6 +147,7 @@ mod tests {
     async fn terminal_node_is_the_plans_output() {
         // Two independent sources; the last node is the terminal one, so its rows are the output.
         let plan = Plan {
+            schema: Arc::new(test_schema()),
             nodes: vec![
                 values_node(vec![vec![1i64.into()]]),
                 values_node(vec![vec![2i64.into()], vec![3i64.into()]]),
@@ -180,6 +188,7 @@ mod tests {
             predicate: KernelPredicate::is_not_null(column_expr!("projected")).into(),
         };
         let plan = Plan {
+            schema: project_schema.clone(),
             nodes: vec![
                 values_node(vec![vec![1i64.into()]]),
                 PlanNode::new(project, vec![0]),
@@ -207,7 +216,14 @@ mod tests {
     #[tokio::test]
     async fn invalid_input_reference_is_rejected(#[case] input_index: usize) {
         let node = PlanNode::new(Values::new(test_schema(), vec![]), vec![input_index]);
-        let err = to_logical_plan(&executor(), &Plan { nodes: vec![node] }).unwrap_err();
+        let err = to_logical_plan(
+            &executor(),
+            &Plan {
+                schema: Arc::new(test_schema()),
+                nodes: vec![node],
+            },
+        )
+        .unwrap_err();
         let message = err.to_string();
         assert!(message.contains("node 0 (values)"), "{message}");
         assert!(

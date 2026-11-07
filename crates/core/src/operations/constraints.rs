@@ -164,12 +164,16 @@ impl std::future::IntoFuture for ConstraintBuilder {
                         constraints_sql_mapper[name]
                     );
                 }
-                let constraints_checker: Vec<Constraint> = constraints_sql_mapper
-                    .values()
-                    .map(|sql| Constraint::new("*", sql))
+                // Keep the constraint names so a failed validation can name
+                // the constraint instead of reporting a bare check failure.
+                // Sorted for a deterministic check order.
+                let mut constraints_checker: Vec<Constraint> = constraints_sql_mapper
+                    .iter()
+                    .map(|(name, sql)| Constraint::new(name, sql))
                     .collect();
+                constraints_checker.sort_by(|a, b| a.name.cmp(&b.name));
 
-                let plan = DataValidationExec::try_new_with_predicates(
+                let plan = DataValidationExec::try_new_with_labeled_predicates(
                     session.as_ref(),
                     proivider.scan(session.as_ref(), None, &[], None).await?,
                     constraints_to_exprs(session.as_ref(), &schema, &constraints_checker)?,
@@ -252,9 +256,10 @@ mod tests {
     use datafusion::logical_expr::{col, lit};
     use std::collections::HashMap;
 
+    use crate::kernel::transaction::{CommitConflictError, TransactionError};
     use crate::table::config::TablePropertiesExt as _;
     use crate::writer::test_utils::{create_bare_table, get_arrow_schema, get_record_batch};
-    use crate::{DeltaResult, DeltaTable};
+    use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
     fn get_constraint(table: &DeltaTable, name: &str) -> String {
         table
@@ -573,6 +578,45 @@ mod tests {
             .await?;
         let err = table.write(vec![decimal_batch(vec![4], vec![500])?]).await;
         assert!(err.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_add_constraint_conflicts_with_concurrent_violating_append() -> DeltaResult<()> {
+        let table = create_bare_table()
+            .write(vec![get_record_batch(None, false)])
+            .await?;
+        let stale = table.clone();
+        let invalid_values: Vec<Arc<dyn Array>> = vec![
+            Arc::new(StringArray::from(vec!["A"])),
+            Arc::new(Int32Array::from(vec![-10])),
+            Arc::new(StringArray::from(vec!["2021-02-02"])),
+        ];
+        let batch = RecordBatch::try_new(get_arrow_schema(&None), invalid_values)?;
+        let mut appended = table.write(vec![batch]).await?;
+
+        let result = stale
+            .add_constraint()
+            .with_constraint("id", "value > 0")
+            .await;
+
+        assert!(
+            matches!(
+                result,
+                Err(DeltaTableError::Transaction {
+                    source: TransactionError::CommitConflict(CommitConflictError::ConcurrentAppend)
+                })
+            ),
+            "{result:?}"
+        );
+        appended.update_state().await?;
+        assert!(
+            appended
+                .snapshot()?
+                .table_config()
+                .get_constraints()
+                .is_empty()
+        );
         Ok(())
     }
 }
