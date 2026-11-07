@@ -9,6 +9,7 @@ import queue
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING
 
 import pytest
@@ -226,6 +227,39 @@ def test_s3_methods_release_gil(
         f"{method_name} held the GIL too long: "
         f"ratio={release_ratio:.1%}, elapsed={elapsed:.3f}s"
     )
+
+
+def test_is_deltatable_releases_gil_while_waiting_on_storage():
+    class EmptyListing(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b"<EnumerationResults><Blobs></Blobs></EnumerationResults>"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    # The server runs in this process, so holding the GIL during the request
+    # stops it from answering and the request times out.
+    with ThreadingHTTPServer(("127.0.0.1", 0), EmptyListing) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        storage_options = {
+            "account_name": "account",
+            "account_key": "a2V5",
+            "azure_storage_endpoint": f"http://127.0.0.1:{server.server_address[1]}",
+            "allow_http": "true",
+            "timeout": "5s",
+            "max_retries": "0",
+        }
+        try:
+            assert not DeltaTable.is_deltatable(
+                "abfss://container@account.dfs.core.windows.net/table",
+                storage_options=storage_options,
+            )
+        finally:
+            server.shutdown()
 
 
 @pytest.mark.s3
