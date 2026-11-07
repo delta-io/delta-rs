@@ -2,8 +2,10 @@ coverage:
   status:
     project:
       default:
-        # allow some leniency on the deviation of pull requests
-        threshold: 1
+        # Tuned from the last 100 merged PRs (91 usable project coverage steps):
+        # mean +0.015, sd 0.106, worst drop -0.19. 0.2 is about mean - 2 sd and
+        # tolerates every observed fluctuation while catching larger regressions.
+        threshold: 0.2
         if_ci_failed: error
         informational: false
     patch:
