@@ -109,6 +109,7 @@ use crate::{DeltaResult, DeltaTable, DeltaTableError};
 use delta_kernel::table_features::ColumnMappingMode;
 
 mod barrier;
+mod deletion_vectors;
 mod filter;
 mod source_stats;
 mod validation;
@@ -175,6 +176,8 @@ pub struct MergeBuilder {
     streaming_filter_buffer: usize,
     /// Enable merge schema evolution
     merge_schema: bool,
+    /// Hide changed target rows with persistent deletion vectors instead of rewriting files.
+    deletion_vectors: bool,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
@@ -210,6 +213,7 @@ impl MergeBuilder {
             commit_properties: CommitProperties::default(),
             writer_properties: DeltaWriterProperties::default(),
             merge_schema: false,
+            deletion_vectors: false,
             match_operations: Vec::new(),
             not_match_operations: Vec::new(),
             not_match_source_operations: Vec::new(),
@@ -475,6 +479,16 @@ impl MergeBuilder {
     /// Test123     ->      null
     pub fn with_safe_cast(mut self, safe_cast: bool) -> Self {
         self.safe_cast = safe_cast;
+        self
+    }
+
+    /// Use persistent deletion vectors instead of rewriting modified target files.
+    ///
+    /// The table must enable `delta.enableDeletionVectors`. New rows and change data feed
+    /// records are written normally and committed atomically with the deletion vector updates.
+    /// Disabled by default. Unchanged target rows are not copied into new files.
+    pub fn with_deletion_vectors(mut self, enabled: bool) -> Self {
+        self.deletion_vectors = enabled;
         self
     }
 
@@ -841,11 +855,19 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
                 return plan_err!("MergeBarrierExec expects exactly one input");
             }
             let schema = barrier.input.schema();
-            return Ok(Some(Arc::new(MergeBarrierExec::new(
-                physical_inputs.first().unwrap().clone(),
-                barrier.file_column.clone(),
-                planner.create_physical_expr(&barrier.expr, schema, session_state, planning_ctx)?,
-            ))));
+            return Ok(Some(Arc::new(
+                MergeBarrierExec::new(
+                    physical_inputs.first().unwrap().clone(),
+                    barrier.file_column.clone(),
+                    planner.create_physical_expr(
+                        &barrier.expr,
+                        schema,
+                        session_state,
+                        planning_ctx,
+                    )?,
+                )
+                .with_deletion_vectors(barrier.deletion_vectors),
+            )));
         }
 
         Ok(None)
@@ -867,12 +889,14 @@ fn build_merge_barrier_validation_plan(
     )],
     file_column: Arc<String>,
     needs_duplicate_match_validation: bool,
+    deletion_vectors: bool,
 ) -> DataFusionResult<LogicalPlan> {
     let merge_barrier = LogicalPlan::Extension(Extension {
         node: Arc::new(MergeBarrier {
             input,
             expr: col(file_column.as_str()),
             file_column: Arc::clone(&file_column),
+            deletion_vectors,
         }),
     });
 
@@ -899,6 +923,7 @@ async fn execute(
     source_alias: Option<String>,
     target_alias: Option<String>,
     merge_schema: bool,
+    deletion_vectors: bool,
     match_operations: Vec<MergeOperationConfig>,
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
@@ -1098,7 +1123,9 @@ async fn execute(
             .with_session(state.clone().into())
             .with_file_column(file_column.as_str());
 
-        if needs_duplicate_match_validation {
+        if deletion_vectors {
+            builder = builder.with_physical_row_index_column(TARGET_ROW_ORDINAL_IN_FILE_COLUMN);
+        } else if needs_duplicate_match_validation {
             builder = builder.with_row_index_column(TARGET_ROW_ORDINAL_IN_FILE_COLUMN);
         }
 
@@ -1587,7 +1614,7 @@ async fn execute(
             col(TARGET_DELETE_COLUMN),
             col(TARGET_COPY_COLUMN),
         ];
-        if needs_duplicate_match_validation {
+        if needs_duplicate_match_validation || deletion_vectors {
             fields.push(col(TARGET_ROW_ORDINAL_IN_FILE_COLUMN));
         }
 
@@ -1613,7 +1640,16 @@ async fn execute(
         &ops,
         Arc::clone(&file_column),
         needs_duplicate_match_validation,
+        deletion_vectors,
     )?;
+
+    let merge_output = if deletion_vectors {
+        DataFrame::new(state.clone(), merge_output)
+            .filter(col(TARGET_COPY_COLUMN).is_not_null())?
+            .into_unoptimized_plan()
+    } else {
+        merge_output
+    };
 
     // We should observe the metrics before we union the merge plan with the cdf_merge plan
     // so that we get the metrics only for the merge plan.
@@ -1717,7 +1753,14 @@ async fn execute(
 
     metrics.rewrite_time_ms = write_plan_metrics.write_time_ms;
     metrics.scan_time_ms = write_plan_metrics.scan_time_ms;
-    metrics.num_target_files_added = actions.len();
+    metrics.num_target_files_added = if deletion_vectors {
+        actions
+            .iter()
+            .filter(|action| matches!(action, Action::Add(_)))
+            .count()
+    } else {
+        actions.len()
+    };
 
     let survivors = barrier
         .downcast_ref::<MergeBarrierExec>()
@@ -1726,7 +1769,24 @@ async fn execute(
 
     let table_root = snapshot.table_configuration().table_root().clone();
 
-    {
+    if deletion_vectors {
+        let deleted_rows = barrier
+            .downcast_ref::<MergeBarrierExec>()
+            .and_then(MergeBarrierExec::deleted_rows)
+            .ok_or_else(|| DeltaTableError::Generic("DV MERGE row collector is missing".into()))?;
+        let updates =
+            deletion_vectors::prepare_deletion_vectors(&snapshot, &log_store, &deleted_rows)
+                .await?;
+        metrics.num_target_files_removed = updates
+            .iter()
+            .filter(|action| matches!(action, Action::Remove(_)))
+            .count();
+        metrics.num_target_files_added += updates
+            .iter()
+            .filter(|action| matches!(action, Action::Add(_)))
+            .count();
+        actions.extend(updates);
+    } else {
         let mut active_adds = snapshot.snapshot().active_adds(
             log_store.as_ref(),
             ActiveAddOptions {
@@ -1987,6 +2047,14 @@ impl std::future::IntoFuture for MergeBuilder {
             let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
             PROTOCOL.can_write_to(&snapshot)?;
 
+            if this.deletion_vectors
+                && snapshot.table_properties().enable_deletion_vectors != Some(true)
+            {
+                return Err(DeltaTableError::Generic(
+                    "DV MERGE requires delta.enableDeletionVectors=true".into(),
+                ));
+            }
+
             if this.merge_schema
                 && snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None
             {
@@ -2026,6 +2094,7 @@ impl std::future::IntoFuture for MergeBuilder {
                     this.source_alias,
                     this.target_alias,
                     this.merge_schema,
+                    this.deletion_vectors,
                     this.match_operations,
                     this.not_match_operations,
                     this.not_match_source_operations,
@@ -3072,6 +3141,7 @@ mod tests {
             &ops,
             Arc::new(PATH_COLUMN.to_string()),
             true,
+            false,
         )
         .expect("merge barrier and duplicate validation plan builds");
 

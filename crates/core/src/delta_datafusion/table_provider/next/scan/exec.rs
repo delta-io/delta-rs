@@ -773,6 +773,7 @@ impl DeltaScanStream {
         file_id: String,
         mut file_id_idx: usize,
     ) -> Result<RecordBatch> {
+        let mut physical_positions = None;
         let mut batch = if let Some(entries) = &self.entries {
             let entry = entries.get(&file_id).ok_or_else(|| {
                 DataFusionError::Execution(format!("unknown compact file id '{file_id}'"))
@@ -813,6 +814,29 @@ impl DeltaScanStream {
             } else {
                 batch
             };
+            if self.scan_plan.contract.physical_row_index {
+                let positions = filtered
+                    .column(position_idx)
+                    .as_any()
+                    .downcast_ref::<arrow_array::Int64Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution("physical row position is not Int64".into())
+                    })?;
+                let positions = positions
+                    .iter()
+                    .map(|position| {
+                        let position = position.ok_or_else(|| {
+                            DataFusionError::Execution("Physical row position is null".into())
+                        })?;
+                        u64::try_from(position).map_err(|_| {
+                            DataFusionError::Execution(format!(
+                                "Physical row position is negative: {position}"
+                            ))
+                        })
+                    })
+                    .collect::<Result<UInt64Array>>()?;
+                physical_positions = Some(Arc::new(positions) as ArrayRef);
+            }
             if position_idx < file_id_idx {
                 file_id_idx -= 1;
             }
@@ -859,36 +883,49 @@ impl DeltaScanStream {
             )
         }?;
 
-        self.append_row_index(result, &file_id)
+        self.append_row_index(result, &file_id, physical_positions)
     }
 
-    fn append_row_index(&mut self, batch: RecordBatch, file_id: &str) -> Result<RecordBatch> {
+    fn append_row_index(
+        &mut self,
+        batch: RecordBatch,
+        file_id: &str,
+        physical_positions: Option<ArrayRef>,
+    ) -> Result<RecordBatch> {
         let Some(row_index_field) = self.row_index_field.clone() else {
             return Ok(batch);
         };
 
-        let row_count = u64::try_from(batch.num_rows()).map_err(|_| {
-            internal_datafusion_err!("batch row count does not fit u64 while assigning row indexes")
-        })?;
-        let next_row_index = self
-            .row_index_by_file
-            .entry(file_id.to_string())
-            .or_default();
-        let end = next_row_index.checked_add(row_count).ok_or_else(|| {
-            internal_datafusion_err!(
-                "row index overflow while assigning row indexes for file '{file_id}'"
-            )
-        })?;
-
-        // MERGE keys surviving rows by one-based ordinal. DV positions are zero-based.
-        let values = if row_count == 0 {
-            Vec::new()
+        let row_index: ArrayRef = if self.scan_plan.contract.physical_row_index {
+            physical_positions.ok_or_else(|| {
+                DataFusionError::Execution("Physical row positions are missing from DV scan".into())
+            })?
         } else {
-            ((*next_row_index + 1)..=end).collect()
-        };
-        *next_row_index = end;
+            let row_count = u64::try_from(batch.num_rows()).map_err(|_| {
+                internal_datafusion_err!(
+                    "batch row count does not fit u64 while assigning row indexes"
+                )
+            })?;
+            let next_row_index = self
+                .row_index_by_file
+                .entry(file_id.to_string())
+                .or_default();
+            let end = next_row_index.checked_add(row_count).ok_or_else(|| {
+                internal_datafusion_err!(
+                    "row index overflow while assigning row indexes for file '{file_id}'"
+                )
+            })?;
 
-        let row_index: ArrayRef = Arc::new(UInt64Array::from(values));
+            // MERGE keys surviving rows by one-based ordinal. DV positions are zero-based.
+            let values = if row_count == 0 {
+                Vec::new()
+            } else {
+                ((*next_row_index + 1)..=end).collect()
+            };
+            *next_row_index = end;
+
+            Arc::new(UInt64Array::from(values))
+        };
         let mut columns = batch.columns().to_vec();
         columns.push(row_index);
         let mut fields = batch.schema().fields().to_vec();
@@ -2942,6 +2979,29 @@ mod tests {
             .as_primitive::<UInt64Type>()
             .values()
             .to_vec()
+    }
+
+    #[tokio::test]
+    async fn physical_row_indexes_survive_dv_filtering_and_batch_gaps() -> TestResult {
+        let (kernel_type, plan) = dv_kernel_type_and_int32_scan_plan().await?;
+        let plan = retain_row_index(plan, "physical_row");
+        let mut plan = plan.as_ref().clone();
+        plan.contract.physical_row_index = true;
+        let first = with_positions(
+            value_and_file_id_batch(&[10, 20, 40, 70], &[Some("f1"); 4], false)?,
+            vec![0, 2, 4, 7],
+        )?;
+        let second = with_positions(
+            value_and_file_id_batch(&[80, 90], &[Some("f1"); 2], false)?,
+            vec![8, 9],
+        )?;
+        let masks = HashMap::from([("f1".into(), vec![true, false, true, true, false])]);
+        let mut stream = test_scan_stream(Arc::new(plan), kernel_type, masks, Vec::new(), None);
+        let batches = stream.batch_project(first)?;
+        assert_eq!(row_ordinals(&batches[0], "physical_row"), vec![0, 2, 7]);
+        let batches = stream.batch_project(second)?;
+        assert_eq!(row_ordinals(&batches[0], "physical_row"), vec![8, 9]);
+        Ok(())
     }
 
     #[tokio::test]

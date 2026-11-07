@@ -33,6 +33,25 @@ In the syntax above:
 
 Note that executing a `MERGE` operation automatically writes the changes to your Delta table in a single transaction.
 
+## Persistent deletion vectors (Rust)
+
+Rust callers can opt into `.with_deletion_vectors(true)` on `MergeBuilder` when the
+target table enables `delta.enableDeletionVectors`. The default remains file rewriting.
+Tables with multiple active logical files referring to the same physical path are
+not supported by this mode.
+
+In this mode, MERGE preserves the original Parquet files and hides changed target rows
+with persistent deletion vectors, including any previously deleted rows. Only inserted
+and updated rows are written to new data files. When Change Data Feed is enabled, the
+existing CDC writer emits the corresponding change records. New data, CDC files and
+the logical file remove/add pairs are published in one transaction.
+
+A commit conflict requires rerunning MERGE against a fresh table snapshot. Physical row
+locations and prepared deletion vectors must not be reused after a conflict. File
+compaction and vacuum remain separate maintenance operations.
+
+This option is currently exposed by the Rust builder, not the Python or .NET bindings.
+
 ## Update
 
 Use [`when_matched_update`][deltalake.table.TableMerger.when_matched_update] to perform an UPDATE operation.

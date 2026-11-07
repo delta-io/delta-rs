@@ -554,7 +554,7 @@ async fn get_data_scan_plan(
         metrics,
         ..
     } = replayed;
-    let has_deletion_vectors = !dvs.is_empty();
+    let has_deletion_vectors = !dvs.is_empty() || scan_plan.contract.physical_row_index;
     let mut partition_stats = HashMap::new();
     let log_counts: Vec<_> = files.iter().map(|file| file.num_records).collect();
 

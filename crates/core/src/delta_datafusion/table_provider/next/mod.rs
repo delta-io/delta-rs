@@ -491,6 +491,8 @@ pub struct DeltaScan {
     /// Provider/public schema, including configured file id capability when enabled.
     full_schema: SchemaRef,
     row_index_column: Option<String>,
+    #[serde(default)]
+    pub(super) physical_row_index: bool,
     #[serde(skip)]
     file_skipping_predicate: Option<Vec<Expr>>,
     #[serde(skip)]
@@ -536,6 +538,7 @@ impl DeltaScan {
             scan_schema,
             full_schema,
             row_index_column: None,
+            physical_row_index: false,
             file_skipping_predicate: None,
             log_store: None,
             file_selection: None,
@@ -734,7 +737,7 @@ impl TableProvider for DeltaScan {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.ensure_read_ready(session)?;
         let engine = DataFusionEngine::new_from_session(session);
-        let contract = ProjectedScanContract::try_new(
+        let mut contract = ProjectedScanContract::try_new(
             self.scan_schema.clone(),
             self.full_schema.clone(),
             &self.config,
@@ -742,6 +745,7 @@ impl TableProvider for DeltaScan {
             projection,
             filters,
         )?;
+        contract.physical_row_index = self.physical_row_index && contract.retain_row_index;
         let scan_plan = KernelScanPlan::try_new_with_contract(
             self.snapshot.snapshot(),
             contract,

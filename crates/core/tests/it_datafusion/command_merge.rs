@@ -11,10 +11,16 @@ use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::{Expr, col, lit};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use deltalake_core::kernel::transaction::TransactionError;
-use deltalake_core::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
+use deltalake_core::kernel::{
+    Action, DataType as DeltaDataType, PrimitiveType, StructField, StructType,
+};
 use deltalake_core::operations::merge::MergeMetrics;
 use deltalake_core::protocol::SaveMode;
-use deltalake_core::{DeltaResult, DeltaTable, DeltaTableError, open_table};
+use deltalake_core::{DeltaResult, DeltaTable, DeltaTableError, TableProperty, open_table};
+use futures::TryStreamExt;
+use object_store::ObjectStoreExt;
+use parquet::file::properties::WriterProperties;
+use rstest::rstest;
 use std::{collections::HashSet, sync::Arc};
 use url::Url;
 
@@ -162,6 +168,653 @@ fn int64_value(batch: &RecordBatch, column: usize, row: usize) -> i64 {
         .downcast_ref::<Int64Array>()
         .unwrap()
         .value(row)
+}
+
+async fn latest_dv_merge_actions(table: &DeltaTable) -> Vec<Action> {
+    let version = table.version().unwrap();
+    let bytes = table
+        .log_store()
+        .read_commit_entry(version)
+        .await
+        .unwrap()
+        .unwrap();
+    std::str::from_utf8(&bytes)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+#[rstest]
+#[case::with_cdf(true)]
+#[case::without_cdf(false)]
+#[tokio::test]
+async fn test_dv_merge_preserves_files_and_previous_deletions(#[case] cdf: bool) {
+    let table = DeltaTable::new_in_memory()
+        .create()
+        .with_columns(id_value_delta_schema().fields().cloned())
+        .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+        .with_configuration_property(
+            TableProperty::EnableChangeDataFeed,
+            Some(if cdf { "true" } else { "false" }),
+        )
+        .await
+        .unwrap()
+        .write(vec![id_value_batch(vec![1, 2, 3, 4], vec![10, 20, 30, 40])])
+        .with_writer_properties(
+            WriterProperties::builder()
+                .set_max_row_group_row_count(Some(2))
+                .build(),
+        )
+        .await
+        .unwrap();
+    let originals = table
+        .get_active_add_actions_by_partitions(&[])
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    assert_eq!(originals.len(), 1);
+    let original = &originals[0];
+    let store = table.log_store().object_store();
+    let original_path = original.object_store_path();
+    let original_bytes = store
+        .get(&original_path)
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let original_version = table.version().unwrap();
+    let ctx = SessionContext::new();
+
+    let (table, first_metrics) = table
+        .merge(
+            ctx.read_batch(id_value_batch(vec![2, 5], vec![200, 50]))
+                .unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_matched_update(|update| update.update("value", col("source.value")))
+        .unwrap()
+        .when_not_matched_insert(|insert| {
+            insert
+                .set("id", col("source.id"))
+                .set("value", col("source.value"))
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(table.version(), Some(original_version + 1));
+    assert_eq!(first_metrics.num_target_rows_updated, 1);
+    assert_eq!(first_metrics.num_target_rows_inserted, 1);
+    assert_eq!(first_metrics.num_target_rows_copied, 0);
+    assert_eq!(first_metrics.num_output_rows, 2);
+    assert_eq!(first_metrics.num_target_files_added, 2);
+    assert_eq!(first_metrics.num_target_files_removed, 1);
+    let first_actions = latest_dv_merge_actions(&table).await;
+    let first_descriptor = first_actions
+        .iter()
+        .find_map(|action| match action {
+            Action::Add(add) if add.path == original.path() => add.deletion_vector.clone(),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(first_descriptor.cardinality, 1);
+    assert!(first_actions.iter().any(|action| {
+        matches!(action, Action::Remove(remove) if remove.path == original.path() && remove.deletion_vector.is_none())
+    }));
+    assert_eq!(
+        first_actions
+            .iter()
+            .any(|action| matches!(action, Action::Cdc(_))),
+        cdf
+    );
+
+    let stale = table.clone();
+    let (table, second_metrics) = table
+        .merge(
+            ctx.read_batch(id_value_batch(vec![3], vec![300])).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_matched_update(|update| update.update("value", col("source.value")))
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(second_metrics.num_target_rows_copied, 0);
+    assert_eq!(second_metrics.num_output_rows, 1);
+    assert_eq!(second_metrics.num_target_files_added, 2);
+    assert_eq!(second_metrics.num_target_files_removed, 1);
+    let second_actions = latest_dv_merge_actions(&table).await;
+    let second_descriptor = second_actions
+        .iter()
+        .find_map(|action| match action {
+            Action::Add(add) if add.path == original.path() => {
+                let stats: serde_json::Value =
+                    serde_json::from_str(add.stats.as_ref().unwrap()).unwrap();
+                assert_eq!(stats["numRecords"], 4);
+                assert_eq!(stats["tightBounds"], false);
+                assert_eq!(add.size, original.size());
+                add.deletion_vector.clone()
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(second_descriptor.cardinality, 2);
+    assert!(second_actions.iter().any(|action| {
+        matches!(action, Action::Remove(remove) if remove.path == original.path() && remove.deletion_vector.as_ref() == Some(&first_descriptor))
+    }));
+    let kernel_dv: delta_kernel::actions::deletion_vector::DeletionVectorDescriptor =
+        second_descriptor.try_into().unwrap();
+    let deleted = kernel_dv
+        .read(
+            table.log_store().engine().storage_handler(),
+            table.log_store().root_url(),
+        )
+        .unwrap();
+    assert_eq!(deleted.iter().collect::<Vec<_>>(), vec![1, 2]);
+    assert_eq!(
+        store
+            .get(&original_path)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap(),
+        original_bytes
+    );
+
+    let reader = SessionContext::new();
+    reader
+        .register_table("result", table.table_provider().await.unwrap())
+        .unwrap();
+    let batches = reader
+        .sql("SELECT id, value FROM result ORDER BY id")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    datafusion::assert_batches_eq!(
+        &[
+            "+----+-------+",
+            "| id | value |",
+            "+----+-------+",
+            "| 1  | 10    |",
+            "| 2  | 200   |",
+            "| 3  | 300   |",
+            "| 4  | 40    |",
+            "| 5  | 50    |",
+            "+----+-------+",
+        ],
+        &batches
+    );
+    if cdf {
+        let changes = table
+            .clone()
+            .scan_cdf()
+            .with_starting_version(original_version + 1)
+            .build(&ctx.state(), None)
+            .await
+            .unwrap();
+        let batches = datafusion::physical_plan::collect(changes, ctx.task_ctx())
+            .await
+            .unwrap();
+        let provider =
+            datafusion::datasource::MemTable::try_new(batches[0].schema(), vec![batches]).unwrap();
+        reader
+            .register_table("changes", Arc::new(provider))
+            .unwrap();
+        let batches = reader
+            .sql("SELECT id, value, _change_type FROM changes ORDER BY id, value")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        datafusion::assert_batches_eq!(
+            &[
+                "+----+-------+------------------+",
+                "| id | value | _change_type     |",
+                "+----+-------+------------------+",
+                "| 2  | 20    | update_preimage  |",
+                "| 2  | 200   | update_postimage |",
+                "| 3  | 30    | update_preimage  |",
+                "| 3  | 300   | update_postimage |",
+                "| 5  | 50    | insert           |",
+                "+----+-------+------------------+",
+            ],
+            &batches
+        );
+    }
+    let conflict = stale
+        .clone()
+        .merge(
+            ctx.read_batch(id_value_batch(vec![3], vec![999])).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_matched_update(|update| update.update("value", col("source.value")))
+        .unwrap()
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        conflict,
+        DeltaTableError::Transaction {
+            source: TransactionError::CommitConflict(_)
+        }
+    ));
+    assert_eq!(table.version(), Some(original_version + 2));
+    let mut retry = stale;
+    retry.load().await.unwrap();
+    let (retry, _) = retry
+        .merge(
+            ctx.read_batch(id_value_batch(vec![3], vec![333])).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_matched_update(|update| update.update("value", col("source.value")))
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(retry.version(), Some(original_version + 3));
+    assert_eq!(
+        store
+            .get(&original_path)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap(),
+        original_bytes
+    );
+}
+
+#[tokio::test]
+async fn test_dv_merge_delete_only_insert_only_and_noop() {
+    let ctx = SessionContext::new();
+    let table = DeltaTable::new_in_memory()
+        .create()
+        .with_columns(id_value_delta_schema().fields().cloned())
+        .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+        .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+        .await
+        .unwrap()
+        .write(vec![id_value_batch(vec![1, 2], vec![10, 20])])
+        .await
+        .unwrap();
+    let original_version = table.version().unwrap();
+    let (table, metrics) = table
+        .merge(
+            ctx.read_batch(id_value_batch(vec![1], vec![10])).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_matched_delete(|delete| delete)
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(metrics.num_target_rows_deleted, 1);
+    assert_eq!(metrics.num_output_rows, 0);
+    assert_eq!(metrics.num_target_rows_copied, 0);
+    assert_eq!(metrics.num_target_files_added, 1);
+    assert_eq!(metrics.num_target_files_removed, 1);
+    let actions = latest_dv_merge_actions(&table).await;
+    assert_eq!(
+        actions
+            .iter()
+            .filter(|action| matches!(action, Action::Add(_)))
+            .count(),
+        1
+    );
+    assert!(
+        actions
+            .iter()
+            .any(|action| matches!(action, Action::Cdc(_)))
+    );
+    assert!(actions.iter().any(|action| matches!(action, Action::Add(add) if add.deletion_vector.as_ref().is_some_and(|dv| dv.cardinality == 1))));
+
+    let (table, metrics) = table
+        .merge(
+            ctx.read_batch(id_value_batch(vec![3], vec![30])).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_not_matched_insert(|insert| {
+            insert
+                .set("id", col("source.id"))
+                .set("value", col("source.value"))
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(metrics.num_target_rows_inserted, 1);
+    assert_eq!(metrics.num_target_rows_copied, 0);
+    assert!(
+        latest_dv_merge_actions(&table)
+            .await
+            .iter()
+            .all(|action| !matches!(action, Action::Remove(_)))
+    );
+    let (table, metrics) = table
+        .merge(
+            ctx.read_batch(id_value_batch(vec![2], vec![20])).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_matched_update(|update| {
+            update
+                .predicate(col("source.value").lt(lit(0)))
+                .update("value", col("source.value"))
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(metrics.num_target_rows_updated, 0);
+    assert_eq!(metrics.num_output_rows, 0);
+    assert_eq!(table.version(), Some(original_version + 2));
+
+    let reader = SessionContext::new();
+    reader
+        .register_table("result", table.table_provider().await.unwrap())
+        .unwrap();
+    let batches = reader
+        .sql("SELECT id, value FROM result ORDER BY id")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    datafusion::assert_batches_eq!(
+        &[
+            "+----+-------+",
+            "| id | value |",
+            "+----+-------+",
+            "| 2  | 20    |",
+            "| 3  | 30    |",
+            "+----+-------+",
+        ],
+        &batches
+    );
+    let stale = table.clone();
+    let (compacted, metrics) = table.optimize().await.unwrap();
+    assert!(metrics.num_files_removed > 0);
+    let conflict = stale
+        .merge(
+            ctx.read_batch(id_value_batch(vec![2], vec![222])).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_matched_update(|update| update.update("value", col("source.value")))
+        .unwrap()
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        conflict,
+        DeltaTableError::Transaction {
+            source: TransactionError::CommitConflict(_)
+        }
+    ));
+    assert_eq!(compacted.version(), Some(original_version + 3));
+}
+
+#[tokio::test]
+async fn test_dv_merge_unmatched_deletes_and_duplicate_source_validation() {
+    let ctx = SessionContext::new();
+    let table = DeltaTable::new_in_memory()
+        .create()
+        .with_columns(id_value_delta_schema().fields().cloned())
+        .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+        .await
+        .unwrap()
+        .write(vec![id_value_batch(vec![1, 2, 3], vec![10, 20, 30])])
+        .await
+        .unwrap();
+    let (table, metrics) = table
+        .merge(
+            ctx.read_batch(id_value_batch(vec![1], vec![10])).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_not_matched_by_source_delete(|delete| delete)
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(metrics.num_target_rows_deleted, 2);
+    assert_eq!(metrics.num_output_rows, 0);
+    assert!(latest_dv_merge_actions(&table).await.iter().any(|action| {
+        matches!(action, Action::Add(add) if add.deletion_vector.as_ref().is_some_and(|dv| dv.cardinality == 2))
+    }));
+    let version = table.version().unwrap();
+    let error = table
+        .clone()
+        .merge(
+            ctx.read_batch(id_value_batch(vec![1, 1], vec![100, 200]))
+                .unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_matched_update(|update| update.update("value", col("source.value")))
+        .unwrap()
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("multiple"));
+    assert!(
+        table
+            .log_store()
+            .read_commit_entry(version + 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let reader = SessionContext::new();
+    reader
+        .register_table("result", table.table_provider().await.unwrap())
+        .unwrap();
+    let batches = reader
+        .sql("SELECT id, value FROM result")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    datafusion::assert_batches_eq!(
+        &[
+            "+----+-------+",
+            "| id | value |",
+            "+----+-------+",
+            "| 1  | 10    |",
+            "+----+-------+",
+        ],
+        &batches
+    );
+}
+
+#[tokio::test]
+async fn test_dv_merge_multiple_partitioned_files_with_small_batches() {
+    let schema = get_arrow_schema();
+    let dates = ["2026/11/07 a%?", "2026/11/08 b%?"];
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec!["A", "B", "C", "D"])),
+            Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(StringArray::from(vec![
+                dates[0], dates[0], dates[1], dates[1],
+            ])),
+        ],
+    )
+    .unwrap();
+    let table = DeltaTable::new_in_memory()
+        .create()
+        .with_columns(get_delta_schema().fields().cloned())
+        .with_partition_columns(["event_date"])
+        .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+        .await
+        .unwrap()
+        .write(vec![batch])
+        .await
+        .unwrap();
+    let originals = table
+        .get_active_add_actions_by_partitions(&[])
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    assert_eq!(originals.len(), 2);
+    let store = table.log_store().object_store();
+    let mut original_bytes = Vec::new();
+    for file in &originals {
+        original_bytes.push(
+            store
+                .get(&file.object_store_path())
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+        );
+    }
+    let source = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(vec!["B", "D"])),
+            Arc::new(arrow::array::Int32Array::from(vec![100, 200])),
+            Arc::new(StringArray::from(vec![dates[0], dates[1]])),
+        ],
+    )
+    .unwrap();
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new()
+            .with_batch_size(1)
+            .with_target_partitions(2),
+    );
+    let (table, metrics) = table
+        .merge(
+            ctx.read_batch(source).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_session_state(Arc::new(ctx.state()))
+        .with_deletion_vectors(true)
+        .when_matched_update(|update| update.update("value", col("source.value")))
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(metrics.num_target_rows_updated, 2);
+    assert_eq!(metrics.num_target_rows_copied, 0);
+    let actions = latest_dv_merge_actions(&table).await;
+    assert_eq!(
+        actions
+            .iter()
+            .filter(|action| matches!(action, Action::Remove(_)))
+            .count(),
+        2
+    );
+    assert_eq!(actions.iter().filter(|action| {
+        matches!(action, Action::Add(add) if add.deletion_vector.as_ref().is_some_and(|dv| dv.cardinality == 1))
+    }).count(), 2);
+    for (file, expected) in originals.iter().zip(original_bytes) {
+        assert_eq!(
+            store
+                .get(&file.object_store_path())
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+            expected
+        );
+    }
+    let reader = SessionContext::new();
+    reader
+        .register_table("result", table.table_provider().await.unwrap())
+        .unwrap();
+    let batches = reader
+        .sql("SELECT id, value FROM result ORDER BY id")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    datafusion::assert_batches_eq!(
+        &[
+            "+----+-------+",
+            "| id | value |",
+            "+----+-------+",
+            "| A  | 1     |",
+            "| B  | 100   |",
+            "| C  | 10    |",
+            "| D  | 200   |",
+            "+----+-------+",
+        ],
+        &batches
+    );
+}
+
+#[tokio::test]
+async fn test_dv_merge_requires_enabled_table_and_keeps_default_rewrite() {
+    let ctx = SessionContext::new();
+    let table = DeltaTable::new_in_memory()
+        .create()
+        .with_columns(id_value_delta_schema().fields().cloned())
+        .await
+        .unwrap()
+        .write(vec![id_value_batch(vec![1, 2], vec![10, 20])])
+        .await
+        .unwrap();
+    let error = table
+        .clone()
+        .merge(
+            ctx.read_batch(id_value_batch(vec![1], vec![100])).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_matched_update(|update| update.update("value", col("source.value")))
+        .unwrap()
+        .await
+        .unwrap_err();
+    assert!(matches!(error, DeltaTableError::Generic(_)));
+    let (table, metrics) = table
+        .merge(
+            ctx.read_batch(id_value_batch(vec![1], vec![100])).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .when_matched_update(|update| update.update("value", col("source.value")))
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(metrics.num_target_rows_copied, 1);
+    assert!(
+        latest_dv_merge_actions(&table)
+            .await
+            .iter()
+            .all(|action| { !matches!(action, Action::Add(add) if add.deletion_vector.is_some()) })
+    );
 }
 
 fn scd_arrow_schema() -> Arc<ArrowSchema> {
