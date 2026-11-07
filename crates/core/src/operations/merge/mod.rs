@@ -38,7 +38,8 @@ use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{
-    Column, DFSchema, DFSchemaRef, ExprSchema, ScalarValue, TableReference, plan_err,
+    Column, DFSchema, DFSchemaRef, DataFusionError, ExprSchema, ScalarValue, SchemaError,
+    TableReference, plan_err,
 };
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
@@ -1348,6 +1349,27 @@ async fn execute(
     } else {
         snapshot.schema()
     };
+
+    // Every assignment must name a column of the table, or be added to it by schema evolution
+    let target_qualifier = target_alias.as_deref().map(TableReference::bare);
+    for (operations, _, _) in &ops {
+        let unknown = |c: &&Column| match snapshot.schema().field(&c.name) {
+            // Columns of the table are only looked up through the target alias
+            Some(_) => c.relation != target_qualifier,
+            None => schema.field(&c.name).is_none(),
+        };
+        if let Some(column) = operations.keys().find(unknown) {
+            let valid_fields = schema
+                .fields()
+                .map(|field| Column::new(target_qualifier.clone(), field.name()))
+                .collect();
+            let error = SchemaError::FieldNotFound {
+                field: Box::new(column.clone()),
+                valid_fields,
+            };
+            return Err(DataFusionError::SchemaError(Box::new(error), Box::new(None)).into());
+        }
+    }
 
     for delta_field in schema.fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
@@ -5063,6 +5085,54 @@ mod tests {
             .unwrap()
             .await;
         assert!(res.is_err())
+    }
+
+    #[tokio::test]
+    async fn test_merge_unknown_column() {
+        let (table, source) = setup().await;
+        let err = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| update.update("Value", "source.value"))
+            .unwrap()
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("No field named"), "{err}");
+
+        let (table, source) = setup().await;
+        let err = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_not_matched_insert(|insert| {
+                insert.set("id", "source.id").set("Value", "source.value")
+            })
+            .unwrap()
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("No field named"), "{err}");
+
+        // Without a target alias, a qualified name doesn't name a column of the table
+        let (table, source) = setup().await;
+        let source = source
+            .with_column_renamed("id", "source_id")
+            .unwrap()
+            .with_column_renamed("value", "source_value")
+            .unwrap()
+            .with_column_renamed("modified", "source_modified")
+            .unwrap();
+        let err = table
+            .merge(source, "id = source_id")
+            .when_matched_update(|update| update.update("target.value", "source_value"))
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update.predicate("value = 1").update("value", "value + 1")
+            })
+            .unwrap()
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("No field named"), "{err}");
     }
 
     #[tokio::test]

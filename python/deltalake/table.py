@@ -1951,6 +1951,8 @@ class TableMerger:
     ) -> None:
         self._builder = builder
         self._table = table
+        # The columns of the table version the merge runs on, even if the table moves later
+        self._target_columns = {field.name for field in table.schema.fields}
 
     def when_matched_update(
         self, updates: dict[str, str], predicate: str | None = None
@@ -2086,10 +2088,12 @@ class TableMerger:
 
         except_columns = except_cols or []
 
+        # Source columns the table doesn't have are skipped, unless the schema is merged
         updates = {
             f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
             for col in self._builder.arrow_schema  # type: ignore[attr-defined]
             if col.name not in except_columns
+            and (self._builder.merge_schema or col.name in self._target_columns)
         }
 
         self._builder.when_matched_update(updates, predicate)
@@ -2303,10 +2307,12 @@ class TableMerger:
 
         except_columns = except_cols or []
 
+        # Source columns the table doesn't have are skipped, unless the schema is merged
         updates = {
             f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
             for col in self._builder.arrow_schema  # type: ignore[attr-defined]
             if col.name not in except_columns
+            and (self._builder.merge_schema or col.name in self._target_columns)
         }
 
         self._builder.when_not_matched_insert(updates, predicate)

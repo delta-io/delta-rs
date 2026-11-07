@@ -1140,6 +1140,87 @@ def test_merge_when_not_matched_insert_all_with_predicate(
     assert result == expected
 
 
+def test_merge_when_not_matched_insert_all_skips_extra_source_column(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = Table(
+        {
+            "id": Array(
+                ["6"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "price": Array(
+                [10],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+            "weight": Array(
+                [10],
+                ArrowField("weight", type=DataType.int64(), nullable=True),
+            ),
+        },
+    )
+
+    dt.merge(
+        source=source_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+    ).when_not_matched_insert_all().execute()
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl where id = '6'")
+        .read_all()
+    )
+
+    assert result.num_rows == 1
+    assert result.schema.names == ["id", "price", "sold", "deleted"]
+
+
+def test_merge_update_all_uses_table_version_of_merge(tmp_path: pathlib.Path):
+    data = Table(
+        {
+            "id": Array([1, 2], DataType.int64()),
+            "v": Array([1, 2], DataType.int64()),
+        }
+    )
+    write_deltalake(tmp_path, data)
+    dt = DeltaTable(tmp_path)
+    dt.alter.add_columns(Field("c", PrimitiveType("string"), nullable=True))
+
+    source = Table(
+        {
+            "id": Array([1], DataType.int64()),
+            "v": Array([10], DataType.int64()),
+            "c": Array(["new"], DataType.string()),
+        }
+    )
+    merger = dt.merge(source, "t.id = s.id", source_alias="s", target_alias="t")
+    dt.load_as_version(0)
+    merger.when_matched_update_all().execute()
+
+    result = (
+        QueryBuilder()
+        .register("tbl", DeltaTable(tmp_path))
+        .execute("select c from tbl where id = 1")
+        .read_all()
+    )
+    assert result["c"].to_pylist() == ["new"]
+
+
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_when_not_matched_insert_all_with_exclude(
     tmp_path: pathlib.Path, sample_table: Table, streaming: bool

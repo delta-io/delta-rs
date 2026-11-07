@@ -217,7 +217,6 @@ def test_update_with_predicate_and_new_values(
             "deleted": True,
             "sold": 100,
             "price_float": 9999,
-            "items_in_bucket": ["item4", "item5", "item6"],
         },
         predicate="price > 3",
     )
