@@ -343,9 +343,7 @@ impl std::future::IntoFuture for DropColumnsBuilder {
                 .column_mapping_mode()
                 == ColumnMappingMode::None
             {
-                return Err(DeltaTableError::column_mapping_required_for_drop(
-                    &this.column_names,
-                ));
+                return Err(DeltaTableError::column_mapping_required("DROP COLUMNS"));
             }
 
             let session = this
@@ -503,8 +501,8 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            matches!(err, DeltaTableError::ColumnMappingRequiredForDrop { .. }),
-            "expected ColumnMappingRequiredForDrop, got: {err}"
+            matches!(err, DeltaTableError::ColumnMappingRequired { .. }),
+            "expected ColumnMappingRequired, got: {err}"
         );
         Ok(())
     }
