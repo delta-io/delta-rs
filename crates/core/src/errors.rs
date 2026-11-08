@@ -221,6 +221,10 @@ pub enum DeltaTableError {
     #[error("Reading a table version: {version} that does not have change data enabled")]
     ChangeDataNotEnabled { version: Version },
 
+    /// Persistent DV writing was requested on a table where deletion vectors are disabled.
+    #[error("DV MERGE requires delta.enableDeletionVectors=true")]
+    DeletionVectorsNotEnabled,
+
     #[error("Invalid version. Start version {start} is greater than end version {end}")]
     ChangeDataInvalidVersionRange { start: Version, end: Version },
 

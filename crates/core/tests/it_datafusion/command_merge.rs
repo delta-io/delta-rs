@@ -6,6 +6,7 @@ use crate::fs_common;
 use arrow::array::{Float64Array, Int64Array, StringArray, TimestampMicrosecondArray};
 use arrow_array::{RecordBatch, StringViewArray};
 use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
+use chrono::Duration;
 use datafusion::common::{Column, ScalarValue, TableReference};
 use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::{Expr, col, lit};
@@ -18,6 +19,7 @@ use deltalake_core::kernel::{
     Action, DataType as DeltaDataType, PrimitiveType, StructField, StructType,
 };
 use deltalake_core::operations::merge::MergeMetrics;
+use deltalake_core::operations::vacuum::{Clock, VacuumMode};
 use deltalake_core::protocol::DeltaOperation;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::{DeltaResult, DeltaTable, DeltaTableError, TableProperty, open_table};
@@ -188,6 +190,150 @@ async fn latest_dv_merge_actions(table: &DeltaTable) -> Vec<Action> {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
+}
+
+#[derive(Debug)]
+struct DvVacuumClock(i64);
+
+impl Clock for DvVacuumClock {
+    fn current_timestamp_millis(&self) -> i64 {
+        self.0
+    }
+}
+
+#[tokio::test]
+async fn test_dv_merge_conflict_orphans_are_reclaimed_by_full_vacuum() {
+    let directory = tempfile::tempdir().unwrap();
+    let table = DeltaTable::try_from_url(Url::from_directory_path(directory.path()).unwrap())
+        .await
+        .unwrap()
+        .create()
+        .with_columns(id_value_delta_schema().fields().cloned())
+        .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+        .await
+        .unwrap()
+        .write(vec![id_value_batch(vec![1, 2], vec![10, 20])])
+        .await
+        .unwrap();
+    let stale = table.clone();
+    let ctx = SessionContext::new();
+    let (table, _) = table
+        .merge(
+            ctx.read_batch(id_value_batch(vec![1], vec![100])).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_matched_update(|update| update.update("value", col("source.value")))
+        .unwrap()
+        .await
+        .unwrap();
+    let store = table.log_store().object_store();
+    let before: HashSet<_> = store
+        .list(None)
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|file| file.location)
+        .collect();
+    let version = table.version().unwrap();
+    let error = stale
+        .merge(
+            ctx.read_batch(id_value_batch(vec![1], vec![999])).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_matched_update(|update| update.update("value", col("source.value")))
+        .unwrap()
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        DeltaTableError::Transaction {
+            source: TransactionError::CommitConflict(_)
+        }
+    ));
+    assert!(
+        table
+            .log_store()
+            .read_commit_entry(version + 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let orphans: Vec<_> = store
+        .list(None)
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|file| {
+            !before.contains(&file.location)
+                && file.location.as_ref().starts_with("deletion_vector_")
+        })
+        .collect();
+    assert_eq!(orphans.len(), 1);
+    let orphan = &orphans[0];
+    let retention = Duration::hours(24);
+    for delta in [-1, 1] {
+        let (_, result) = table
+            .clone()
+            .vacuum()
+            .with_mode(VacuumMode::Full)
+            .with_retention_period(retention)
+            .with_enforce_retention_duration(false)
+            .with_dry_run(true)
+            .with_clock(Arc::new(DvVacuumClock(
+                orphan.last_modified.timestamp_millis() + retention.num_milliseconds() + delta,
+            )))
+            .await
+            .unwrap();
+        assert_eq!(
+            result.files_deleted.contains(&orphan.location.to_string()),
+            delta > 0
+        );
+    }
+    let (_, result) = table
+        .clone()
+        .vacuum()
+        .with_mode(VacuumMode::Full)
+        .with_retention_period(retention)
+        .with_enforce_retention_duration(false)
+        .with_dry_run(false)
+        .with_clock(Arc::new(DvVacuumClock(
+            orphan.last_modified.timestamp_millis() + retention.num_milliseconds() + 1,
+        )))
+        .await
+        .unwrap();
+    assert!(result.files_deleted.contains(&orphan.location.to_string()));
+    assert!(matches!(
+        store.get(&orphan.location).await,
+        Err(object_store::Error::NotFound { .. })
+    ));
+    ctx.register_table("committed", table.table_provider().await.unwrap())
+        .unwrap();
+    let rows = ctx
+        .sql("SELECT id, value FROM committed ORDER BY id")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    datafusion::assert_batches_eq!(
+        &[
+            "+----+-------+",
+            "| id | value |",
+            "+----+-------+",
+            "| 1  | 100   |",
+            "| 2  | 20    |",
+            "+----+-------+",
+        ],
+        &rows
+    );
 }
 
 #[tokio::test]
@@ -1134,7 +1280,7 @@ async fn test_dv_merge_requires_enabled_table_and_keeps_default_rewrite() {
         .unwrap()
         .await
         .unwrap_err();
-    assert!(matches!(error, DeltaTableError::Generic(_)));
+    assert!(matches!(error, DeltaTableError::DeletionVectorsNotEnabled));
     let (table, metrics) = table
         .merge(
             ctx.read_batch(id_value_batch(vec![1], vec![100])).unwrap(),

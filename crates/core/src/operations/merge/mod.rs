@@ -487,6 +487,7 @@ impl MergeBuilder {
     /// The table must enable `delta.enableDeletionVectors`. New rows and change data feed
     /// records are written normally and committed atomically with the deletion vector updates.
     /// Disabled by default. Unchanged target rows are not copied into new files.
+    /// Returns [`DeltaTableError::DeletionVectorsNotEnabled`] if the table disables DV writing.
     pub fn with_deletion_vectors(mut self, enabled: bool) -> Self {
         self.deletion_vectors = enabled;
         self
@@ -2050,9 +2051,7 @@ impl std::future::IntoFuture for MergeBuilder {
             if this.deletion_vectors
                 && snapshot.table_properties().enable_deletion_vectors != Some(true)
             {
-                return Err(DeltaTableError::Generic(
-                    "DV MERGE requires delta.enableDeletionVectors=true".into(),
-                ));
+                return Err(DeltaTableError::DeletionVectorsNotEnabled);
             }
 
             if this.merge_schema

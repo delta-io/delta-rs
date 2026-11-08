@@ -9,10 +9,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::array::{RecordBatch, StringArray};
-use arrow::compute::filter_record_batch;
-use arrow::datatypes::{FieldRef, Schema, SchemaRef, UInt16Type};
+use arrow::compute::{filter_record_batch, min};
+use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef, UInt16Type};
 use arrow_array::StringViewArray;
 use arrow_array::{Array, ArrayRef, BooleanArray, UInt64Array};
+use arrow_cast::{CastOptions, cast_with_options};
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
 use datafusion::common::tree_node::TreeNodeRecursion;
@@ -822,20 +823,22 @@ impl DeltaScanStream {
                     .ok_or_else(|| {
                         DataFusionError::Execution("physical row position is not Int64".into())
                     })?;
-                let positions = positions
-                    .iter()
-                    .map(|position| {
-                        let position = position.ok_or_else(|| {
-                            DataFusionError::Execution("Physical row position is null".into())
-                        })?;
-                        u64::try_from(position).map_err(|_| {
-                            DataFusionError::Execution(format!(
-                                "Physical row position is negative: {position}"
-                            ))
-                        })
-                    })
-                    .collect::<Result<UInt64Array>>()?;
-                physical_positions = Some(Arc::new(positions) as ArrayRef);
+                if positions.null_count() != 0 {
+                    return exec_err!("Physical row position is null");
+                }
+                if let Some(position) = min(positions)
+                    && position < 0
+                {
+                    return exec_err!("Physical row position is negative: {position}");
+                }
+                physical_positions = Some(cast_with_options(
+                    positions,
+                    &DataType::UInt64,
+                    &CastOptions {
+                        safe: false,
+                        ..Default::default()
+                    },
+                )?);
             }
             if position_idx < file_id_idx {
                 file_id_idx -= 1;
@@ -3001,6 +3004,47 @@ mod tests {
         assert_eq!(row_ordinals(&batches[0], "physical_row"), vec![0, 2, 7]);
         let batches = stream.batch_project(second)?;
         assert_eq!(row_ordinals(&batches[0], "physical_row"), vec![8, 9]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn physical_row_index_cast_preserves_slices_and_rejects_invalid_values() -> TestResult {
+        let (kernel_type, plan) = dv_kernel_type_and_int32_scan_plan().await?;
+        let plan = retain_row_index(plan, "physical_row");
+        let mut plan = plan.as_ref().clone();
+        plan.contract.physical_row_index = true;
+        let mut stream = test_scan_stream(
+            Arc::new(plan),
+            kernel_type,
+            HashMap::new(),
+            Vec::new(),
+            None,
+        );
+        stream.entries = Some(Arc::new(HashMap::from([(
+            "f1".into(),
+            DeletionVectorEntry {
+                keep_mask: None,
+                row_count: None,
+            },
+        )])));
+        let batch = with_positions(
+            value_and_file_id_batch(&[10, 20, 30, 40], &[Some("f1"); 4], false)?,
+            vec![Some(-1), Some(0), Some(i64::MAX), None],
+        )?;
+        let valid = stream.batch_project(batch.slice(1, 2))?;
+        assert_eq!(
+            row_ordinals(&valid[0], "physical_row"),
+            vec![0, i64::MAX as u64]
+        );
+        for invalid in [batch.slice(0, 1), batch.slice(3, 1)] {
+            assert!(matches!(
+                stream.batch_project(invalid),
+                Err(DataFusionError::Execution(_))
+            ));
+        }
+        let empty = stream.batch_project(batch.slice(0, 0))?;
+        assert_eq!(empty[0].num_rows(), 0);
+        assert_eq!(empty[0].schema(), valid[0].schema());
         Ok(())
     }
 

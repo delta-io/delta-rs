@@ -388,15 +388,8 @@ impl VacuumBuilder {
         let mut file_count = 0;
 
         let tombstone_retention_timestamp = now_millis - retention_period.num_milliseconds();
-        let (expired_tombstones, tombstone_path_sets) = if self.mode == VacuumMode::Full {
-            collect_full_mode_tombstones(snapshot, tombstone_retention_timestamp, &self.log_store)
-                .await?
-        } else {
-            (
-                get_stale_files(snapshot, retention_period, now_millis, &self.log_store).await?,
-                TombstonePathSets::default(),
-            )
-        };
+        let (expired_tombstones, tombstone_path_sets) =
+            collect_tombstones(snapshot, tombstone_retention_timestamp, &self.log_store).await?;
         let valid_files = collect_active_paths(snapshot, self.log_store.as_ref()).await?;
 
         let partition_columns = snapshot.metadata().partition_columns();
@@ -405,7 +398,7 @@ impl VacuumBuilder {
         let mut file_sizes = vec![];
 
         // VacuumMode::Lite file set
-        // Expired tombstones are *always deleted (*unless in keep list)
+        // A physical file is eligible only after every removal referencing it has expired.
         for tombs in expired_tombstones.iter() {
             let path = tombstone_object_store_path(tombs);
             if ok_to_delete(&path, &valid_files, &keep_files, partition_columns)? {
@@ -697,10 +690,13 @@ struct TombstonePathSets {
 
 impl TombstonePathSets {
     fn record(&mut self, path: Path, is_expired: bool) {
-        if is_expired {
-            self.expired_tombstone_paths.insert(path.clone());
+        // Recent references dominate expired ones regardless of replay order.
+        let first_reference = self.all_tombstone_paths.insert(path.clone());
+        if !is_expired {
+            self.expired_tombstone_paths.remove(&path);
+        } else if first_reference {
+            self.expired_tombstone_paths.insert(path);
         }
-        self.all_tombstone_paths.insert(path);
     }
 }
 
@@ -959,13 +955,13 @@ fn list_orphans_under_prefix(
         })
 }
 
-async fn collect_full_mode_tombstones(
+async fn collect_tombstones(
     snapshot: &Snapshot,
     tombstone_retention_timestamp: i64,
     store: &dyn LogStore,
 ) -> DeltaResult<(Vec<TombstoneView>, TombstonePathSets)> {
     let table_root = snapshot.table_configuration().table_root();
-    snapshot
+    let (mut expired_tombstones, tombstone_path_sets) = snapshot
         .active_tombstones(store)
         .try_fold(
             (Vec::new(), TombstonePathSets::default()),
@@ -978,8 +974,8 @@ async fn collect_full_mode_tombstones(
                     tombstone_path_sets.record(path, is_expired);
                     // A shared DV file remains protected until all its recent removals expire.
                     // Expired DVs are found by the orphan scan, not the data-file deletion queue.
-                    if !is_expired {
-                        tombstone_path_sets.all_tombstone_paths.extend(dv_path);
+                    if !is_expired && let Some(path) = dv_path {
+                        tombstone_path_sets.record(path, false);
                     }
                     if is_expired {
                         expired_tombstones.push(tombstone);
@@ -988,10 +984,17 @@ async fn collect_full_mode_tombstones(
                 }))
             },
         )
-        .await
+        .await?;
+    let mut queued_paths = HashSet::new();
+    expired_tombstones.retain(|tombstone| {
+        let path = tombstone_object_store_path(tombstone);
+        tombstone_path_sets.expired_tombstone_paths.contains(&path) && queued_paths.insert(path)
+    });
+    Ok((expired_tombstones, tombstone_path_sets))
 }
 
 /// List files no longer referenced by a Delta table and are older than the retention threshold.
+#[cfg(test)]
 async fn get_stale_files(
     snapshot: &Snapshot,
     retention_period: Duration,
@@ -999,16 +1002,8 @@ async fn get_stale_files(
     store: &dyn LogStore,
 ) -> DeltaResult<Vec<TombstoneView>> {
     let tombstone_retention_timestamp = now_timestamp_millis - retention_period.num_milliseconds();
-    snapshot
-        .active_tombstones(store)
-        .try_filter(|tombstone| {
-            ready(is_tombstone_expired(
-                tombstone,
-                tombstone_retention_timestamp,
-            ))
-        })
-        .try_collect::<Vec<_>>()
-        .await
+    let (expired, _) = collect_tombstones(snapshot, tombstone_retention_timestamp, store).await?;
+    Ok(expired)
 }
 
 fn is_tombstone_expired(tombstone: &TombstoneView, tombstone_retention_timestamp: i64) -> bool {
@@ -1416,9 +1411,9 @@ mod tests {
 
         let cutoff = now_millis - retention.num_milliseconds();
         let (eager_expired, eager_sets) =
-            collect_full_mode_tombstones(eager.snapshot(), cutoff, log_store.as_ref()).await?;
+            collect_tombstones(eager.snapshot(), cutoff, log_store.as_ref()).await?;
         let (lazy_expired, lazy_sets) =
-            collect_full_mode_tombstones(&lazy, cutoff, log_store.as_ref()).await?;
+            collect_tombstones(&lazy, cutoff, log_store.as_ref()).await?;
         assert_eq!(
             tombstone_paths(eager_expired),
             tombstone_paths(lazy_expired)
@@ -1786,6 +1781,197 @@ mod tests {
             .set_accessed(last_modified)
             .set_modified(last_modified);
         file.set_times(times).unwrap();
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[rstest::rstest]
+    #[case::full(VacuumMode::Full)]
+    #[case::lite(VacuumMode::Lite)]
+    #[tokio::test]
+    async fn test_vacuum_waits_for_latest_physical_file_removal(
+        #[case] mode: VacuumMode,
+    ) -> DeltaResult<()> {
+        let directory = tempfile::tempdir().unwrap();
+        let root = Url::from_directory_path(directory.path()).unwrap();
+        let mut table = DeltaTable::try_from_url(root)
+            .await?
+            .create()
+            .with_column(
+                "id",
+                DataType::Primitive(PrimitiveType::Integer),
+                false,
+                None,
+            )
+            .with_column(
+                "value",
+                DataType::Primitive(PrimitiveType::Integer),
+                false,
+                None,
+            )
+            .with_configuration_property(crate::TableProperty::EnableDeletionVectors, Some("true"))
+            .await?;
+        let batch = arrow_array::RecordBatch::try_from_iter([
+            (
+                "id",
+                Arc::new(arrow_array::Int32Array::from(vec![1, 2])) as arrow_array::ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(arrow_array::Int32Array::from(vec![10, 20])),
+            ),
+        ])?;
+        table = table.write(vec![batch]).await?;
+        let original = table
+            .get_active_add_actions_by_partitions(&[])
+            .try_collect::<Vec<_>>()
+            .await?;
+        let original_path = original[0].object_store_path();
+        let ctx = datafusion::prelude::SessionContext::new();
+        let source = arrow_array::RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(arrow_array::Int32Array::from(vec![1])) as arrow_array::ArrayRef,
+        )])?;
+        (table, _) = table
+            .merge(
+                ctx.read_batch(source)?,
+                datafusion::logical_expr::col("target.id")
+                    .eq(datafusion::logical_expr::col("source.id")),
+            )
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_deletion_vectors(true)
+            .when_matched_update(|update| {
+                update.update("value", datafusion::logical_expr::lit(100))
+            })?
+            .await?;
+        let merge_version = table.version().unwrap();
+        let store = table.log_store().object_store();
+        let bytes = table
+            .log_store()
+            .read_commit_entry(merge_version)
+            .await?
+            .unwrap();
+        let old_timestamp = Utc::now().timestamp_millis() - Duration::days(10).num_milliseconds();
+        // Age the generated MERGE removal without wall-clock sleeps.
+        let actions = std::str::from_utf8(&bytes)
+            .unwrap()
+            .lines()
+            .map(|line| {
+                let mut action: Action = serde_json::from_str(line).unwrap();
+                if let Action::Remove(remove) = &mut action {
+                    remove.deletion_timestamp = Some(old_timestamp);
+                }
+                serde_json::to_string(&action).unwrap()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        store
+            .put(
+                &object_store::path::Path::from(format!("_delta_log/{merge_version:020}.json")),
+                actions.into(),
+            )
+            .await?;
+        set_last_modified(
+            &directory.path().join(original_path.as_ref()),
+            UNIX_EPOCH + StdDuration::from_millis(u64::try_from(old_timestamp).unwrap()),
+        );
+        let before_compaction = table.clone();
+        (table, _) = table.optimize().await?;
+        let bytes = table
+            .log_store()
+            .read_commit_entry(table.version().unwrap())
+            .await?
+            .unwrap();
+        let latest_removal = std::str::from_utf8(&bytes)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Action>(line).unwrap())
+            .find_map(|action| match action {
+                Action::Remove(remove) if remove.path == original_path.as_ref() => {
+                    remove.deletion_timestamp
+                }
+                _ => None,
+            })
+            .unwrap();
+        let retention = Duration::hours(24);
+        for delta in [-1, 0] {
+            let (_, result) =
+                VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                    .with_mode(mode.clone())
+                    .with_retention_period(retention)
+                    .with_enforce_retention_duration(false)
+                    .with_dry_run(true)
+                    .with_clock(Arc::new(MockClock::new(
+                        latest_removal + retention.num_milliseconds() + delta,
+                    )))
+                    .await?;
+            assert!(
+                !result.files_deleted.contains(&original_path.to_string()),
+                "an expired earlier removal must not override a newer removal"
+            );
+        }
+        let (_, expired) =
+            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                .with_mode(mode.clone())
+                .with_retention_period(retention)
+                .with_enforce_retention_duration(false)
+                .with_dry_run(true)
+                .with_clock(Arc::new(MockClock::new(
+                    latest_removal + retention.num_milliseconds() + 1,
+                )))
+                .await?;
+        assert_eq!(
+            expired
+                .files_deleted
+                .iter()
+                .filter(|path| *path == original_path.as_ref())
+                .count(),
+            1
+        );
+        let (_, kept) =
+            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                .with_mode(mode.clone())
+                .with_retention_period(retention)
+                .with_enforce_retention_duration(false)
+                .with_dry_run(true)
+                .with_keep_versions(&[merge_version])
+                .with_clock(Arc::new(MockClock::new(
+                    latest_removal + retention.num_milliseconds() + 1,
+                )))
+                .await?;
+        assert!(!kept.files_deleted.contains(&original_path.to_string()));
+        let (_, result) =
+            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                .with_mode(mode)
+                .with_retention_period(retention)
+                .with_enforce_retention_duration(false)
+                .with_dry_run(false)
+                .with_clock(Arc::new(MockClock::new(
+                    latest_removal + retention.num_milliseconds() - 1,
+                )))
+                .await?;
+        assert!(!result.files_deleted.contains(&original_path.to_string()));
+        ctx.register_table(
+            "before_compaction",
+            before_compaction.table_provider().await?,
+        )?;
+        let rows = ctx
+            .sql("SELECT id, value FROM before_compaction ORDER BY id")
+            .await?
+            .collect()
+            .await?;
+        datafusion::assert_batches_eq!(
+            &[
+                "+----+-------+",
+                "| id | value |",
+                "+----+-------+",
+                "| 1  | 100   |",
+                "| 2  | 20    |",
+                "+----+-------+",
+            ],
+            &rows
+        );
+        Ok(())
     }
 
     #[cfg(feature = "datafusion")]
@@ -2238,6 +2424,23 @@ mod tests {
         assert!(!sets.expired_tombstone_paths.contains(&recent_path));
         assert!(sets.all_tombstone_paths.contains(&expired_path));
         assert!(sets.all_tombstone_paths.contains(&recent_path));
+    }
+
+    #[test]
+    fn recent_removal_protects_shared_paths_in_any_traversal_order() {
+        let path = object_store::path::Path::from("shared.parquet");
+        for expired in [
+            [true, false, true],
+            [false, true, true],
+            [true, true, false],
+        ] {
+            let mut sets = TombstonePathSets::default();
+            for is_expired in expired {
+                sets.record(path.clone(), is_expired);
+            }
+            assert!(!sets.expired_tombstone_paths.contains(&path));
+            assert!(sets.all_tombstone_paths.contains(&path));
+        }
     }
 
     /// The `DELTARS_VACUUM_LIST_CONCURRENCY` env var is only read once, on the

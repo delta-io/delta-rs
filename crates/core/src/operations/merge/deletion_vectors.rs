@@ -40,7 +40,15 @@ pub(super) async fn prepare_deletion_vectors(
         },
     );
     while let Some(file) = files.try_next().await? {
-        let file_id = normalize_path_as_file_id(file.path_raw(), &root, "merge DV")?;
+        let log_path = file.path_raw().to_owned();
+        let file_root = root.clone();
+        let file_id = tokio::task::spawn_blocking(move || {
+            normalize_path_as_file_id(&log_path, &file_root, "merge DV")
+        })
+        .await
+        .map_err(|error| {
+            DeltaTableError::Generic(format!("DV file normalization task failed: {error}"))
+        })??;
         if updated_paths.contains(file_id.as_str()) {
             return Err(DeltaTableError::Generic(format!(
                 "DV MERGE cannot distinguish multiple active logical files for {}",

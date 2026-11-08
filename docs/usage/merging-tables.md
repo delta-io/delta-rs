@@ -37,6 +37,8 @@ Note that executing a `MERGE` operation automatically writes the changes to your
 
 Rust callers can opt into `.with_deletion_vectors(true)` on `MergeBuilder` when the
 target table enables `delta.enableDeletionVectors`. The default remains file rewriting.
+Requesting this mode on a table that disables DV writing returns
+`DeltaTableError::DeletionVectorsNotEnabled`; there is no automatic rewrite fallback.
 Tables with multiple active logical files referring to the same physical path are
 not supported by this mode.
 
@@ -54,6 +56,14 @@ locations and prepared deletion vectors must not be reused after a conflict. Fil
 compaction and vacuum remain separate maintenance operations.
 FULL VACUUM retains replaced deletion-vector files until their Remove actions have
 expired, even when the DV files themselves are older than the retention period.
+FULL and LITE VACUUM retain a removed Parquet file until its newest removal expires,
+including when compaction retires a file that was previously updated using DVs.
+
+MERGE uploads data and DV files before committing. Failed or cancelled attempts can
+leave unreferenced files. FULL VACUUM reclaims these orphans after the retention
+period; LITE VACUUM does not discover untracked outputs. Do not delete output files
+solely because MERGE returned an error: an error during post-commit work can occur
+after the commit has already been published.
 
 This option is currently exposed by the Rust builder, not the Python or .NET bindings.
 
