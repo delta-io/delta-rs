@@ -29,6 +29,8 @@ pub(crate) async fn create_checkpoint_for(
     version: Version,
     log_store: &dyn LogStore,
 ) -> DeltaResult<()> {
+    log_store.publish_logs(version).await?;
+
     let table_root = log_store.write_root_url();
     let engine = log_store.engine();
 
@@ -1263,6 +1265,20 @@ mod table_rule_tests {
                 .join("_delta_log/00000000000000000000.json")
                 .exists()
         );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_publishes_through_the_requested_version_first() {
+        use std::sync::atomic::Ordering;
+
+        let dir = tempfile::tempdir().unwrap();
+        write_table(dir.path());
+        let (table, store) = open(dir.path(), true).await;
+        let store = store.unwrap();
+        assert_eq!(store.published_up_to.load(Ordering::SeqCst), -1);
+
+        create_checkpoint(&table).await.unwrap();
+        assert_eq!(store.published_up_to.load(Ordering::SeqCst), 1);
     }
 
     #[cfg(feature = "datafusion")]

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use bytes::Bytes;
 use delta_kernel::Engine;
@@ -15,6 +15,8 @@ use crate::{DeltaResult, DeltaTable, DeltaTableError};
 pub(crate) struct CatalogManagedTestStore {
     inner: LogStoreRef,
     pub(crate) fail_catalog_tail: AtomicBool,
+    pub(crate) fail_publish: AtomicBool,
+    pub(crate) published_up_to: AtomicI64,
 }
 
 impl CatalogManagedTestStore {
@@ -22,6 +24,8 @@ impl CatalogManagedTestStore {
         Arc::new(Self {
             inner,
             fail_catalog_tail: AtomicBool::new(false),
+            fail_publish: AtomicBool::new(false),
+            published_up_to: AtomicI64::new(-1),
         })
     }
 }
@@ -49,6 +53,15 @@ impl LogStore for CatalogManagedTestStore {
 
     fn is_catalog_managed(&self) -> bool {
         true
+    }
+
+    async fn publish_logs(&self, up_to: Version) -> DeltaResult<()> {
+        if self.fail_publish.load(Ordering::SeqCst) {
+            return Err(DeltaTableError::Generic("publish failed".to_string()));
+        }
+        self.published_up_to
+            .fetch_max(up_to as i64, Ordering::SeqCst);
+        Ok(())
     }
 
     fn object_store(&self) -> Arc<dyn ObjectStore> {

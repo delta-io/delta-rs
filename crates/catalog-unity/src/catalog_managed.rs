@@ -363,20 +363,17 @@ impl<C: CommitCoordinator + Committer + 'static> LogStore for CatalogManagedLogS
     }
 
     async fn read_commit_entry(&self, version: Version) -> DeltaResult<Option<Bytes>> {
-        if let Some(bytes) =
-            deltalake_core::logstore::read_commit_entry(self.prefixed_store.as_ref(), version)
-                .await?
-        {
-            return Ok(Some(bytes));
-        }
         let list = self.coordinator.get_commits().await?;
-        let Some(commit) = list.commits.iter().find(|c| c.version as u64 == version) else {
+        if version > list.max_version {
             return Ok(None);
-        };
-        let staged_path = staged_commit_path(&commit.file_name)?;
-        Ok(Some(
-            self.prefixed_store.get(&staged_path).await?.bytes().await?,
-        ))
+        }
+        if let Some(commit) = list.commits.iter().find(|c| c.version as u64 == version) {
+            let staged_path = staged_commit_path(&commit.file_name)?;
+            return Ok(Some(
+                self.prefixed_store.get(&staged_path).await?.bytes().await?,
+            ));
+        }
+        deltalake_core::logstore::read_commit_entry(self.prefixed_store.as_ref(), version).await
     }
 
     async fn get_latest_version(&self, _start_version: Version) -> DeltaResult<Version> {
@@ -612,6 +609,45 @@ mod tests {
 
         assert!(ls.read_commit_entry(2).await.unwrap().is_some());
         assert!(ls.read_commit_entry(99).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn read_commit_entry_defers_to_catalog_over_numbered_files() {
+        let prefixed: ObjectStoreRef = Arc::new(InMemory::new());
+        let staged = Path::from(
+            "_delta_log/_staged_commits/00000000000000000002.3a0d65cd-4a56-49a8-937b-95f9e3ee90e5.json",
+        );
+        prefixed
+            .put(&staged, Bytes::from_static(b"staged").into())
+            .await
+            .unwrap();
+        for version in [0, 2, 3] {
+            prefixed
+                .put(
+                    &commit_uri_from_version(Some(version)),
+                    Bytes::from_static(b"numbered").into(),
+                )
+                .await
+                .unwrap();
+        }
+
+        let url = Url::parse("memory:///cat.schema.table").unwrap();
+        let config = LogStoreConfig::new(&url, StorageConfig::default());
+        let ls = CatalogManagedLogStore::new(
+            prefixed,
+            store(),
+            config,
+            Arc::new(MockCoordinator {
+                list: sample_commits(),
+            }),
+        );
+
+        // Published version outside the catalog tail is read from the numbered file.
+        assert_eq!(ls.read_commit_entry(0).await.unwrap().unwrap(), "numbered");
+        // The catalog-supplied staged commit wins over a numbered copy.
+        assert_eq!(ls.read_commit_entry(2).await.unwrap().unwrap(), "staged");
+        // Versions above the catalog maximum are not ratified, even if a file exists.
+        assert!(ls.read_commit_entry(3).await.unwrap().is_none());
     }
 
     const OURS: &str = "00000000000000000003.11111111-1111-4111-8111-111111111111.json";

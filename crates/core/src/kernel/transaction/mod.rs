@@ -468,10 +468,7 @@ fn maybe_set_in_commit_timestamp(data: &mut CommitData, table_data: Option<&dyn 
         .iter_mut()
         .find(|action| matches!(action, Action::CommitInfo(_)))
     {
-        let ts = commit_info
-            .timestamp
-            .unwrap_or_else(|| Utc::now().timestamp_millis());
-        commit_info.in_commit_timestamp = Some(ts);
+        commit_info.in_commit_timestamp = Some(Utc::now().timestamp_millis());
     }
 }
 
@@ -561,12 +558,14 @@ impl CommitData {
             metrics.insert("num_retries".to_string(), num_retries.into());
             changed = true;
         }
-        if let Some(prev) = prev_ict
-            && info.in_commit_timestamp.is_none_or(|ts| ts <= prev)
-        {
-            info.in_commit_timestamp = Some(prev + 1);
-            info.timestamp = Some(prev + 1);
-            changed = true;
+
+        if info.in_commit_timestamp.is_some() || prev_ict.is_some() {
+            let now = Utc::now().timestamp_millis();
+            let ict = prev_ict.map_or(now, |prev| now.max(prev + 1));
+            if info.in_commit_timestamp != Some(ict) {
+                info.in_commit_timestamp = Some(ict);
+                changed = true;
+            }
         }
         changed
     }
@@ -1102,7 +1101,19 @@ impl PostCommit {
         if let Some(table) = &self.table_data {
             let mut snapshot = table.eager_snapshot().clone();
             if self.version != snapshot.version() {
-                snapshot.update(&self.log_store, Some(self.version)).await?;
+                snapshot
+                    .update(&self.log_store, Some(self.version))
+                    .await
+                    .map_err(|e| {
+                        if !self.log_store.is_catalog_managed() {
+                            return e;
+                        }
+                        DeltaTableError::Generic(format!(
+                            "version {} was committed, but refreshing the table state failed: \
+                             {e}. Reload the table instead of retrying the write",
+                            self.version
+                        ))
+                    })?;
             }
 
             let mut state = DeltaTableState { snapshot };
@@ -1128,27 +1139,31 @@ impl PostCommit {
                 // File-only work runs in a sibling scope. The operation-scoped store forwards
                 // `begin_operation` to its parent, so on an isolating backend this is a second
                 // isolated write set that is published on success and discarded on error.
-                let (checkpoint_created, files_cleaned_up) =
-                    with_operation(&self.log_store, |log_store| async move {
-                        log_store.publish_logs(version).await?;
-                        let mut checkpoint_created = false;
-                        if create_checkpoint {
-                            checkpoint_created =
-                                maybe_create_checkpoint(checkpoint_interval, version, &log_store)
-                                    .await?;
-                        }
-                        let mut files_cleaned_up: u64 = 0;
-                        if cleanup_logs {
-                            files_cleaned_up = cleanup_expired_logs_for(
-                                version,
-                                log_store.as_ref(),
-                                cutoff_timestamp,
-                            )
-                            .await? as u64;
-                        }
-                        Ok((checkpoint_created, files_cleaned_up))
-                    })
-                    .await?;
+                let maintenance = with_operation(&self.log_store, |log_store| async move {
+                    log_store.publish_logs(version).await?;
+                    let mut checkpoint_created = false;
+                    if create_checkpoint {
+                        checkpoint_created =
+                            maybe_create_checkpoint(checkpoint_interval, version, &log_store)
+                                .await?;
+                    }
+                    let mut files_cleaned_up: u64 = 0;
+                    if cleanup_logs {
+                        files_cleaned_up =
+                            cleanup_expired_logs_for(version, log_store.as_ref(), cutoff_timestamp)
+                                .await? as u64;
+                    }
+                    Ok((checkpoint_created, files_cleaned_up))
+                })
+                .await;
+                let (checkpoint_created, files_cleaned_up) = match maintenance {
+                    Ok(result) => result,
+                    Err(e) if self.log_store.is_catalog_managed() => {
+                        warn!(error = %e, "post-commit maintenance failed");
+                        (false, 0)
+                    }
+                    Err(e) => return Err(e),
+                };
 
                 new_checkpoint_created = checkpoint_created;
                 num_log_files_cleaned_up = files_cleaned_up;
@@ -1231,20 +1246,7 @@ impl std::future::IntoFuture for PostCommit {
         let this = self;
 
         Box::pin(async move {
-            let (snapshot, post_commit_metrics) =
-                match (this.run_post_commit_hook().await, &this.table_data) {
-                    (Ok(result), _) => result,
-                    (Err(e), Some(table)) if this.log_store.is_catalog_managed() => {
-                        warn!("Post commit hook failed: {e}");
-                        (
-                            DeltaTableState {
-                                snapshot: table.eager_snapshot().clone(),
-                            },
-                            PostCommitMetrics::default(),
-                        )
-                    }
-                    (Err(e), _) => return Err(e),
-                };
+            let (snapshot, post_commit_metrics) = this.run_post_commit_hook().await?;
             Ok(FinalizedCommit {
                 snapshot,
                 version: this.version,
@@ -1273,12 +1275,22 @@ mod tests {
     #[test]
     fn update_commit_info_bumps_in_commit_timestamp_past_previous() {
         let mut data = CommitData::new(vec![], append(), HashMap::new(), vec![]);
-        data.commit_info_mut().unwrap().in_commit_timestamp = Some(100);
-        assert!(!data.update_commit_info(0, Some(99)));
-        assert!(data.update_commit_info(0, Some(100)));
+        let provenance = data.commit_info().unwrap().timestamp;
+        let future = Utc::now().timestamp_millis() + 3_600_000;
+        assert!(data.update_commit_info(0, Some(future)));
         let info = data.commit_info().unwrap();
-        assert_eq!(info.in_commit_timestamp, Some(101));
-        assert_eq!(info.timestamp, Some(101));
+        assert_eq!(info.in_commit_timestamp, Some(future + 1));
+        assert_eq!(info.timestamp, provenance);
+    }
+
+    #[test]
+    fn update_commit_info_recomputes_stale_in_commit_timestamp_from_clock() {
+        let mut data = CommitData::new(vec![], append(), HashMap::new(), vec![]);
+        data.commit_info_mut().unwrap().in_commit_timestamp = Some(100);
+        let before = Utc::now().timestamp_millis();
+        assert!(data.update_commit_info(0, Some(50)));
+        let ict = data.commit_info().unwrap().in_commit_timestamp.unwrap();
+        assert!(ict >= before, "{ict} < {before}");
     }
 
     #[test]
@@ -1703,7 +1715,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_post_commit_refresh_failure_does_not_fail_a_catalog_managed_commit() {
+    async fn test_post_commit_maintenance_failure_keeps_refreshed_catalog_managed_state() {
+        use std::sync::atomic::Ordering;
+
+        let dir = tempfile::tempdir().unwrap();
+        write_three_versions(dir.path());
+        let (table, store) = crate::test_utils::catalog_managed::open(dir.path(), true).await;
+        let store = store.unwrap();
+        store.fail_publish.store(true, Ordering::SeqCst);
+
+        let finalized =
+            CommitBuilder::from(CommitProperties::default().with_create_checkpoint(true))
+                .build(Some(table.snapshot().unwrap()), store, append())
+                .await
+                .expect("a failed publish/checkpoint must not fail a ratified commit");
+        assert_eq!(finalized.version(), 3);
+        assert_eq!(finalized.snapshot().version(), 3);
+        assert!(!finalized.metrics.new_checkpoint_created);
+    }
+
+    #[tokio::test]
+    async fn test_post_commit_refresh_failure_reports_the_committed_version() {
         use std::sync::atomic::Ordering;
 
         let dir = tempfile::tempdir().unwrap();
@@ -1712,11 +1744,13 @@ mod tests {
         let store = store.unwrap();
         store.fail_catalog_tail.store(true, Ordering::SeqCst);
 
-        let finalized = CommitBuilder::default()
+        let err = CommitBuilder::default()
             .build(Some(table.snapshot().unwrap()), store, append())
             .await
-            .expect("a committed write must not be reported as failed");
-        assert_eq!(finalized.version(), 3);
+            .expect_err("stale state must not be returned as a finalized commit");
+        let msg = err.to_string();
+        assert!(msg.contains("version 3 was committed"), "{msg}");
+        assert!(msg.contains("catalog unavailable"), "{msg}");
         let committed =
             std::fs::read_to_string(dir.path().join("_delta_log/00000000000000000003.json"))
                 .unwrap();

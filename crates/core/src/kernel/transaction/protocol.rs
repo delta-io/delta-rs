@@ -294,6 +294,15 @@ impl ProtocolChecker {
             }
         }
 
+        if actions
+            .iter()
+            .any(|action| matches!(action, Action::DomainMetadata(_)))
+        {
+            return Err(TransactionError::UnsupportedTableFeatures(vec![
+                TableFeature::DomainMetadata,
+            ]));
+        }
+
         Ok(())
     }
 }
@@ -554,6 +563,31 @@ mod tests {
                 .can_commit(eager, &neutral_actions, &neutral_op)
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn test_can_commit_rejects_domain_metadata_actions() {
+        let snapshot = DeltaTableState::from_actions(vec![
+            Action::Protocol(ProtocolInner::new(1, 1).as_kernel()),
+            metadata_action(None).into(),
+        ])
+        .await
+        .unwrap();
+        let op = DeltaOperation::Update { predicate: None };
+        let actions = vec![Action::DomainMetadata(crate::kernel::DomainMetadata {
+            domain: "app.domain".to_string(),
+            configuration: "{}".to_string(),
+            removed: false,
+        })];
+
+        let err = INSTANCE
+            .can_commit(snapshot.snapshot(), &actions, &op)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            TransactionError::UnsupportedTableFeatures(features)
+                if features == vec![TableFeature::DomainMetadata]
+        ));
     }
 
     #[tokio::test]
