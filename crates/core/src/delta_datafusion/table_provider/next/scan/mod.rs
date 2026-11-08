@@ -587,7 +587,12 @@ async fn get_data_scan_plan(
             // partition-column entry; table-level column stats are rebuilt below.
             partitioned_file.statistics = Some(Arc::new(f.stats));
         } else {
-            partitioned_file = partitioned_file.with_statistics(Arc::new(f.stats));
+            // Avoid doubling the stats Vec when `with_statistics` appends partition entries.
+            let mut stats = f.stats;
+            stats
+                .column_statistics
+                .reserve_exact(partitioned_file.partition_values.len());
+            partitioned_file = partitioned_file.with_statistics(Arc::new(stats));
         }
         Ok::<_, DataFusionError>((f.file_url.as_object_store_url(), partitioned_file))
     };
@@ -1498,16 +1503,14 @@ mod tests {
                 range.end - range.start == METADATA_SIZE_HINT && parquet_sizes.contains(&range.end)
             };
             match op {
-                RecordedObjectStoreOperation::GetRange(kind, range)
-                    if matches!(kind, RecordedPathKind::Data | RecordedPathKind::Other) =>
-                {
-                    is_prefetch(range)
-                }
-                RecordedObjectStoreOperation::GetRanges(kind, ranges)
-                    if matches!(kind, RecordedPathKind::Data | RecordedPathKind::Other) =>
-                {
-                    ranges.iter().any(is_prefetch)
-                }
+                RecordedObjectStoreOperation::GetRange(
+                    RecordedPathKind::Data | RecordedPathKind::Other,
+                    range,
+                ) => is_prefetch(range),
+                RecordedObjectStoreOperation::GetRanges(
+                    RecordedPathKind::Data | RecordedPathKind::Other,
+                    ranges,
+                ) => ranges.iter().any(is_prefetch),
                 _ => false,
             }
         });

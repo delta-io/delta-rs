@@ -21,3 +21,6 @@ syn = { version = "2.0", features = ["extra-traits"] }
 quote = "1.0"
 convert_case = "0.9.0"
 itertools = "0.14"
+
+[lints]
+workspace = true

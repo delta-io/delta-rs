@@ -1004,11 +1004,34 @@ async fn execute(
     // In the case where there are partition columns in the join predicate, we can scan the source table
     // to get the distinct list of partitions affected and constrain the search to those.
 
-    let target_subset_filter: Option<Expr> = if !not_match_source_operations.is_empty() {
-        // It's only worth trying to create an early filter where there are no `when_not_matched_source` operators, since
-        // that implies a full scan
-        None
-    } else {
+    let reads_only_target = |filter: &Expr| {
+        filter
+            .column_refs()
+            .into_iter()
+            .all(|c| target.schema().index_of_column(c).is_ok())
+    };
+
+    // The `WHEN NOT MATCHED BY SOURCE` clauses touch target rows that match no source row, so the
+    // early filter must keep the files those rows are in: OR their predicates onto it (#4535). An
+    // unconditional clause, or one that reads a non-target column, can touch any row and forces a
+    // full scan.
+    let not_match_source_predicates = not_match_source_operations
+        .iter()
+        .map(|op| maybe_into_expr(op.predicate.clone(), &join_schema_df, &state))
+        .collect::<DeltaResult<Vec<_>>>()?
+        .into_iter()
+        .collect::<Option<Vec<_>>>();
+    let (skip_files, not_match_source_filter) = match not_match_source_predicates {
+        None => (false, None),
+        Some(predicates) => {
+            let filter = predicates.into_iter().reduce(Expr::or);
+            (filter.as_ref().is_none_or(reads_only_target), filter)
+        }
+    };
+
+    // The early filter keeps source columns that the join predicate does not qualify, as in
+    // `id = source_id`. Such a filter cannot skip target files.
+    let target_subset_filter = if skip_files {
         try_construct_early_filter(
             predicate.clone(),
             &snapshot,
@@ -1019,7 +1042,14 @@ async fn execute(
             streaming,
         )
         .await?
+        .map(|filter| match &not_match_source_filter {
+            Some(not_match_source_filter) => filter.or(not_match_source_filter.clone()),
+            None => filter,
+        })
+    } else {
+        None
     }
+    .filter(reads_only_target)
     .map(|e| normalize_target_subset_filter(target.schema().clone(), e))
     .transpose()?;
 
@@ -1033,7 +1063,7 @@ async fn execute(
 
     // A streaming source can be read only once, so the parts of the early filter that depend on
     // source values are built while the join reads the source. They skip target files at run time.
-    let source_stats = if streaming && not_match_source_operations.is_empty() {
+    let source_stats = if streaming && skip_files {
         try_construct_streaming_early_filter(
             predicate.clone(),
             &snapshot,
@@ -1045,7 +1075,12 @@ async fn execute(
         )
         .await?
         .map(|filter| {
-            SourceStatsCollector::new(filter, target.schema().clone(), target_alias.clone())
+            SourceStatsCollector::new(
+                filter,
+                not_match_source_filter.clone(),
+                target.schema().clone(),
+                target_alias.clone(),
+            )
         })
     } else {
         None
@@ -1326,12 +1361,6 @@ async fn execute(
         };
         let mut null_target_column = None;
 
-        let source_qualifier = match &source_alias {
-            Some(alias) => Some(TableReference::Bare {
-                table: alias.to_owned().into(),
-            }),
-            None => TableReference::none(),
-        };
         let name = delta_field.name();
         let kernel_arrow_type: DataType = delta_field.data_type().try_into_arrow()?;
         let mut cast_type: DataType = target_arrow_schema
@@ -1343,7 +1372,8 @@ async fn execute(
 
         // Receive the correct column reference given that some columns are only in source table
         let mut field_changed = false;
-        let column = if let Some(field) = snapshot.schema().field(name) {
+        let column = Column::new(qualifier.clone(), name);
+        let added_column_source = if let Some(field) = snapshot.schema().field(name) {
             if field != delta_field {
                 // The field changed, e.g. a struct gained a field. Cast every branch, including
                 // the target value kept by rows that don't set it, to the merged type; missing
@@ -1351,21 +1381,33 @@ async fn execute(
                 field_changed = true;
                 cast_type = kernel_arrow_type;
             }
-            Column::new(qualifier.clone(), name)
+            None
         } else {
             null_target_column = Some(merge_cast(
                 lit(ScalarValue::Null).alias(name),
                 cast_type.clone(),
                 safe_cast,
             ));
-            Column::new(source_qualifier.clone(), name)
+            let source_qualifier = source_alias.as_ref().map(|alias| TableReference::Bare {
+                table: alias.to_owned().into(),
+            });
+            Some(Column::new(source_qualifier, name))
         };
 
-        for (idx, (operations, _, _)) in ops.iter().enumerate() {
+        for (idx, (operations, operation_type, _)) in ops.iter().enumerate() {
+            // A column the merge adds has no target value: rows the merge copies unchanged keep it
+            // null, and rows it writes without assigning it take the source value
+            let unassigned = || match (&added_column_source, operation_type) {
+                (None, _) => col(column.clone()),
+                (Some(_), OperationType::Copy) => {
+                    merge_cast(lit(ScalarValue::Null), cast_type.clone(), safe_cast)
+                }
+                (Some(source_column), _) => col(source_column.clone()),
+            };
             let op: Expr = operations
                 .get(&column)
                 .map(|expr| expr.to_owned())
-                .unwrap_or_else(|| col(column.clone()));
+                .unwrap_or_else(unassigned);
             // `try_cast` can't plan struct casts that add fields (DataFusion checks them with
             // arrow's `can_cast_types`), and the merged type is a superset of the target and
             // source types, so a strict cast loses nothing.
@@ -2550,6 +2592,92 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    /// Streams a source with `source_ids` into a table partitioned by id (files A to D), with a
+    /// `WHEN NOT MATCHED BY SOURCE` delete guarded by `predicate`.
+    async fn streaming_delete_not_matched_by_source(
+        source_ids: Vec<&str>,
+        predicate: Option<Expr>,
+    ) -> (DeltaTable, super::MergeMetrics) {
+        let schema = get_arrow_schema(&None);
+        let table = write_data(setup_table(Some(vec!["id"])).await, &schema).await;
+        let rows = source_ids.len();
+        let batches = if rows == 0 {
+            vec![]
+        } else {
+            vec![source_batch(
+                &schema,
+                source_ids,
+                vec![999; rows],
+                vec!["2021-02-01"; rows],
+            )]
+        };
+        table
+            .merge(
+                one_shot_source(Arc::clone(&schema), vec![batches]),
+                col("target.id").eq(col("source.id")),
+            )
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_streaming(true)
+            .with_session_state(source_build_side_session())
+            .when_matched_update(|update| update.update("value", col("source.value")))
+            .unwrap()
+            .when_not_matched_by_source_delete(|delete| match predicate {
+                Some(predicate) => delete.predicate(predicate),
+                None => delete,
+            })
+            .unwrap()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_merge_streaming_source_not_matched_by_source_with_predicate_skips_files() {
+        // #4535: only the files of the source rows and of the clause predicate are read.
+        let (table, metrics) =
+            streaming_delete_not_matched_by_source(vec!["A"], Some(col("target.id").eq(lit("B"))))
+                .await;
+
+        assert_eq!(metrics.num_target_files_scanned, 2);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 2);
+        assert_eq!(metrics.num_target_rows_deleted, 1);
+        let parameters = table
+            .last_commit()
+            .await
+            .unwrap()
+            .operation_parameters
+            .unwrap();
+        assert_eq!(parameters["predicate"], json!("id = 'A' OR id = 'B'"));
+    }
+
+    #[tokio::test]
+    async fn test_merge_streaming_source_empty_not_matched_by_source_with_predicate() {
+        // With no source rows, only the files of the clause predicate are read.
+        let (table, metrics) =
+            streaming_delete_not_matched_by_source(vec![], Some(col("target.id").eq(lit("B"))))
+                .await;
+
+        assert_eq!(metrics.num_target_files_scanned, 1);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 3);
+        assert_eq!(metrics.num_target_rows_deleted, 1);
+        let parameters = table
+            .last_commit()
+            .await
+            .unwrap()
+            .operation_parameters
+            .unwrap();
+        assert_eq!(parameters["predicate"], json!("id = 'B'"));
+    }
+
+    #[tokio::test]
+    async fn test_merge_streaming_source_unconditional_not_matched_by_source_reads_all_files() {
+        let (_table, metrics) = streaming_delete_not_matched_by_source(vec!["A"], None).await;
+
+        assert_eq!(metrics.num_target_files_scanned, 4);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 0);
+        assert_eq!(metrics.num_target_rows_deleted, 3);
     }
 
     #[tokio::test]
@@ -3836,7 +3964,7 @@ mod tests {
 
         let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert!(!parameters.contains_key("predicate"));
+        assert!(parameters.contains_key("predicate"));
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
@@ -4073,7 +4201,7 @@ mod tests {
         let last_commit = after_table.last_commit().await.unwrap();
 
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert!(!parameters.contains_key("predicate"));
+        assert!(parameters.contains_key("predicate"));
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
@@ -4813,7 +4941,7 @@ mod tests {
 
         let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert!(!parameters.contains_key("predicate"));
+        assert!(parameters.contains_key("predicate"));
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
@@ -5151,6 +5279,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_merge_schema_new_column_uses_assignments_and_keeps_copied_rows_null() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+        let table = write_data(table, &schema).await;
+
+        let source_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new("tag", ArrowDataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            source_schema,
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![20, 5, 7])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-05",
+                    "2023-07-06",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["b", "c", "x"])),
+            ],
+        )
+        .unwrap();
+        let source = SessionContext::new().read_batch(batch).unwrap();
+
+        let (table, _) = table
+            .merge(source, "target.id = source.id")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .when_matched_update(|update| {
+                update
+                    .predicate("source.value > target.value")
+                    .update("value", "source.value")
+                    .update("tag", "upper(source.tag)")
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", "source.id")
+                    .set("value", "source.value")
+                    .set("modified", "source.modified")
+                    .set("tag", "'manual'")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+--------+",
+            "| id | value | modified   | tag    |",
+            "+----+-------+------------+--------+",
+            "| A  | 1     | 2021-02-01 |        |",
+            "| B  | 20    | 2021-02-01 | B      |",
+            "| C  | 10    | 2021-02-02 |        |",
+            "| D  | 100   | 2021-02-02 |        |",
+            "| X  | 7     | 2023-07-06 | manual |",
+            "+----+-------+------------+--------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
     async fn test_merge_unconditional_delete_multiple_source_match_allowed() {
         let schema = get_arrow_schema(&None);
         let table = setup_table(None).await;
@@ -5321,7 +5515,7 @@ mod tests {
 
         let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert!(!parameters.contains_key("predicate"));
+        assert!(parameters.contains_key("predicate"));
         assert_eq!(
             parameters["mergePredicate"],
             "target.id = source.id AND target.modified = '2021-02-02'"
@@ -5478,6 +5672,82 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
+    fn single_row_source(schema: &Arc<ArrowSchema>) -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::clone(schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B"])),
+                Arc::new(arrow::array::Int32Array::from(vec![999])),
+                Arc::new(arrow::array::StringArray::from(vec!["2023-07-04"])),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_merge_not_matched_by_source_with_predicate_prunes_partitions() {
+        // #4535: a predicated `when_not_matched_by_source` clause must still allow partition pruning.
+        let schema = get_arrow_schema(&None);
+        let table = write_data(setup_table(Some(vec!["id"])).await, &schema).await;
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 4);
+
+        let ctx = SessionContext::new();
+        let source = ctx.read_batch(single_row_source(&schema)).unwrap();
+
+        let (_table, metrics) = table
+            .merge(
+                source,
+                col("target.id")
+                    .eq(col("source.id"))
+                    .and(col("target.id").eq(lit("B"))),
+            )
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| update.update("value", col("source.value")))
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate(col("target.id").eq(lit("B")))
+                    .update("value", col("target.value") + lit(1))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.num_target_files_scanned, 1);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 3);
+    }
+
+    #[tokio::test]
+    async fn test_merge_unconditional_not_matched_by_source_scans_all() {
+        // #4535 guard: an unconditional clause can touch any row, so the full scan must remain.
+        let schema = get_arrow_schema(&None);
+        let table = write_data(setup_table(Some(vec!["id"])).await, &schema).await;
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 4);
+
+        let ctx = SessionContext::new();
+        let source = ctx.read_batch(single_row_source(&schema)).unwrap();
+
+        let (_table, metrics) = table
+            .merge(
+                source,
+                col("target.id")
+                    .eq(col("source.id"))
+                    .and(col("target.id").eq(lit("B"))),
+            )
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| update.update("value", col("source.value")))
+            .unwrap()
+            .when_not_matched_by_source_delete(|delete| delete)
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.num_target_files_scanned, 4);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 0);
+    }
+
     #[tokio::test]
     async fn test_merge_partitions_with_in() {
         /* Validate the join predicate works with table partitions */
@@ -5562,7 +5832,7 @@ mod tests {
 
         let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
-        assert!(!parameters.contains_key("predicate"));
+        assert!(parameters.contains_key("predicate"));
 
         let expected = vec![
             "+----+-------+------------+",

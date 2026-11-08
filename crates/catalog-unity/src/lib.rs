@@ -58,6 +58,7 @@ pub mod prelude;
 
 /// Possible errors from the unity-catalog/tables API call
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum UnityCatalogError {
     #[error("GET request error: {source}")]
     /// Error from reqwest library
@@ -182,6 +183,7 @@ impl From<UnityCatalogError> for DeltaTableError {
 }
 
 /// Configuration options for unity catalog client
+#[non_exhaustive]
 pub enum UnityCatalogConfigKey {
     /// Url of a Databricks workspace
     ///
@@ -691,7 +693,6 @@ impl UnityCatalogBuilder {
 }
 
 /// Databricks Unity Catalog
-
 pub struct UnityCatalog {
     client: reqwest_middleware::ClientWithMiddleware,
     cc_client: Option<UCDeltaTableClient>,

@@ -114,6 +114,7 @@ pub(crate) async fn file_paths_from(
 }
 
 /// Reference tables from the test data folder
+#[non_exhaustive]
 pub enum TestTables {
     /// The canonical `simple_table` fixture.
     Simple,

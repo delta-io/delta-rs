@@ -58,3 +58,6 @@ name = "uc_example"
 path = "examples/uc_example.rs"
 required-features = ["datafusion", "aws"]
 
+
+[lints]
+workspace = true

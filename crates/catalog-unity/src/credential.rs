@@ -44,6 +44,7 @@ pub trait TokenCredential: std::fmt::Debug + Send + Sync + 'static {
 
 /// Provides credentials for use when signing requests
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum CredentialProvider {
     /// static bearer token
     BearerToken(String),
