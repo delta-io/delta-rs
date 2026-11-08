@@ -222,9 +222,21 @@ fn plan_drop_columns_actions(
 
     let dropped: HashSet<String> = removed.iter().cloned().collect();
 
+    // Keep the surviving fields exactly as they are so their column mapping metadata
+    // (physical name and field id) carries over untouched. `delta.columnMapping.maxColumnId`
+    // is deliberately left alone: it must never be decremented or reused, so that a future
+    // `ADD COLUMN` cannot collide with a dropped column's physical id.
+    let updated_table_schema = StructType::try_new(
+        table_schema
+            .fields()
+            .filter(|f| !dropped.contains(&f.name))
+            .cloned(),
+    )?;
+
     // A table must retain at least one column - `CREATE TABLE` rejects an empty schema, so a
-    // drop must not be able to produce one either.
-    if dropped.len() == table_schema.fields().count() {
+    // drop must not be able to produce one either. Check the resulting schema rather than
+    // count the dropped names, so the check holds however the fields are dropped.
+    if updated_table_schema.num_fields() == 0 {
         return Err(DeltaTableError::Generic(
             "Cannot drop all columns of a table; a table must have at least one column".to_string(),
         ));
@@ -267,17 +279,6 @@ fn plan_drop_columns_actions(
         table_schema.as_ref().try_into_arrow()?;
     let df_schema = arrow_schema.to_dfschema()?;
     let dropped_constraints = check_dependents(&snapshot, &dropped, &df_schema, session)?;
-
-    // Keep the surviving fields exactly as they are so their column mapping metadata
-    // (physical name and field id) carries over untouched. `delta.columnMapping.maxColumnId`
-    // is deliberately left alone: it must never be decremented or reused, so that a future
-    // `ADD COLUMN` cannot collide with a dropped column's physical id.
-    let updated_table_schema = StructType::try_new(
-        table_schema
-            .fields()
-            .filter(|f| !dropped.contains(&f.name))
-            .cloned(),
-    )?;
 
     let current_protocol = snapshot.protocol;
     let new_protocol = current_protocol
