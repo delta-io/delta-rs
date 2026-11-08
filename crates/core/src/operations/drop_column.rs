@@ -111,7 +111,8 @@ fn referenced_columns(expr: &datafusion::logical_expr::Expr) -> HashSet<String> 
 }
 
 /// Reject the drop if any check constraint, invariant, or generated column that survives it
-/// still references one of the columns being dropped.
+/// still references one of the columns being dropped. The error lists every such reference,
+/// one per line, in sorted order.
 ///
 /// Returns the names of the check constraints that only reference dropped columns; they go
 /// away together with those columns.
@@ -124,11 +125,11 @@ fn check_dependents(
 ) -> DeltaResult<Vec<String>> {
     let table_configuration = &snapshot.table_configuration;
 
-    let conflict = |dependent: String, column: &str| {
-        DeltaTableError::Generic(format!(
-            "Cannot drop column '{column}': it is referenced by the {dependent}. \
-             Remove or update it first."
-        ))
+    let mut conflicts = Vec::new();
+    let mut add_conflicts = |dependent: String, referenced: &HashSet<String>| {
+        conflicts.extend(referenced.intersection(dropped).map(|column| {
+            format!("Cannot drop column '{column}': it is referenced by the {dependent}.")
+        }));
     };
 
     let mut dropped_constraints = Vec::new();
@@ -142,12 +143,10 @@ fn check_dependents(
                 dropped_constraints.push(constraint.name);
                 continue;
             }
-            if let Some(column) = referenced.intersection(dropped).next() {
-                return Err(conflict(
-                    format!("check constraint '{}'", constraint.name),
-                    column,
-                ));
-            }
+            add_conflicts(
+                format!("check constraint '{}'", constraint.name),
+                &referenced,
+            );
         }
     }
 
@@ -157,12 +156,10 @@ fn check_dependents(
         // invariant on a surviving column may not reference one that is going away.
         for invariant in updated_schema.get_invariants()? {
             let expr = parse_predicate_expression(df_schema, &invariant.invariant_sql, session)?;
-            if let Some(column) = referenced_columns(&expr).intersection(dropped).next() {
-                return Err(conflict(
-                    format!("invariant on '{}'", invariant.field_name),
-                    column,
-                ));
-            }
+            add_conflicts(
+                format!("invariant on '{}'", invariant.field_name),
+                &referenced_columns(&expr),
+            );
         }
     }
 
@@ -176,13 +173,19 @@ fn check_dependents(
                 continue;
             }
             let expr = parse_generated_column_expression(df_schema, &generated, session)?;
-            if let Some(column) = referenced_columns(&expr).intersection(dropped).next() {
-                return Err(conflict(
-                    format!("generated column '{}'", generated.name),
-                    column,
-                ));
-            }
+            add_conflicts(
+                format!("generated column '{}'", generated.name),
+                &referenced_columns(&expr),
+            );
         }
+    }
+
+    if !conflicts.is_empty() {
+        conflicts.sort();
+        return Err(DeltaTableError::Generic(format!(
+            "{}\nRemove or update these references first.",
+            conflicts.join("\n")
+        )));
     }
 
     Ok(dropped_constraints)
@@ -795,6 +798,31 @@ mod tests {
         assert!(
             err.to_string().contains("generated column 'doubled'"),
             "got: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_lists_every_reference_in_sorted_order() -> TestResult {
+        let table = generated_column_table()
+            .await?
+            .add_constraint()
+            .with_constraint("positive", "id > 0 OR value != '' OR doubled > 0")
+            .await?;
+
+        let err = table
+            .drop_columns()
+            .with_columns(["value", "id"])
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Generic DeltaTable error: \
+             Cannot drop column 'id': it is referenced by the check constraint 'positive'.\n\
+             Cannot drop column 'id': it is referenced by the generated column 'doubled'.\n\
+             Cannot drop column 'value': it is referenced by the check constraint 'positive'.\n\
+             Remove or update these references first."
         );
         Ok(())
     }
