@@ -2,8 +2,10 @@ use arrow::array::{Int32Array, StringArray, StructArray};
 use arrow::datatypes::{DataType as ArrowDataType, Field, Fields, Schema as ArrowSchema};
 use arrow::record_batch::RecordBatch;
 use datafusion::assert_batches_sorted_eq;
+use datafusion::prelude::SessionContext;
 use futures::TryStreamExt as _;
 
+use crate::kernel::transaction::{CommitConflictError, TransactionError};
 use crate::kernel::{ArrayType, DataType, MapType, PrimitiveType, StructField};
 use crate::writer::test_utils::TestResult;
 use crate::writer::test_utils::datafusion::get_data;
@@ -143,6 +145,95 @@ async fn drop_columns_does_not_conflict_with_a_concurrent_delete() -> TestResult
     let table = stale.drop_columns().with_columns(["legacy"]).await?;
 
     assert!(table.snapshot()?.schema().field("legacy").is_none());
+    Ok(())
+}
+
+/// A batch for `column_mapped_table` with one row per id.
+fn rows(ids: &[i32]) -> RecordBatch {
+    RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Int32, true),
+            Field::new("value", ArrowDataType::Utf8, true),
+            Field::new("legacy", ArrowDataType::Utf8, true),
+        ])),
+        vec![
+            Arc::new(Int32Array::from(ids.to_vec())),
+            Arc::new(StringArray::from(vec!["v"; ids.len()])),
+            Arc::new(StringArray::from(vec!["l"; ids.len()])),
+        ],
+    )
+    .unwrap()
+}
+
+/// Return whether `result` failed because a concurrent commit changed the table metadata.
+fn is_metadata_conflict<T>(result: &DeltaResult<T>) -> bool {
+    matches!(
+        result,
+        Err(DeltaTableError::Transaction {
+            source: TransactionError::CommitConflict(CommitConflictError::MetadataChanged),
+        })
+    )
+}
+
+#[tokio::test]
+async fn drop_columns_does_not_conflict_with_a_concurrent_write() -> TestResult {
+    let table = column_mapped_table().await?.write(vec![rows(&[1])]).await?;
+    let stale = table.clone();
+    table.write(vec![rows(&[2])]).await?;
+
+    // The drop does not depend on the data, so it commits after the write. The new file holds
+    // `legacy` like the older one, and reads skip it in both.
+    let table = stale.drop_columns().with_columns(["legacy"]).await?;
+
+    assert_batches_sorted_eq!(
+        [
+            "+----+-------+",
+            "| id | value |",
+            "+----+-------+",
+            "| 1  | v     |",
+            "| 2  | v     |",
+            "+----+-------+",
+        ],
+        &get_data(&table).await
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn drop_columns_makes_a_concurrent_write_conflict() -> TestResult {
+    let table = column_mapped_table().await?.write(vec![rows(&[1])]).await?;
+    let stale = table.clone();
+    table.drop_columns().with_columns(["legacy"]).await?;
+
+    // The write was planned against the schema before the drop.
+    let result = stale.write(vec![rows(&[2])]).await;
+
+    assert!(is_metadata_conflict(&result), "got: {:?}", result.err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn drop_columns_makes_a_concurrent_merge_conflict() -> TestResult {
+    let table = column_mapped_table().await?.write(vec![rows(&[1])]).await?;
+    let stale = table.clone();
+    table.drop_columns().with_columns(["legacy"]).await?;
+
+    // The merge was planned against the schema before the drop.
+    let source = SessionContext::new().read_batch(rows(&[1, 2]))?;
+    let result = stale
+        .merge(source, "target.id = source.id")
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .when_matched_update(|update| update.update("legacy", "source.legacy"))?
+        .when_not_matched_insert(|insert| {
+            insert
+                .set("id", "source.id")
+                .set("value", "source.value")
+                .set("legacy", "source.legacy")
+        })?
+        .await;
+
+    assert!(is_metadata_conflict(&result), "got: {:?}", result.err());
     Ok(())
 }
 
