@@ -23,20 +23,21 @@ use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::schema::StructType;
 use delta_kernel::table_features::{ColumnMappingMode, TableFeature};
 use futures::future::BoxFuture;
+use itertools::Itertools as _;
 
-use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::create_session;
 use crate::delta_datafusion::expr::{
     parse_generated_column_expression, parse_predicate_expression,
 };
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
+use crate::kernel::transaction::{CommitProperties, PROTOCOL};
 use crate::kernel::{
-    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, SnapshotMetadataRef, StructTypeExt,
-    resolve_snapshot,
+    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, SnapshotMetadataRef, StructField,
+    StructTypeExt, resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
+use crate::operations::commit_actions_in_scope;
 use crate::protocol::DeltaOperation;
-use crate::table::config::TablePropertiesExt as _;
+use crate::table::config::{TablePropertiesExt as _, TableProperty};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -54,16 +55,6 @@ pub struct DropColumnsBuilder {
     commit_properties: CommitProperties,
     /// Datafusion session used to parse constraint / generated column expressions
     session: Option<Arc<dyn Session>>,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
-}
-
-impl super::Operation for DropColumnsBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
 }
 
 impl DropColumnsBuilder {
@@ -76,7 +67,6 @@ impl DropColumnsBuilder {
             log_store,
             commit_properties: CommitProperties::default(),
             session: None,
-            custom_execute_handler: None,
         }
     }
 
@@ -103,12 +93,6 @@ impl DropColumnsBuilder {
         self.session = Some(session);
         self
     }
-
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
-        self
-    }
 }
 
 /// Return the set of column names referenced by a SQL expression.
@@ -124,42 +108,62 @@ fn referenced_columns(expr: &datafusion::logical_expr::Expr) -> HashSet<String> 
         .collect()
 }
 
-/// Reject the drop if any check constraint, invariant, or generated column still references
-/// one of the columns being dropped.
-fn ensure_no_dependents(
+/// Reject the drop if any check constraint, invariant, or generated column that survives it
+/// still references one of the columns being dropped.
+///
+/// Returns the names of the check constraints that only reference dropped columns; they go
+/// away together with those columns.
+fn check_dependents(
     snapshot: &SnapshotMetadataRef<'_>,
     dropped: &HashSet<String>,
     df_schema: &DFSchema,
     session: &dyn Session,
-) -> DeltaResult<()> {
+) -> DeltaResult<Vec<String>> {
     let table_configuration = &snapshot.table_configuration;
 
-    let conflict = |kind: &str, name: &str, column: &str| {
+    let conflict = |dependent: String, column: &str| {
         DeltaTableError::Generic(format!(
-            "Cannot drop column '{column}': it is referenced by the {kind} '{name}'. \
-             Remove or update the {kind} first."
+            "Cannot drop column '{column}': it is referenced by the {dependent}. \
+             Remove or update it first."
         ))
     };
 
+    let mut dropped_constraints = Vec::new();
     if table_configuration.is_feature_enabled(&TableFeature::CheckConstraints) {
         for constraint in table_configuration.table_properties().get_constraints() {
             let expr = parse_predicate_expression(df_schema, &constraint.expr, session)?;
-            if let Some(column) = referenced_columns(&expr).intersection(dropped).next() {
-                return Err(conflict("check constraint", &constraint.name, column));
+            let referenced = referenced_columns(&expr);
+            // A constraint that only checks dropped columns goes with them, the same as the
+            // expression of a dropped generated column.
+            if !referenced.is_empty() && referenced.is_subset(dropped) {
+                dropped_constraints.push(constraint.name);
+                continue;
+            }
+            if let Some(column) = referenced.intersection(dropped).next() {
+                return Err(conflict(
+                    format!("check constraint '{}'", constraint.name),
+                    column,
+                ));
             }
         }
     }
 
     if table_configuration.is_feature_enabled(&TableFeature::Invariants) {
         for invariant in table_configuration.logical_schema().get_invariants()? {
-            let expr = parse_predicate_expression(df_schema, &invariant.invariant_sql, session)?;
-            // An invariant declared *on* a dropped column disappears with it, but an
-            // invariant on a surviving column may not reference one that is going away.
-            if dropped.contains(&invariant.field_name) {
+            // An invariant declared *on* a dropped column, or on a field nested inside one,
+            // disappears with it, but an invariant on a surviving column may not reference
+            // one that is going away.
+            let field_name = invariant.field_name.as_str();
+            if dropped.iter().any(|column| {
+                field_name
+                    .strip_prefix(column.as_str())
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+            }) {
                 continue;
             }
+            let expr = parse_predicate_expression(df_schema, &invariant.invariant_sql, session)?;
             if let Some(column) = referenced_columns(&expr).intersection(dropped).next() {
-                return Err(conflict("invariant on", &invariant.field_name, column));
+                return Err(conflict(format!("invariant on '{field_name}'"), column));
             }
         }
     }
@@ -175,12 +179,15 @@ fn ensure_no_dependents(
             }
             let expr = parse_generated_column_expression(df_schema, &generated, session)?;
             if let Some(column) = referenced_columns(&expr).intersection(dropped).next() {
-                return Err(conflict("generated column", &generated.name, column));
+                return Err(conflict(
+                    format!("generated column '{}'", generated.name),
+                    column,
+                ));
             }
         }
     }
 
-    Ok(())
+    Ok(dropped_constraints)
 }
 
 /// Plan the actions for dropping `column_names`.
@@ -196,9 +203,10 @@ fn plan_drop_columns_actions(
     let table_schema = snapshot.table_configuration.logical_schema();
 
     // Resolve the requested names against the schema.
-    let mut removed = Vec::with_capacity(column_names.len());
+    let mut removed: Vec<StructField> = Vec::with_capacity(column_names.len());
     for name in column_names {
         match table_schema.field(name) {
+            Some(field) if removed.iter().any(|f| f.name == field.name) => {}
             Some(field) => removed.push(field.clone()),
             None if raise_if_not_exists => {
                 return Err(DeltaTableError::Generic(format!(
@@ -232,31 +240,33 @@ fn plan_drop_columns_actions(
         }
     }
 
-    // Stats are collected for an explicit column list when this property is set; dropping a
-    // listed column would leave a stale reference behind.
-    if let Some(stats_columns) = snapshot
+    // Stats are collected for an explicit column list when this property is set. Like Spark,
+    // remove the dropped columns, and any field nested inside one, from that list. The
+    // property is only rewritten when it lists a dropped column.
+    let stats_columns = snapshot
         .table_configuration
         .table_properties()
         .data_skipping_stats_columns
         .as_ref()
-    {
-        for stats_column in stats_columns {
-            // `ColumnName` renders as a (possibly backtick-quoted) dotted path.
-            let rendered = stats_column.to_string();
-            let column = rendered.trim_matches('`');
-            if dropped.contains(column) {
-                return Err(DeltaTableError::Generic(format!(
-                    "Cannot drop column '{column}': it is listed in \
-                     delta.dataSkippingStatsColumns. Update that property first."
-                )));
-            }
-        }
-    }
+        .and_then(|columns| {
+            let kept = columns
+                .iter()
+                .filter(|column| {
+                    !column
+                        .path()
+                        .first()
+                        .is_some_and(|name| dropped.contains(name))
+                })
+                .collect_vec();
+            // `ColumnName` renders as a dotted path with backtick-quoted parts where needed,
+            // which parses back to the same column.
+            (kept.len() < columns.len()).then(|| kept.iter().join(","))
+        });
 
     let arrow_schema: datafusion::arrow::datatypes::Schema =
         table_schema.as_ref().try_into_arrow()?;
     let df_schema = arrow_schema.to_dfschema()?;
-    ensure_no_dependents(&snapshot, &dropped, &df_schema, session)?;
+    let dropped_constraints = check_dependents(&snapshot, &dropped, &df_schema, session)?;
 
     // Keep the surviving fields exactly as they are so their column mapping metadata
     // (physical name and field id) carries over untouched. `delta.columnMapping.maxColumnId`
@@ -277,7 +287,16 @@ fn plan_drop_columns_actions(
 
     let operation = DeltaOperation::DropColumns { columns: removed };
 
-    let metadata = metadata.with_schema(&updated_table_schema)?;
+    let mut metadata = metadata.with_schema(&updated_table_schema)?;
+    for name in dropped_constraints {
+        metadata = metadata.remove_config_key(&format!("delta.constraints.{name}"))?;
+    }
+    if let Some(stats_columns) = stats_columns {
+        metadata = metadata.add_config_key(
+            TableProperty::DataSkippingStatsColumns.as_ref().to_string(),
+            stats_columns,
+        )?;
+    }
 
     let mut actions = vec![metadata.into()];
     if current_protocol != &new_protocol {
@@ -296,8 +315,7 @@ impl std::future::IntoFuture for DropColumnsBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
             PROTOCOL.can_write_to(&snapshot)?;
 
             if this.column_names.is_empty() {
@@ -305,7 +323,14 @@ impl std::future::IntoFuture for DropColumnsBuilder {
                     "No columns provided to drop".to_string(),
                 ));
             }
-            if let Some(name) = this.column_names.iter().find(|name| name.contains('.')) {
+            // A top-level column name may itself contain a dot, so only treat the name as a
+            // nested path when no top-level column matches it.
+            let schema = snapshot.schema();
+            if let Some(name) = this
+                .column_names
+                .iter()
+                .find(|name| name.contains('.') && schema.field(name).is_none())
+            {
                 return Err(DeltaTableError::Generic(format!(
                     "Cannot drop nested column '{name}': only top-level columns can be dropped"
                 )));
@@ -328,9 +353,6 @@ impl std::future::IntoFuture for DropColumnsBuilder {
                 .clone()
                 .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
 
-            let operation_id = this.get_operation_id();
-            this.pre_execute(operation_id).await?;
-
             let Some((actions, operation)) = plan_drop_columns_actions(
                 snapshot.snapshot().metadata_state(),
                 &this.column_names,
@@ -344,27 +366,23 @@ impl std::future::IntoFuture for DropColumnsBuilder {
                 ));
             };
 
-            let commit = CommitBuilder::from(this.commit_properties.clone())
-                .with_actions(actions)
-                .with_operation_id(operation_id)
-                .with_post_commit_hook_handler(this.get_custom_execute_handler())
-                .build(Some(&snapshot), this.log_store.clone(), operation)
-                .await?;
-
-            this.post_execute(operation_id).await?;
-
-            Ok(DeltaTable::new_with_state(
-                this.log_store,
-                commit.snapshot(),
-            ))
+            commit_actions_in_scope(
+                &this.log_store,
+                &snapshot,
+                this.commit_properties,
+                actions,
+                operation,
+            )
+            .await
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::kernel::{DataType, PrimitiveType, StructField};
-    use crate::table::config::TableProperty;
+    use futures::TryStreamExt as _;
+
+    use crate::kernel::{DataType, PrimitiveType};
     use crate::writer::test_utils::TestResult;
 
     use super::*;
@@ -400,7 +418,7 @@ mod tests {
         assert!(schema.field("id").is_some());
         assert!(schema.field("value").is_some());
 
-        let history: Vec<_> = table.history(Some(1)).await?.collect();
+        let history: Vec<_> = table.history(Some(1)).try_collect().await?;
         assert_eq!(history[0].operation.as_deref(), Some("DROP COLUMNS"));
         Ok(())
     }
@@ -572,11 +590,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drop_columns_rejects_column_used_by_constraint() -> TestResult {
+    async fn drop_columns_drops_constraint_on_dropped_column() -> TestResult {
         let table = column_mapped_table().await?;
         let table = table
             .add_constraint()
             .with_constraint("value_not_empty", "value != ''")
+            .with_constraint("id_positive", "id > 0")
+            .await?;
+
+        let table = table.drop_columns().with_columns(["value"]).await?;
+
+        let snapshot = table.snapshot()?;
+        let configuration = snapshot.metadata().configuration();
+        assert!(!configuration.contains_key("delta.constraints.value_not_empty"));
+        assert!(configuration.contains_key("delta.constraints.id_positive"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_drops_constraint_on_columns_dropped_together() -> TestResult {
+        let table = column_mapped_table().await?;
+        let table = table
+            .add_constraint()
+            .with_constraint("value_differs", "value != legacy")
+            .await?;
+
+        let table = table
+            .drop_columns()
+            .with_columns(["value", "legacy"])
+            .await?;
+
+        assert!(
+            !table
+                .snapshot()?
+                .metadata()
+                .configuration()
+                .contains_key("delta.constraints.value_differs")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_rejects_column_used_by_constraint() -> TestResult {
+        let table = column_mapped_table().await?;
+        let table = table
+            .add_constraint()
+            .with_constraint("value_not_empty", "value != '' OR id > 0")
             .await?;
 
         let err = table
@@ -593,24 +652,123 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drop_columns_rejects_column_in_stats_columns() -> TestResult {
+    async fn drop_columns_removes_column_from_stats_columns() -> TestResult {
         let table = DeltaTable::new_in_memory()
             .create()
-            .with_columns([id_field(), value_field()])
+            .with_columns([id_field(), value_field(), legacy_field()])
             .with_configuration_property(TableProperty::ColumnMappingMode, Some("name"))
-            .with_configuration_property(TableProperty::DataSkippingStatsColumns, Some("id,value"))
+            .with_configuration_property(
+                TableProperty::DataSkippingStatsColumns,
+                Some("id,value,legacy"),
+            )
             .await?;
 
-        let err = table
-            .drop_columns()
-            .with_columns(["value"])
-            .await
-            .unwrap_err();
+        let table = table.drop_columns().with_columns(["value"]).await?;
 
-        assert!(
-            err.to_string().contains("dataSkippingStatsColumns"),
-            "got: {err}"
+        assert_eq!(
+            table
+                .snapshot()?
+                .metadata()
+                .configuration()
+                .get("delta.dataSkippingStatsColumns")
+                .map(String::as_str),
+            Some("id,legacy")
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_removes_nested_fields_from_stats_columns() -> TestResult {
+        let nested = StructField::new(
+            "nested",
+            DataType::Struct(Box::new(StructType::try_new([StructField::new(
+                "inner",
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            )])?)),
+            true,
+        );
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([id_field(), nested])
+            .with_configuration_property(TableProperty::ColumnMappingMode, Some("name"))
+            .with_configuration_property(
+                TableProperty::DataSkippingStatsColumns,
+                Some("id,nested.inner"),
+            )
+            .await?;
+
+        let table = table.drop_columns().with_columns(["nested"]).await?;
+
+        assert_eq!(
+            table
+                .snapshot()?
+                .metadata()
+                .configuration()
+                .get("delta.dataSkippingStatsColumns")
+                .map(String::as_str),
+            Some("id")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_drops_struct_with_nested_invariant() -> TestResult {
+        let nested = StructField::new(
+            "nested",
+            DataType::Struct(Box::new(StructType::try_new([StructField::new(
+                "inner",
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            )
+            .with_metadata([(
+                "delta.invariants",
+                r#"{"expression": {"expression": "nested.inner > 0"}}"#,
+            )])])?)),
+            true,
+        );
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([id_field(), nested])
+            .with_configuration_property(TableProperty::ColumnMappingMode, Some("name"))
+            .await?;
+
+        let table = table.drop_columns().with_columns(["nested"]).await?;
+
+        assert!(table.snapshot()?.schema().field("nested").is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_drops_top_level_column_with_a_dot() -> TestResult {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                id_field(),
+                StructField::new("a.b", DataType::Primitive(PrimitiveType::String), true),
+            ])
+            .with_configuration_property(TableProperty::ColumnMappingMode, Some("name"))
+            .await?;
+
+        let table = table.drop_columns().with_columns(["a.b"]).await?;
+
+        assert!(table.snapshot()?.schema().field("a.b").is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_ignores_repeated_names() -> TestResult {
+        let table = column_mapped_table().await?;
+
+        let table = table
+            .drop_columns()
+            .with_columns(["legacy", "legacy"])
+            .await?;
+
+        let history: Vec<_> = table.history(Some(1)).try_collect().await?;
+        let columns = &history[0].operation_parameters.as_ref().unwrap()["columns"];
+        let columns: Vec<serde_json::Value> = serde_json::from_str(columns.as_str().unwrap())?;
+        assert_eq!(columns.len(), 1);
         Ok(())
     }
 }

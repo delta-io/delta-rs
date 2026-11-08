@@ -2646,11 +2646,13 @@ class TableAlterer:
         drop would require rewriting every data file, which is not supported, and the
         operation raises instead.
 
-        A column cannot be dropped if it is a partition column, if it is listed in
-        ``delta.dataSkippingStatsColumns``, or if it is still referenced by a check
-        constraint, an invariant, or a generated column. Dropping every column is also
-        rejected, since a table must keep at least one column. Nested (dotted) column paths
-        are not supported yet.
+        A column cannot be dropped if it is a partition column, or if it is still referenced
+        by an invariant or a generated column. A check constraint that only references
+        dropped columns is dropped with them; one that also references a remaining column
+        blocks the drop. Dropped columns, and any field nested inside them, are removed from
+        ``delta.dataSkippingStatsColumns``. Dropping every column is also rejected, since a
+        table must keep at least one column. Nested (dotted) column paths are not supported
+        yet.
 
         Args:
             column_names: the name of the column to drop, or a list of column names.

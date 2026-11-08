@@ -1156,10 +1156,6 @@ impl RawDeltaTable {
                 cmd = cmd.with_commit_properties(commit_properties);
             }
 
-            if self.log_store()?.name() == "LakeFSLogStore" {
-                cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
-            }
-
             rt().block_on(cmd.into_future())
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)

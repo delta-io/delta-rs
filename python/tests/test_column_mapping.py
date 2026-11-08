@@ -274,7 +274,7 @@ def test_column_mapping_drop_column(tmp_path: pathlib.Path):
     dt.alter.drop_columns("Super Name")
 
     assert dt.schema().to_arrow().names == ["Company Very Short"]
-    assert dt.history(1)[0]["operation"] == "DROP COLUMNS"
+    assert next(dt.history(1))["operation"] == "DROP COLUMNS"
 
     result = (
         QueryBuilder()
