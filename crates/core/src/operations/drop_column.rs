@@ -118,6 +118,7 @@ fn referenced_columns(expr: &datafusion::logical_expr::Expr) -> HashSet<String> 
 fn check_dependents(
     snapshot: &SnapshotMetadataRef<'_>,
     dropped: &HashSet<String>,
+    updated_schema: &StructType,
     df_schema: &DFSchema,
     session: &dyn Session,
 ) -> DeltaResult<Vec<String>> {
@@ -151,21 +152,16 @@ fn check_dependents(
     }
 
     if table_configuration.is_feature_enabled(&TableFeature::Invariants) {
-        for invariant in table_configuration.logical_schema().get_invariants()? {
-            // An invariant declared *on* a dropped column, or on a field nested inside one,
-            // disappears with it, but an invariant on a surviving column may not reference
-            // one that is going away.
-            let field_name = invariant.field_name.as_str();
-            if dropped.iter().any(|column| {
-                field_name
-                    .strip_prefix(column.as_str())
-                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
-            }) {
-                continue;
-            }
+        // An invariant declared *on* a dropped column, or on a field nested inside one,
+        // disappears with it, so only the invariants of the resulting schema are checked. An
+        // invariant on a surviving column may not reference one that is going away.
+        for invariant in updated_schema.get_invariants()? {
             let expr = parse_predicate_expression(df_schema, &invariant.invariant_sql, session)?;
             if let Some(column) = referenced_columns(&expr).intersection(dropped).next() {
-                return Err(conflict(format!("invariant on '{field_name}'"), column));
+                return Err(conflict(
+                    format!("invariant on '{}'", invariant.field_name),
+                    column,
+                ));
             }
         }
     }
@@ -280,7 +276,13 @@ fn plan_drop_columns_actions(
     let arrow_schema: datafusion::arrow::datatypes::Schema =
         table_schema.as_ref().try_into_arrow()?;
     let df_schema = arrow_schema.to_dfschema()?;
-    let dropped_constraints = check_dependents(&snapshot, &dropped, &df_schema, session)?;
+    let dropped_constraints = check_dependents(
+        &snapshot,
+        &dropped,
+        &updated_table_schema,
+        &df_schema,
+        session,
+    )?;
 
     let current_protocol = snapshot.protocol;
     let new_protocol = current_protocol
@@ -340,13 +342,15 @@ impl std::future::IntoFuture for DropColumnsBuilder {
                 ));
             }
             // A top-level column name may itself contain a dot, so only treat the name as a
-            // nested path when no top-level column matches it.
+            // nested path when no top-level column matches it and the path resolves to a
+            // nested field. Any other name is missing and follows `raise_if_not_exists`.
             let schema = snapshot.schema();
-            if let Some(name) = this
-                .column_names
-                .iter()
-                .find(|name| name.contains('.') && schema.field(name).is_none())
-            {
+            if let Some(name) = this.column_names.iter().find(|name| {
+                schema.field(name).is_none()
+                    && name.parse::<ColumnName>().is_ok_and(|column| {
+                        column.path().len() > 1 && schema.field_at(&column).is_ok()
+                    })
+            }) {
                 return Err(DeltaTableError::Generic(format!(
                     "Cannot drop nested column '{name}': only top-level columns can be dropped"
                 )));
@@ -533,11 +537,26 @@ mod tests {
 
     #[tokio::test]
     async fn drop_columns_rejects_nested_paths() -> TestResult {
-        let table = column_mapped_table().await?;
+        let nested = StructField::new(
+            "nested",
+            DataType::Struct(Box::new(StructType::try_new([StructField::new(
+                "inner",
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            )])?)),
+            true,
+        );
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([id_field(), nested])
+            .with_configuration_property(TableProperty::ColumnMappingMode, Some("name"))
+            .await?;
 
+        // A nested field that exists is rejected even when missing columns are ignored.
         let err = table
             .drop_columns()
-            .with_columns(["value.nested"])
+            .with_columns(["nested.inner"])
+            .with_raise_if_not_exists(false)
             .await
             .unwrap_err();
 
@@ -572,6 +591,39 @@ mod tests {
 
         assert_eq!(table.version(), version_before, "should not have committed");
         assert!(table.snapshot()?.schema().field("id").is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_rejects_unknown_nested_path() -> TestResult {
+        let table = column_mapped_table().await?;
+
+        let err = table
+            .drop_columns()
+            .with_columns(["value.nested"])
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("No column with the name 'value.nested'"),
+            "got: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_unknown_nested_path_is_noop_when_not_raising() -> TestResult {
+        let table = column_mapped_table().await?;
+        let version_before = table.version();
+
+        let table = table
+            .drop_columns()
+            .with_columns(["does_not.exist"])
+            .with_raise_if_not_exists(false)
+            .await?;
+
+        assert_eq!(table.version(), version_before, "should not have committed");
         Ok(())
     }
 
@@ -768,6 +820,67 @@ mod tests {
         let table = table.drop_columns().with_columns(["nested"]).await?;
 
         assert!(table.snapshot()?.schema().field("nested").is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_rejects_column_used_by_invariant_on_column_with_a_dot() -> TestResult {
+        // The top-level column `a.b` is not nested inside `a`, so dropping `a` keeps its
+        // invariant.
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                id_field(),
+                StructField::new("a", DataType::Primitive(PrimitiveType::Integer), true),
+                StructField::new("a.b", DataType::Primitive(PrimitiveType::Integer), true)
+                    .with_metadata([(
+                        "delta.invariants",
+                        r#"{"expression": {"expression": "a > 0"}}"#,
+                    )]),
+            ])
+            .with_configuration_property(TableProperty::ColumnMappingMode, Some("name"))
+            .await?;
+
+        let err = table.drop_columns().with_columns(["a"]).await.unwrap_err();
+
+        assert!(err.to_string().contains("invariant on 'a.b'"), "got: {err}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_rejects_column_with_a_dot_used_by_nested_invariant() -> TestResult {
+        // The field `b` of the struct `a` is not the top-level column `a.b`, so dropping `a.b`
+        // keeps its invariant.
+        let a = StructField::new(
+            "a",
+            DataType::Struct(Box::new(StructType::try_new([StructField::new(
+                "b",
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            )
+            .with_metadata([(
+                "delta.invariants",
+                r#"{"expression": {"expression": "`a.b` > 0"}}"#,
+            )])])?)),
+            true,
+        );
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                id_field(),
+                a,
+                StructField::new("a.b", DataType::Primitive(PrimitiveType::Integer), true),
+            ])
+            .with_configuration_property(TableProperty::ColumnMappingMode, Some("name"))
+            .await?;
+
+        let err = table
+            .drop_columns()
+            .with_columns(["a.b"])
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("invariant on 'a.b'"), "got: {err}");
         Ok(())
     }
 

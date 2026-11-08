@@ -14,6 +14,7 @@ from deltalake import (
 from deltalake.exceptions import DeltaError
 from deltalake.schema import Field as DeltaField
 from deltalake.schema import PrimitiveType, StructType
+from deltalake.schema import Schema as DeltaSchema
 
 if TYPE_CHECKING:
     pass
@@ -616,13 +617,21 @@ def test_drop_columns_requires_column_mapping(
         dt.alter.drop_columns("price")
 
 
-def test_drop_columns_nested_column_rejected(
-    tmp_path: pathlib.Path, sample_table: Table
-):
+def test_drop_columns_nested_column_rejected(tmp_path: pathlib.Path):
     """Nested (dotted) column paths are not supported yet."""
-    write_deltalake(tmp_path, sample_table)
-
-    dt = DeltaTable(tmp_path)
+    dt = DeltaTable.create(
+        tmp_path,
+        schema=DeltaSchema(
+            [
+                DeltaField("id", PrimitiveType("integer")),
+                DeltaField(
+                    "some_struct",
+                    StructType([DeltaField("nested", PrimitiveType("integer"))]),
+                ),
+            ]
+        ),
+        configuration={"delta.columnMapping.mode": "name"},
+    )
 
     with pytest.raises(DeltaError, match="only top-level columns"):
         dt.alter.drop_columns("some_struct.nested")
