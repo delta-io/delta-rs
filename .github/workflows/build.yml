@@ -91,6 +91,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       DEFAULT_FEATURES: "datafusion"
+      CARGO_LLVM_COV_RUSTC_WRAPPER: "sccache"
 
     steps:
       # v6.0.2

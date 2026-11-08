@@ -1,7 +1,5 @@
-use datafusion::common::tree_node::{Transformed, TreeNode as _};
 use datafusion::common::{Result, ScalarValue, plan_datafusion_err, plan_err};
 use datafusion::logical_expr::expr::InList;
-use datafusion::logical_expr::utils::{conjunction, disjunction};
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
 use delta_kernel::expressions::{
     BinaryExpression, BinaryExpressionOp, BinaryPredicate, BinaryPredicateOp, ColumnName,
@@ -17,7 +15,7 @@ use crate::kernel::scalars::ScalarExt;
 /// If the expression converts to a Delta predicate, returns it directly.
 /// Otherwise, wraps the expression as a boolean expression predicate.
 pub(crate) fn to_delta_predicate(expr: &Expr) -> Result<Predicate> {
-    match to_delta_expression(&normalize_delta_predicate_expr(expr)?)? {
+    match to_delta_expression(expr)? {
         Expression::Predicate(pred) => Ok(pred.as_ref().clone()),
         expr => Ok(Predicate::BooleanExpression(expr)),
     }
@@ -33,7 +31,6 @@ pub(crate) fn to_delta_predicate(expr: &Expr) -> Result<Predicate> {
 pub(crate) fn is_exact_partition_predicate(expr: &Expr, partition_columns: &[String]) -> bool {
     let is_partition_column =
         |expr: &Expr| matches!(expr, Expr::Column(c) if partition_columns.contains(&c.name));
-    let is_non_null_literal = |expr: &Expr| matches!(expr, Expr::Literal(v, _) if !v.is_null());
 
     match expr {
         Expr::BinaryExpr(BinaryExpr {
@@ -68,54 +65,40 @@ pub(crate) fn is_exact_partition_predicate(expr: &Expr, partition_columns: &[Str
     }
 }
 
-fn normalize_delta_predicate_expr(expr: &Expr) -> Result<Expr> {
-    let transformed = expr.clone().transform_up(|expr| match expr {
-        Expr::InList(in_list) => Ok(match rewrite_in_list_expr_for_kernel(&in_list) {
-            Some(lowered) => Transformed::yes(lowered),
-            None => Transformed::no(Expr::InList(in_list)),
-        }),
-        other => Ok(Transformed::no(other)),
-    })?;
-
-    Ok(transformed.data)
+fn is_non_null_literal(expr: &Expr) -> bool {
+    matches!(expr, Expr::Literal(v, _) if !v.is_null())
 }
 
-/// Rewrites supported `IN` / `NOT IN` expressions into conjunctions or
-/// disjunctions that can be converted into Delta kernel predicates.
-///
-/// Returns `None` when any list item cannot be rewritten without changing the
-/// meaning of the predicate. In that case callers should leave the original
-/// `Expr::InList` unchanged and let downstream conversion decide how to handle it.
-fn rewrite_in_list_expr_for_kernel(in_list: &InList) -> Option<Expr> {
-    if in_list.list.is_empty() {
-        return Some(Expr::Literal(
-            ScalarValue::Boolean(Some(in_list.negated)),
-            None,
-        ));
+/// Converts `x [NOT] IN (a, b, ...)` into one flat junction, so depth does not grow with
+/// the list length. Lists with NULL or non-literal items are not converted.
+fn in_list_to_delta_predicate(in_list: &InList) -> Result<Predicate> {
+    if !in_list.list.iter().all(is_non_null_literal) {
+        return plan_err!(
+            "Cannot convert to kernel expression: {:?}",
+            Expr::InList(in_list.clone())
+        );
     }
 
-    let list = in_list
+    let expr = to_delta_expression(&in_list.expr)?;
+    let preds = in_list
         .list
         .iter()
-        .map(|item| match item {
-            Expr::Literal(value, _) if !value.is_null() => Some(item.clone()),
-            _ => None,
+        .map(|item| {
+            let eq = Predicate::eq(expr.clone(), to_delta_expression(item)?);
+            Ok(if in_list.negated {
+                Predicate::not(eq)
+            } else {
+                eq
+            })
         })
-        .collect::<Option<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?;
 
-    let lowered_terms = list.into_iter().map(|item| {
-        if in_list.negated {
-            in_list.expr.as_ref().clone().not_eq(item)
-        } else {
-            in_list.expr.as_ref().clone().eq(item)
-        }
-    });
-
-    if in_list.negated {
-        conjunction(lowered_terms)
+    let op = if in_list.negated {
+        JunctionPredicateOp::And
     } else {
-        disjunction(lowered_terms)
-    }
+        JunctionPredicateOp::Or
+    };
+    Ok(Predicate::junction(op, preds))
 }
 
 /// Converts a DataFusion expression to a Delta kernel expression.
@@ -125,6 +108,9 @@ pub(crate) fn to_delta_expression(expr: &Expr) -> Result<Expression> {
         Expr::Literal(scalar, _meta) => {
             Ok(Expression::Literal(datafusion_scalar_to_scalar(scalar)?))
         }
+        Expr::InList(in_list) => Ok(Expression::Predicate(Box::new(in_list_to_delta_predicate(
+            in_list,
+        )?))),
         Expr::BinaryExpr(BinaryExpr {
             op: op @ (Operator::And | Operator::Or),
             ..
@@ -360,20 +346,22 @@ fn to_binary_op(op: Operator) -> Result<BinaryExpressionOp> {
     }
 }
 
-/// Helper function to flatten nested AND/OR expressions into a single junction expression
+/// Helper function to flatten nested AND/OR expressions into a single junction expression.
+/// Iterative, so a long `a OR b OR ...` chain does not overflow the stack.
 fn flatten_junction_expr(expr: &Expr, target_op: Operator) -> Result<Vec<Predicate>> {
-    match expr {
-        Expr::BinaryExpr(BinaryExpr { op, left, right }) if *op == target_op => {
-            let mut left_exprs = flatten_junction_expr(left.as_ref(), target_op)?;
-            let mut right_exprs = flatten_junction_expr(right.as_ref(), target_op)?;
-            left_exprs.append(&mut right_exprs);
-            Ok(left_exprs)
-        }
-        _ => {
-            let delta_expr = to_delta_predicate(expr)?;
-            Ok(vec![delta_expr])
+    let mut preds = Vec::new();
+    let mut pending = vec![expr];
+    while let Some(expr) = pending.pop() {
+        match expr {
+            Expr::BinaryExpr(BinaryExpr { op, left, right }) if *op == target_op => {
+                // Push right first so terms come out left to right.
+                pending.push(right.as_ref());
+                pending.push(left.as_ref());
+            }
+            _ => preds.push(to_delta_predicate(expr)?),
         }
     }
+    Ok(preds)
 }
 
 fn to_junction_op(op: Operator) -> JunctionPredicateOp {
@@ -491,6 +479,85 @@ mod tests {
     }
 
     #[test]
+    fn test_large_in_list_converts_to_flat_junction() {
+        // Pin the stack to the 2 MiB default so RUST_MIN_STACK cannot hide a regression.
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let n = 10_000i64;
+                let list: Vec<Expr> = (0..n).map(lit).collect();
+                let other = col("p").eq(lit(1));
+                for negated in [false, true] {
+                    let in_list = col("id").in_list(list.clone(), negated);
+                    let terms = (0..n).map(|i| {
+                        let eq = Predicate::eq(
+                            Expression::Column(ColumnName::new(["id"])),
+                            Expression::Literal(Scalar::Long(i)),
+                        );
+                        if negated { Predicate::not(eq) } else { eq }
+                    });
+                    let expected = if negated {
+                        Predicate::and_from(terms)
+                    } else {
+                        Predicate::or_from(terms)
+                    };
+                    assert_eq!(to_delta_predicate(&in_list).unwrap(), expected);
+
+                    let nested = other.clone().and(in_list);
+                    assert_eq!(
+                        to_delta_predicate(&nested).unwrap(),
+                        Predicate::and_from([to_delta_predicate(&other).unwrap(), expected])
+                    );
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// Drops a left-deep chain one node at a time. DataFusion's recursive `Drop` can overflow
+    /// a 2 MiB stack on a 10,000-deep chain (seen on Windows CI).
+    fn drop_chain(mut expr: Expr) {
+        while let Expr::BinaryExpr(BinaryExpr { left, .. }) = expr {
+            expr = *left;
+        }
+    }
+
+    #[test]
+    fn test_long_junction_chain_converts_to_flat_junction() {
+        // Pin the stack to the 2 MiB default so RUST_MIN_STACK cannot hide a regression.
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let n = 10_000i64;
+                let term = |i| col("id").eq(lit(i));
+                let expected_terms = || {
+                    (0..n).map(|i| {
+                        Predicate::eq(
+                            Expression::Column(ColumnName::new(["id"])),
+                            Expression::Literal(Scalar::Long(i)),
+                        )
+                    })
+                };
+                let or_chain = (1..n).fold(term(0), |acc, i| acc.or(term(i)));
+                assert_eq!(
+                    to_delta_predicate(&or_chain).unwrap(),
+                    Predicate::or_from(expected_terms())
+                );
+                drop_chain(or_chain);
+                let and_chain = (1..n).fold(term(0), |acc, i| acc.and(term(i)));
+                assert_eq!(
+                    to_delta_predicate(&and_chain).unwrap(),
+                    Predicate::and_from(expected_terms())
+                );
+                drop_chain(and_chain);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
     fn test_empty_in_list_rewrites_to_boolean_constant() {
         let expr = col("part").in_list(Vec::<Expr>::new(), false);
         assert_eq!(
@@ -506,17 +573,24 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_delta_predicate_expr_leaves_non_literal_in_list_unchanged() {
+    fn test_non_literal_in_list_is_not_converted() {
         let expr = col("part").in_list(vec![lit("a"), col("other")], false);
 
-        assert_eq!(normalize_delta_predicate_expr(&expr).unwrap(), expr);
+        assert!(to_delta_predicate(&expr).is_err());
     }
 
     #[test]
-    fn test_normalize_delta_predicate_expr_leaves_not_in_list_with_null_unchanged() {
+    fn test_not_in_list_with_null_is_not_converted() {
         let expr = col("part").in_list(vec![lit("a"), lit(ScalarValue::Utf8(None))], true);
 
-        assert_eq!(normalize_delta_predicate_expr(&expr).unwrap(), expr);
+        assert!(to_delta_predicate(&expr).is_err());
+    }
+
+    #[test]
+    fn test_single_item_in_list_converts_to_bare_predicate() {
+        let expr = col("part").in_list(vec![lit("a")], false);
+
+        assert_string_equality_predicate(&to_delta_predicate(&expr).unwrap(), "part", "a");
     }
 
     #[test]

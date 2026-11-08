@@ -23,6 +23,8 @@ use arrow::datatypes::{DataType as ArrowDataType, SchemaRef};
 use delta_kernel::actions::{Remove, Sidecar};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
+use delta_kernel::history_manager::error::{LogHistoryError, NearestTimestamp};
+use delta_kernel::history_manager::{HistoryCommitType, get_earliest_commit, latest_version_as_of};
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::derive_macro_utils::ToDataType;
@@ -243,7 +245,7 @@ impl Snapshot {
             Ok(snapshot) => snapshot,
             Err(e) => {
                 // TODO: we should have more handling-friendly errors upstream in kernel.
-                if e.to_string().contains("No files in log segment") {
+                if matches!(e, delta_kernel::KernelError::EmptyLog) {
                     return Err(DeltaTableError::NotATable(e.to_string()));
                 } else {
                     return Err(e.into());
@@ -1042,7 +1044,7 @@ impl Snapshot {
         {
             Ok(data) => data,
             Err(err) => {
-                return Box::pin(once(ready(Err(DeltaTableError::KernelError(err)))));
+                return Box::pin(once(ready(Err(err.into()))));
             }
         };
 
@@ -1110,6 +1112,50 @@ impl Snapshot {
                 .await
                 .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
         Ok(metadata)
+    }
+
+    /// The latest version committed at or before `timestamp` (milliseconds since the Unix epoch).
+    ///
+    /// Commits made while in-commit timestamps are enabled are compared by their
+    /// `inCommitTimestamp`, earlier commits by the modification time of their log file. A
+    /// timestamp before the earliest available commit resolves to that commit.
+    pub(crate) async fn version_at_timestamp(
+        &self,
+        log_store: &dyn LogStore,
+        timestamp: i64,
+    ) -> DeltaResult<Version> {
+        let engine = log_store.engine();
+        let inner = self.inner.clone();
+        let version = spawn_blocking_with_span(move || {
+            match latest_version_as_of(
+                &inner,
+                engine.as_ref(),
+                timestamp,
+                HistoryCommitType::Published,
+            ) {
+                Ok(commit) => Ok(commit.version),
+                Err(delta_kernel::KernelError::LogHistory(err))
+                    if matches!(
+                        *err,
+                        LogHistoryError::TimestampOutOfRange {
+                            nearest_timestamp: NearestTimestamp::Earliest(_),
+                            ..
+                        }
+                    ) =>
+                {
+                    get_earliest_commit(
+                        engine.as_ref(),
+                        &inner.log_segment().log_root,
+                        None,
+                        HistoryCommitType::Published,
+                    )
+                }
+                Err(err) => Err(err),
+            }
+        })
+        .await
+        .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
+        Ok(version)
     }
 }
 
@@ -1254,7 +1300,7 @@ async fn read_last_checkpoint_version(
             .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
         match storage.read_files(vec![(checkpoint_path, None)])?.next() {
             Some(Ok(data)) => Ok(parse_last_checkpoint_hint(&data).map(|hint| hint.version)),
-            Some(Err(delta_kernel::Error::FileNotFound(_))) => Ok(None),
+            Some(Err(delta_kernel::KernelError::FileNotFound(_))) => Ok(None),
             Some(Err(err)) => Err(err.into()),
             None => {
                 tracing::warn!("empty _last_checkpoint file");

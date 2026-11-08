@@ -129,7 +129,7 @@ fn group_by_partition_key(arrays: &[ArrayRef]) -> DeltaResult<Vec<UInt32Array>> 
 
     // Sort to keep the partition order stable
     let mut grouped: Vec<_> = rows_by_key.into_iter().collect();
-    grouped.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+    grouped.sort_unstable_by_key(|(a, _)| *a);
 
     Ok(grouped
         .into_iter()

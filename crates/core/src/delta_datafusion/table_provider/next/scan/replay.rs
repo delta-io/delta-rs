@@ -11,18 +11,15 @@ use std::{
     task::{Context, Poll},
 };
 
-use arrow::{array::BooleanArray, compute::filter_record_batch};
 use arrow_array::RecordBatch;
 use datafusion::{
-    common::{
-        ColumnStatistics, HashMap, Statistics, error::DataFusionErrorBuilder, stats::Precision,
-    },
+    common::{ColumnStatistics, Statistics, error::DataFusionErrorBuilder, stats::Precision},
     error::DataFusionError,
     scalar::ScalarValue,
 };
 use delta_kernel::{
     Engine, ExpressionRef,
-    engine::{arrow_conversion::TryIntoArrow, arrow_data::ArrowEngineData},
+    engine::arrow_data::ArrowEngineData,
     engine_data::FilteredEngineData,
     expressions::{Scalar, StructData},
     scan::{
@@ -114,16 +111,6 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
-        let physical_arrow = this
-            .kernel_scan
-            .physical_schema()
-            .as_ref()
-            .try_into_arrow()
-            .map_err(DeltaTableError::from);
-        let physical_arrow = match physical_arrow {
-            Ok(schema) => schema,
-            Err(err) => return Poll::Ready(Some(Err(err))),
-        };
         match this.stream.poll_next(cx) {
             Poll::Ready(Some(Ok(scan_data))) => {
                 let scan_data = if let Some(selection) = this.file_selection {
@@ -144,10 +131,18 @@ where
                     Err(err) => return Poll::Ready(Some(Err(err.into()))),
                 };
 
-                let (data, selection_vector) = scan_data.scan_files.into_parts();
-                let batch = ArrowEngineData::try_from_engine_data(data)?.into();
-                let scan_files =
-                    filter_record_batch(&batch, &BooleanArray::from(selection_vector))?;
+                let scan_files: RecordBatch = ArrowEngineData::try_from_engine_data(
+                    scan_data.scan_files.apply_selection_vector()?,
+                )?
+                .into();
+                // `zip` would silently truncate mismatched inputs.
+                if scan_files.num_rows() != ctx.files.len() {
+                    return Poll::Ready(Some(Err(DeltaTableError::generic(format!(
+                        "Invariant violation: scan metadata has {} selected rows but {} file contexts",
+                        scan_files.num_rows(),
+                        ctx.files.len()
+                    )))));
+                }
 
                 // Spawn tasks to read the deletion vectors from disk.
                 for (index, file) in ctx.files.iter().enumerate() {
@@ -198,35 +193,17 @@ where
                 let parsed_stats =
                     parse_stats_column_with_schema(snapshot.as_ref(), &scan_files, stats_schema)?;
 
-                let mut file_statistics = extract_file_statistics(
+                let file_statistics = extract_file_statistics(
                     this.kernel_scan,
                     this.scan_config,
                     parsed_stats,
                     &stats_projection,
                 );
-
-                // Unknown stats for files with no parsed entry. Match the column shape of
-                // `extract_file_statistics`: empty when no column stats are emitted (#4522).
-                let unknown_stats = || {
-                    if stats_projection.emits_any_column_stats() {
-                        Statistics::new_unknown(&physical_arrow)
-                    } else {
-                        Statistics {
-                            num_rows: Precision::Absent,
-                            total_byte_size: Precision::Absent,
-                            column_statistics: Vec::new(),
-                        }
-                    }
-                };
                 Poll::Ready(Some(Ok(ctx
                     .files
                     .into_iter()
-                    .map(|ctx| {
-                        let (stats, partitions) = file_statistics
-                            .remove(&ctx.file_url)
-                            .unwrap_or_else(|| (unknown_stats(), None));
-                        ScanFileContext::new(ctx, stats, partitions)
-                    })
+                    .zip(file_statistics)
+                    .map(|(ctx, (stats, partitions))| ScanFileContext::new(ctx, stats, partitions))
                     .collect_vec())))
             }
             Poll::Ready(None) => Poll::Ready(None),
@@ -252,16 +229,16 @@ where
 ///
 /// # Returns
 ///
-/// A map from file URL to DataFusion statistics and optional partition values.
+/// DataFusion statistics and optional partition values for each `parsed_stats` row, in row order.
 fn extract_file_statistics(
     scan: &KernelScan,
     scan_config: &DeltaScanConfig,
     parsed_stats: RecordBatch,
     stats_projection: &StatsProjection,
-) -> HashMap<Url, (Statistics, Option<StructData>)> {
+) -> impl Iterator<Item = (Statistics, Option<StructData>)> {
     (0..parsed_stats.num_rows())
         .map(move |idx| LogicalFileView::new(parsed_stats.clone(), idx))
-        .filter_map(|view| {
+        .map(move |view| {
             let num_rows = view
                 .num_records()
                 .map(Precision::Exact)
@@ -332,19 +309,15 @@ fn extract_file_statistics(
                     .collect_vec()
             };
 
-            Some((
-                parse_path(scan.snapshot().table_root(), view.path_raw()).ok()?,
-                (
-                    Statistics {
-                        num_rows,
-                        total_byte_size,
-                        column_statistics,
-                    },
-                    view.partition_values(),
-                ),
-            ))
+            (
+                Statistics {
+                    num_rows,
+                    total_byte_size,
+                    column_statistics,
+                },
+                view.partition_values(),
+            )
         })
-        .collect()
 }
 
 #[inline]
@@ -539,11 +512,24 @@ fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
+    use datafusion::common::stats::Precision;
+    use delta_kernel::Engine;
+    use delta_kernel::engine_data::FilteredEngineData;
+    use delta_kernel::scan::ScanMetadata;
     use delta_kernel::scan::state::{DvInfo, ScanFile};
+    use futures::{TryStreamExt, stream};
     use url::Url;
 
-    use super::{ScanContext, visit_scan_file};
+    use super::super::plan::KernelScanPlan;
+    use super::{ScanContext, ScanFileContext, ScanFileStream, visit_scan_file};
+    use crate::DeltaResult;
+    use crate::delta_datafusion::{
+        DeltaScanConfig, engine::DataFusionEngine, session::create_session,
+    };
+    use crate::kernel::Snapshot;
+    use crate::test_utils::{TestResult, open_fs_path};
 
     fn scan_file(path: impl Into<String>) -> ScanFile {
         ScanFile {
@@ -574,6 +560,99 @@ mod tests {
         assert_eq!(
             ctx.files[0].file_url.as_str(),
             "file:///tmp/delta/part-000.parquet"
+        );
+    }
+
+    /// Replays `table_with_column_mapping` (2 files: 4 and 1 rows), applying `edit` to each batch.
+    async fn replay_two_file_table(
+        edit: impl Fn(ScanMetadata) -> DeltaResult<ScanMetadata>,
+    ) -> TestResult<Vec<ScanFileContext>> {
+        let log_store = open_fs_path("../test/tests/data/table_with_column_mapping").log_store();
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
+        let scan_plan =
+            KernelScanPlan::try_new(&snapshot, None, &[], &DeltaScanConfig::default(), None)?;
+        let session = create_session().into_inner();
+        let engine: Arc<dyn Engine> = DataFusionEngine::new_from_session(&session.state());
+        let metadata: Vec<ScanMetadata> = scan_plan
+            .scan
+            .scan_metadata(engine.clone())
+            .try_collect()
+            .await?;
+        let replayed: Vec<Vec<ScanFileContext>> = ScanFileStream::new(
+            engine,
+            &scan_plan.scan,
+            DeltaScanConfig::default(),
+            None,
+            stream::iter(metadata.into_iter().map(edit)),
+        )
+        .try_collect()
+        .await?;
+        Ok(replayed.into_iter().flatten().collect())
+    }
+
+    /// Drops trailing `true` entries. Missing entries are implicitly true,
+    /// so the same rows stay selected with a shorter vector.
+    fn with_short_selection_vector(metadata: ScanMetadata) -> DeltaResult<ScanMetadata> {
+        let (data, mut selection_vector) = metadata.scan_files.into_parts();
+        while selection_vector.pop_if(|selected| *selected).is_some() {}
+        Ok(ScanMetadata {
+            scan_files: FilteredEngineData::try_new(data, selection_vector)?,
+            ..metadata
+        })
+    }
+
+    /// Selects non-file metadata rows too, triggering the row-count check.
+    fn with_all_rows_selected(metadata: ScanMetadata) -> DeltaResult<ScanMetadata> {
+        let (data, _) = metadata.scan_files.into_parts();
+        Ok(ScanMetadata {
+            scan_files: FilteredEngineData::with_all_rows_selected(data),
+            ..metadata
+        })
+    }
+
+    fn row_counts_by_file(files: &[ScanFileContext]) -> Vec<(String, Precision<usize>)> {
+        let mut row_counts = files
+            .iter()
+            .map(|file| {
+                let name = file.file_url.path().rsplit('/').next().unwrap();
+                (name.to_string(), file.stats.num_rows)
+            })
+            .collect::<Vec<_>>();
+        row_counts.sort_by(|left, right| left.0.cmp(&right.0));
+        row_counts
+    }
+
+    #[tokio::test]
+    async fn test_replay_pairs_each_file_with_its_statistics() -> TestResult {
+        let expected = vec![
+            (
+                "part-00000-4d6e745c-8e04-48d9-aa60-438228358f1a.c000.zstd.parquet".to_string(),
+                Precision::Exact(4),
+            ),
+            (
+                "part-00001-69b4a452-aeac-4ffa-bf5c-a0c2833d05eb.c000.zstd.parquet".to_string(),
+                Precision::Exact(1),
+            ),
+        ];
+        let explicit = replay_two_file_table(Ok).await?;
+        let implicit = replay_two_file_table(with_short_selection_vector).await?;
+
+        assert_eq!(row_counts_by_file(&explicit), expected);
+        assert_eq!(
+            row_counts_by_file(&implicit),
+            expected,
+            "short selection vector"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replay_rejects_selected_rows_without_file_context() {
+        let result = replay_two_file_table(with_all_rows_selected).await;
+        let err = result.expect_err("row count mismatch").to_string();
+        assert!(
+            err.contains("Invariant violation: scan metadata has"),
+            "{err}"
         );
     }
 }

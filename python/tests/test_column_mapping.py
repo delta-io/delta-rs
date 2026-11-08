@@ -12,7 +12,7 @@ import pytest
 from arro3.core import Array, DataType, Table
 from arro3.core import Field as ArrowField
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import DeltaTable, TableFeatures, write_deltalake
 from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
 
@@ -182,3 +182,84 @@ def test_column_mapping_merge_schema_evolution_rejected(tmp_path: pathlib.Path):
             .when_not_matched_insert_all()
             .execute()
         )
+
+
+def _new_column_mapping_table(tmp_path: pathlib.Path, configuration=None) -> str:
+    table_uri = str(tmp_path / "new_column_mapping")
+    write_deltalake(
+        table_uri,
+        _cm_data(["BME", "BMS"], ["Timothy Lamb", "Nathan Bennett"]),
+        configuration={"delta.columnMapping.mode": "name", **(configuration or {})},
+    )
+    return table_uri
+
+
+def _assert_column_mapping_feature(table_uri: str) -> None:
+    protocol = DeltaTable(table_uri).protocol()
+    assert (protocol.min_reader_version, protocol.min_writer_version) == (3, 7)
+    assert protocol.reader_features is not None
+    assert protocol.writer_features is not None
+    assert "columnMapping" in protocol.reader_features
+    assert "columnMapping" in protocol.writer_features
+
+
+@pytest.mark.parametrize(
+    "enable_deletion_vectors",
+    [
+        lambda dt: dt.alter.set_table_properties(
+            {"delta.enableDeletionVectors": "true"}
+        ),
+        lambda dt: dt.alter.add_feature(
+            TableFeatures.DeletionVectors, allow_protocol_versions_increase=True
+        ),
+    ],
+    ids=["set_table_properties", "add_feature"],
+)
+def test_column_mapping_kept_when_upgrading_to_table_features(
+    tmp_path: pathlib.Path, enable_deletion_vectors
+):
+    table_uri = _new_column_mapping_table(tmp_path)
+
+    enable_deletion_vectors(DeltaTable(table_uri))
+    write_deltalake(table_uri, _cm_data(["BMT"], ["New Customer"]), mode="append")
+
+    assert _cm_read(table_uri, '"Super Name"') == [
+        {"Company Very Short": "BMS", "Super Name": "Nathan Bennett"},
+        {"Company Very Short": "BMT", "Super Name": "New Customer"},
+        {"Company Very Short": "BME", "Super Name": "Timothy Lamb"},
+    ]
+    _assert_column_mapping_feature(table_uri)
+
+
+def test_create_column_mapping_table_with_deletion_vectors(tmp_path: pathlib.Path):
+    table_uri = _new_column_mapping_table(
+        tmp_path, {"delta.enableDeletionVectors": "true"}
+    )
+
+    assert _cm_read(table_uri, '"Super Name"') == [
+        {"Company Very Short": "BMS", "Super Name": "Nathan Bennett"},
+        {"Company Very Short": "BME", "Super Name": "Timothy Lamb"},
+    ]
+    _assert_column_mapping_feature(table_uri)
+    assert "deletionVectors" in DeltaTable(table_uri).protocol().reader_features
+
+
+def test_column_mapping_protocol_unchanged_without_table_features(
+    tmp_path: pathlib.Path,
+):
+    table_uri = _new_column_mapping_table(tmp_path)
+
+    DeltaTable(table_uri).alter.set_table_properties(
+        {
+            "delta.enableChangeDataFeed": "true",
+            "delta.logRetentionDuration": "interval 2 days",
+        }
+    )
+
+    protocol = DeltaTable(table_uri).protocol()
+    assert (
+        protocol.min_reader_version,
+        protocol.min_writer_version,
+        protocol.reader_features,
+        protocol.writer_features,
+    ) == (2, 5, None, None)

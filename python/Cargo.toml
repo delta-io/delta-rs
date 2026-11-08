@@ -18,7 +18,8 @@ crate-type = ["cdylib"]
 doc = false
 
 [package.metadata.cargo-machete]
-ignored = ["deltalake-catalog-unity"]
+# cc is a resolution-only pin (see the workspace Cargo.toml), not used in code
+ignored = ["deltalake-catalog-unity", "cc"]
 
 [dependencies]
 delta_kernel.workspace = true
@@ -69,6 +70,12 @@ tracing-subscriber = { workspace = true }
 # Non-unix or emscripten os
 [target.'cfg(any(not(target_family = "unix"), target_os = "emscripten"))'.dependencies]
 mimalloc = { version = "0.1", default-features = false }
+
+# Resolution-only pin: cc is not used by a build script here, but declaring it
+# forces the workspace-wide resolver to honor the version pinned in the root
+# Cargo.toml (Cargo.lock is gitignored). Remove together with that pin.
+[build-dependencies]
+cc = { workspace = true }
 
 # Unix (excluding macOS, emscripten & FreeBSD) → jemalloc
 # FreeBSD's system malloc is already jemalloc-derived, and the bundled

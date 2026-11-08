@@ -9,11 +9,11 @@ use chrono::{TimeZone, Utc};
 use delta_kernel::snapshot::Snapshot;
 use futures::{StreamExt, TryStreamExt};
 use regex::Regex;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::kernel::{Version, spawn_blocking_with_span};
 use crate::logstore::{DELTA_LOG_REGEX, LogStore, with_operation};
-use crate::table::config::TablePropertiesExt as _;
+use crate::table::config::{TablePropertiesExt as _, TableProperty};
 use crate::{DeltaResult, DeltaTableError};
 use crate::{DeltaTable, open_table_with_version};
 
@@ -40,6 +40,17 @@ pub(crate) async fn create_checkpoint_for(
     })
     .await
     .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
+
+    #[allow(deprecated)]
+    let rle_key = TableProperty::CheckpointUseRunLengthEncoding.as_ref();
+    if snapshot
+        .table_configuration()
+        .metadata()
+        .configuration()
+        .contains_key(rle_key)
+    {
+        warn!("{rle_key} is deprecated and ignored: checkpoint encoding is not configurable");
+    }
 
     snapshot.checkpoint(engine.as_ref(), None)?;
     Ok(())
@@ -190,7 +201,7 @@ pub async fn cleanup_expired_logs_for(
     debug!("safe_checkpoint_version: {}", safe_checkpoint_version);
 
     // Step 4: Delete DELTA_LOG files where log_ver < safe_checkpoint_version && ts <= cutoff_timestamp
-    let locations = futures::stream::iter(log_entries.into_iter())
+    let locations = futures::stream::iter(log_entries)
         .filter_map(move |meta: Result<crate::ObjectMeta, _>| async move {
             let meta = match meta {
                 Ok(m) => m,
@@ -319,6 +330,45 @@ mod tests {
             .expect("Failed to get the _last_checkpoint")
             .expect("Expected checkpoint hint");
         assert_eq!(last_checkpoint.version, 0);
+    }
+
+    #[tokio::test]
+    #[allow(deprecated)]
+    async fn test_create_checkpoint_warns_on_run_length_encoding_property() {
+        #[derive(Clone, Default)]
+        struct Logs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Logs {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let logs = Logs::default();
+        let writer = logs.clone();
+        let _guard = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_writer(move || writer.clone())
+                .finish(),
+        );
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_configuration_property(
+                TableProperty::CheckpointUseRunLengthEncoding,
+                Some("false"),
+            )
+            .await
+            .unwrap();
+        create_checkpoint_for(0, table.log_store.as_ref())
+            .await
+            .unwrap();
+
+        let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        assert!(logs.contains("delta-rs.checkpoint.useRunLengthEncoding is deprecated"));
     }
 
     #[tokio::test]

@@ -6,14 +6,11 @@ use delta_kernel::{Engine, EvaluationHandler, JsonHandler, ParquetHandler, Stora
 use tokio::runtime::Handle;
 
 pub(crate) use self::expressions::*;
-use self::file_formats::DataFusionFileFormatHandler;
-pub use self::storage::AsObjectStoreUrl;
-use self::storage::DataFusionStorageHandler;
 use crate::kernel::ARROW_HANDLER;
+pub use deltalake_kernel_executor::AsObjectStoreUrl;
+use deltalake_kernel_executor::{DataFusionFileFormatHandler, DataFusionStorageHandler};
 
 mod expressions;
-mod file_formats;
-mod storage;
 
 /// A Datafusion based Kernel Engine
 #[derive(Clone)]

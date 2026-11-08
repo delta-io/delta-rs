@@ -97,6 +97,9 @@ source = ["deltalake"]
 [dependency-groups]
 dev = [
     "arro3-io",
+    "numpy",
+    # NumPy 2.3 is the first release with Windows ARM64 wheels.
+    "numpy>=2.3; sys_platform == 'win32' and platform_machine == 'ARM64'",
     "pytest",
     "pytest-benchmark",
     "pytest-cov",
@@ -106,6 +109,7 @@ dev = [
     "mypy==1.10.1",
     "ruff>=0.11.2,<0.11.12",
     "types-deprecated>=1.2.15.20250304",
+    "tzdata; sys_platform == 'win32'",
     "testcontainers[minio]>=4.13.0",
 ]
 opentelemetry = ["opentelemetry-sdk>=1.20.0", "opentelemetry-api>=1.20.0"]
@@ -134,5 +138,8 @@ bench = [
 ]
 
 [tool.uv]
+# uv 0.13.4 drops the distrusted eMudhra emSign CA certificates.
+# https://discuss.python.org/t/information-for-python-users-regarding-emudhra-emsign-ca-certificate-security-incident/109576
+required-version = ">=0.13.4"
 # Re-enable a Python DataFusion dependency group once DataFusion 55 wheels are published.
 default-groups = ["dev", "opentelemetry", "polars", "lakefs", "other"]

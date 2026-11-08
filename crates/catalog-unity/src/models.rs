@@ -434,6 +434,7 @@ pub enum ColumnTypeName {
     Null,
     UserDefinedType,
     TableType,
+    Variant,
 }
 
 #[derive(Deserialize, Default, Debug)]
@@ -825,6 +826,19 @@ pub(crate) mod tests {
         let get_schema: Result<GetSchemaResponse, _> = serde_json::from_str(GET_SCHEMA_RESPONSE);
         assert!(get_schema.is_ok());
         assert!(matches!(get_schema.unwrap(), GetSchemaResponse::Success(_)))
+    }
+
+    #[test]
+    fn test_variant_table_response() {
+        let body = GET_TABLE_RESPONSE.replace(r#""BOOLEAN""#, r#""VARIANT""#);
+        let response: GetTableResponse = serde_json::from_str(&body).unwrap();
+        let GetTableResponse::Success(table) = response else {
+            panic!("expected a successful table response");
+        };
+        assert_eq!(
+            serde_json::to_value(table.columns[0].type_name).unwrap(),
+            serde_json::json!("VARIANT")
+        );
     }
 
     #[test]

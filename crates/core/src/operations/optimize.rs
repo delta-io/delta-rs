@@ -811,6 +811,20 @@ impl MergePlan {
         commit_properties: CommitProperties,
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
+        // Every commit depends on all files in the plan, so a file removed concurrently before
+        // a later commit is still detected when there are multiple commits
+        let read_files: Arc<[Add]> = match &operations {
+            OptimizeOperations::Compact(bins) => bins
+                .values()
+                .flat_map(|(_, bins)| bins.iter().flat_map(MergeBin::iter))
+                .cloned()
+                .collect(),
+            OptimizeOperations::ZOrder(_, bins) => bins
+                .values()
+                .flat_map(|(_, bin)| bin.iter())
+                .cloned()
+                .collect(),
+        };
         let read_session = self.read_session.clone();
         info!("starting optimize execution");
         let object_store = log_store.object_store();
@@ -962,6 +976,7 @@ impl MergePlan {
 
                 let commit = CommitBuilder::from(properties)
                     .with_actions(actions)
+                    .with_read_files(read_files.clone())
                     .with_max_retries(DEFAULT_RETRIES + commits_made)
                     .build(
                         Some(&snapshot),
@@ -1509,8 +1524,9 @@ pub(super) mod zorder {
 
     use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
     use arrow_array::{Array, ArrayRef, BinaryArray};
-    use arrow_buffer::bit_util::{get_bit_raw, set_bit_raw, unset_bit_raw};
-    use arrow_row::{Row, RowConverter, SortField};
+    use arrow_buffer::bit_iterator::BitIndexIterator;
+    use arrow_buffer::bit_util::set_bit_raw;
+    use arrow_row::{RowConverter, SortField};
     use arrow_schema::ArrowError;
     // use arrow_schema::Schema as ArrowSchema;
 
@@ -1885,6 +1901,7 @@ pub(super) mod zorder {
     ///   when interleaving.
     /// * `num_columns` - The number of columns in the input array. Used to
     ///   determine offset when interleaving.
+    /// * `out` - The zero-initialized output buffer. Only set bits are written.
     fn set_bits_for_column(
         input: ArrayRef,
         col_pos: usize,
@@ -1898,8 +1915,9 @@ pub(super) mod zorder {
         for (row_i, row) in rows.iter().enumerate() {
             // How many bytes to get to this row's out position
             let row_offset = row_i * num_columns * 16;
-            for bit_i in 0..128 {
-                let bit = row.get_bit(bit_i);
+            let bytes = row.as_ref();
+            let prefix_bits = bytes.len().min(16) * 8;
+            for bit_i in BitIndexIterator::new(bytes, 0, prefix_bits) {
                 // Position of bit within the value. We place a value every
                 // `num_columns` bits, offset by `col_pos` when interleaving.
                 // So if there are 3 columns, and we are the second column, then
@@ -1907,32 +1925,11 @@ pub(super) mod zorder {
                 let bit_pos = (bit_i * num_columns) + col_pos;
                 let out_pos = (row_offset * 8) + bit_pos;
                 // Safety: we pre-sized the output vector in the outer function
-                if bit {
-                    unsafe { set_bit_raw(out.as_mut_ptr(), out_pos) };
-                } else {
-                    unsafe { unset_bit_raw(out.as_mut_ptr(), out_pos) };
-                }
+                unsafe { set_bit_raw(out.as_mut_ptr(), out_pos) };
             }
         }
 
         Ok(())
-    }
-
-    trait RowBitUtil {
-        fn get_bit(&self, bit_i: usize) -> bool;
-    }
-
-    impl RowBitUtil for Row<'_> {
-        /// Get the bit at the given index, or just give false if the index is out of bounds
-        fn get_bit(&self, bit_i: usize) -> bool {
-            let byte_i = bit_i / 8;
-            let bytes = self.as_ref();
-            if byte_i >= bytes.len() {
-                return false;
-            }
-            // Safety: we just did a bounds check above
-            unsafe { get_bit_raw(bytes.as_ptr(), bit_i) }
-        }
     }
 
     #[cfg(test)]
@@ -1985,6 +1982,18 @@ pub(super) mod zorder {
             let data: &BinaryArray = as_generic_binary_array(result.as_ref());
             assert_eq!(data.value_data().len(), 3 * 16 * 3);
             assert!(data.iter().all(|x| x.unwrap().len() == 3 * 16));
+            // Pins bit order, column interleaving and the 16-byte prefix.
+            assert_eq!(
+                data.value_data(),
+                &[
+                    28, 0, 0, 133, 128, 13, 130, 0, 9, 128, 4, 9, 128, 32, 9, 2, 0, 9, 130, 4, 1,
+                    16, 32, 9, 18, 32, 9, 147, 36, 73, 16, 36, 1, 0, 0, 1, 2, 0, 8, 0, 0, 1, 144,
+                    4, 9, 2, 0, 9, 28, 0, 0, 26, 129, 13, 2, 0, 9, 128, 32, 9, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 19, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+                ]
+            );
         }
 
         #[tokio::test]

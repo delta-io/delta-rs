@@ -505,6 +505,94 @@ This will result in:
 2  3  8
 ```
 
+## Multiple conditional clauses
+
+Every `when_*` clause accepts an optional `predicate`, so a single `merge()` can
+express different actions for different subsets of matched rows. When several
+clauses of the same kind are given, they are evaluated in order and the first
+clause whose predicate is true wins for each row (see [Multiple Matches](#multiple-matches)).
+
+For example, given the following target and source tables:
+
+```python
+target_data = pa.table({"order_id": [1, 2, 3], "amount": [100, 200, 300],
+                        "status": ["open", "open", "closed"]})
+write_deltalake("tmp_table", target_data)
+dt = DeltaTable("tmp_table")
+source_data = pa.table({"order_id": [1, 2, 3], "amount": [300, 250, 300]})
+```
+
+Flag orders where the amount jumped by more than 50% for manual review, and
+apply the new amount directly for all other matched orders:
+
+```python
+(
+    dt.merge(
+        source=source_data,
+        predicate="target.order_id = source.order_id",
+        source_alias="source",
+        target_alias="target")
+    .when_matched_update(
+        predicate="source.amount > target.amount * 1.5",
+        updates={"amount": "source.amount", "status": "'review'"})
+    .when_matched_update(
+        updates={"amount": "source.amount"})
+    .execute()
+)
+```
+
+This will result in:
+
+```python
+> dt.to_pandas().sort_values("order_id", ignore_index=True)
+
+   order_id  amount  status
+0         1     300  review
+1         2     250    open
+2         3     300  closed
+```
+
+Only order `1` trips the first clause (`300 > 100 * 1.5`); orders `2` and `3`
+fall through to the second clause, which updates the amount and leaves `status`
+untouched.
+
+The same per-clause `predicate` works on inserts: only insert source rows that
+satisfy an extra condition. For example:
+
+```python
+target_data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+write_deltalake("tmp_table", target_data)
+dt = DeltaTable("tmp_table")
+source_data = pa.table({"x": [4, 5], "y": [7, -1]})
+
+(
+    dt.merge(
+        source=source_data,
+        predicate="target.x = source.x",
+        source_alias="source",
+        target_alias="target")
+    .when_not_matched_insert(
+        predicate="source.y > 0",
+        updates={"x": "source.x", "y": "source.y"})
+    .execute()
+)
+```
+
+This will result in:
+
+```python
+> dt.to_pandas().sort_values("x", ignore_index=True)
+
+   x  y
+0  1  4
+1  2  5
+2  3  6
+3  4  7
+```
+
+The row with `x = 5` is not inserted because its `y` value (`-1`) fails the
+insert predicate.
+
 ## Conditional Updates
 
 You can perform conditional updates for rows that have no match in the source data using [when_not_matched_by_source_update][deltalake.table.TableMerger.when_not_matched_by_source_update].
