@@ -47,3 +47,6 @@ harness = false
 [[bench]]
 name = "vacuum"
 harness = false
+
+[lints]
+workspace = true

@@ -5,6 +5,7 @@
 
 /// Errors raised while compiling or running a kernel plan on DataFusion.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// The plan uses an operator, expression, or I/O operation this executor does not handle yet.
     #[error("unsupported by the DataFusion plan executor: {0}")]
