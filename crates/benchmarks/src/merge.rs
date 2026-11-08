@@ -22,6 +22,7 @@ pub struct MergePerfParams {
 }
 
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub enum MergeScenario {
     SingleInsertOnly,
     MultipleInsertOnly,

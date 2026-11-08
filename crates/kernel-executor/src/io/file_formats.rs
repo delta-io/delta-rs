@@ -8,7 +8,7 @@ use datafusion::execution::{
 use delta_kernel::engine::parse_json as arrow_parse_json;
 use delta_kernel::{
     EngineData, FileDataReadResultIterator, FileMeta, FilteredEngineData, JsonHandler,
-    ParquetHandler, PredicateRef, error::DeltaResult as KernelResult, schema::SchemaRef,
+    ParquetHandler, PredicateRef, error::KernelResult, schema::SchemaRef,
 };
 use delta_kernel_default_engine::{
     executor::tokio::{TokioBackgroundExecutor, TokioMultiThreadExecutor},
@@ -55,7 +55,7 @@ impl DataFusionFileFormatHandler {
             let store = self
                 .registry()
                 .get_store(url.as_ref())
-                .map_err(delta_kernel::Error::generic_err)?;
+                .map_err(delta_kernel::KernelError::generic_err)?;
 
             let handler: Arc<dyn ParquetHandler> = match self.handle.runtime_flavor() {
                 RuntimeFlavor::MultiThread => Arc::new(DefaultParquetHandler::new(
@@ -68,7 +68,7 @@ impl DataFusionFileFormatHandler {
                 )),
                 _ => panic!("unsupported runtime flavor"),
             };
-            Ok::<_, delta_kernel::Error>(handler)
+            Ok::<_, delta_kernel::KernelError>(handler)
         })?;
         Ok(handler.downgrade())
     }
@@ -88,7 +88,7 @@ impl DataFusionFileFormatHandler {
                 let store = self
                     .registry()
                     .get_store(url.as_ref())
-                    .map_err(delta_kernel::Error::generic_err)?;
+                    .map_err(delta_kernel::KernelError::generic_err)?;
 
                 let handler: Arc<dyn JsonHandler> = match self.handle.runtime_flavor() {
                     RuntimeFlavor::MultiThread => Arc::new(DefaultJsonHandler::new(
@@ -101,7 +101,7 @@ impl DataFusionFileFormatHandler {
                     )),
                     _ => panic!("unsupported runtime flavor"),
                 };
-                Ok::<_, delta_kernel::Error>(handler)
+                Ok::<_, delta_kernel::KernelError>(handler)
             })?;
         Ok(handler.downgrade())
     }
@@ -138,7 +138,7 @@ impl ParquetHandler for DataFusionFileFormatHandler {
         &self,
         location: url::Url,
         data: Box<dyn Iterator<Item = KernelResult<Box<dyn EngineData>>> + Send>,
-    ) -> KernelResult<()> {
+    ) -> KernelResult<u64> {
         self.parquet_handler_for(location.as_object_store_url())?
             .write_parquet_file(location, data)
     }

@@ -115,7 +115,7 @@ mod tests {
     use delta_kernel::engine::arrow_data::ArrowEngineData;
     use delta_kernel::schema::{DataType, MetadataValue, SchemaRef, StructField, StructType};
     use delta_kernel::{
-        EngineData, Error, FileDataReadResultIterator, FileMeta, FilteredEngineData,
+        EngineData, FileDataReadResultIterator, FileMeta, FilteredEngineData, KernelError as Error,
     };
     use url::Url;
 

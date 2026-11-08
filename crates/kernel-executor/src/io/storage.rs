@@ -8,7 +8,9 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::execution::TaskContext;
 use datafusion::execution::object_store::{ObjectStoreRegistry, ObjectStoreUrl};
 use delta_kernel::plans::ir::nodes::ScanFile;
-use delta_kernel::{DeltaResult, Error as DeltaError, FileMeta, FileSlice, StorageHandler};
+use delta_kernel::{
+    FileMeta, FileSlice, KernelError as DeltaError, KernelResult as DeltaResult, StorageHandler,
+};
 use delta_kernel_default_engine::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
@@ -79,7 +81,7 @@ impl StorageHandler for DataFusionStorageHandler {
     fn list_from(
         &self,
         path: &Url,
-    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<FileMeta>>>> {
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<FileMeta>> + Send>> {
         self.handler_for(path.as_object_store_url())?
             .list_from(path)
     }
@@ -87,7 +89,7 @@ impl StorageHandler for DataFusionStorageHandler {
     fn read_files(
         &self,
         files: Vec<FileSlice>,
-    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<Bytes>>>> {
+    ) -> DeltaResult<Box<dyn Iterator<Item = DeltaResult<Bytes>> + Send>> {
         // Results must come back in input order, so only consecutive files of one store share a
         // call. A single-store input is still one call.
         let runs = files

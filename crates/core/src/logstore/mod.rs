@@ -315,6 +315,7 @@ pub fn logstore_with(
 
 /// Holder whether it's tmp_commit path or commit bytes
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum CommitOrBytes {
     /// Path of the tmp commit, to be used by logstores which use CopyIfNotExists
     TmpCommit(Path),
@@ -805,14 +806,11 @@ pub async fn get_latest_version(
     })
     .await
     .map_err(|e| DeltaTableError::Generic(e.to_string()))?
-    .map_err(|e| {
-        if e.to_string()
-            .contains(&format!("to have version {current_version}"))
-        {
+    .map_err(|e| match e {
+        delta_kernel::KernelError::EmptyLog | delta_kernel::KernelError::MissingVersion(_) => {
             DeltaTableError::InvalidVersion(current_version)
-        } else {
-            DeltaTableError::Generic(e.to_string())
         }
+        other => DeltaTableError::Generic(other.to_string()),
     })?;
 
     Ok(segment.end_version)
