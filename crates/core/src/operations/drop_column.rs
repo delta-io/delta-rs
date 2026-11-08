@@ -738,6 +738,57 @@ mod tests {
         Ok(())
     }
 
+    /// A column-mapped table where `doubled` is generated from `id`.
+    async fn generated_column_table() -> DeltaResult<DeltaTable> {
+        DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                id_field(),
+                value_field(),
+                StructField::new("doubled", DataType::Primitive(PrimitiveType::Integer), true)
+                    .with_metadata([("delta.generationExpression", "id * 2")]),
+            ])
+            .with_configuration_property(TableProperty::ColumnMappingMode, Some("name"))
+            .await
+    }
+
+    #[tokio::test]
+    async fn drop_columns_rejects_column_used_by_generated_column() -> TestResult {
+        let table = generated_column_table().await?;
+
+        let err = table.drop_columns().with_columns(["id"]).await.unwrap_err();
+
+        assert!(
+            err.to_string().contains("generated column 'doubled'"),
+            "got: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_drops_generated_column() -> TestResult {
+        let table = generated_column_table().await?;
+
+        let table = table.drop_columns().with_columns(["doubled"]).await?;
+
+        let schema = table.snapshot()?.schema();
+        assert!(schema.field("doubled").is_none());
+        assert!(schema.field("id").is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_drops_generated_column_with_its_source() -> TestResult {
+        let table = generated_column_table().await?;
+
+        let table = table.drop_columns().with_columns(["id", "doubled"]).await?;
+
+        let schema = table.snapshot()?.schema();
+        assert!(schema.field("doubled").is_none());
+        assert!(schema.field("id").is_none());
+        Ok(())
+    }
+
     #[tokio::test]
     async fn drop_columns_removes_column_from_stats_columns() -> TestResult {
         let table = DeltaTable::new_in_memory()
