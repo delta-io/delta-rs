@@ -31,13 +31,12 @@ use crate::delta_datafusion::create_session;
 use crate::delta_datafusion::expr::{
     parse_generated_column_expression, parse_predicate_expression,
 };
-use crate::kernel::transaction::{CommitProperties, PROTOCOL};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{
     Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, SnapshotMetadataRef, StructTypeExt,
     resolve_snapshot,
 };
-use crate::logstore::LogStoreRef;
-use crate::operations::commit_actions_in_scope;
+use crate::logstore::{LogStoreRef, with_operation};
 use crate::protocol::DeltaOperation;
 use crate::table::config::{TablePropertiesExt as _, TableProperty};
 use crate::table::state::DeltaTableState;
@@ -409,20 +408,28 @@ impl std::future::IntoFuture for DropColumnsBuilder {
                 ));
             };
 
-            commit_actions_in_scope(
-                &this.log_store,
-                &snapshot,
-                this.commit_properties,
-                actions,
-                operation,
-            )
-            .await
+            // The drop reads no files. Without a list of read files, the conflict checker treats
+            // the commit as if it read every file, so a concurrent DELETE would make it fail.
+            let commit_properties = this.commit_properties;
+            let state = with_operation(&this.log_store, |log_store| async move {
+                let commit = CommitBuilder::from(commit_properties)
+                    .with_actions(actions)
+                    .with_read_files(Vec::new())
+                    .build(Some(&snapshot), log_store, operation)
+                    .await?;
+                Ok(commit.snapshot())
+            })
+            .await?;
+            Ok(DeltaTable::new_with_state(this.log_store, state))
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::{Int32Array, StringArray};
+    use arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
+    use arrow::record_batch::RecordBatch;
     use futures::TryStreamExt as _;
 
     use crate::kernel::{DataType, PrimitiveType, StructField};
@@ -519,6 +526,32 @@ mod tests {
                 .cloned(),
             max_column_id_before
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_does_not_conflict_with_a_concurrent_delete() -> TestResult {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Int32, true),
+            Field::new("value", ArrowDataType::Utf8, true),
+            Field::new("legacy", ArrowDataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["a", "b"])),
+                Arc::new(StringArray::from(vec!["x", "y"])),
+            ],
+        )?;
+        let table = column_mapped_table().await?.write(vec![batch]).await?;
+        let stale = table.clone();
+        table.delete().with_predicate("id = 1").await?;
+
+        // The drop reads no files, so the DELETE that removed a file must not conflict with it.
+        let table = stale.drop_columns().with_columns(["legacy"]).await?;
+
+        assert!(table.snapshot()?.schema().field("legacy").is_none());
         Ok(())
     }
 
