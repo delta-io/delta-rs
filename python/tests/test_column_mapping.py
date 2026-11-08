@@ -274,7 +274,9 @@ def test_column_mapping_drop_column(tmp_path: pathlib.Path):
     dt.alter.drop_columns("Super Name")
 
     assert dt.schema().to_arrow().names == ["Company Very Short"]
-    assert next(dt.history(1))["operation"] == "DROP COLUMNS"
+    last_commit = next(dt.history(1))
+    assert last_commit["operation"] == "DROP COLUMNS"
+    assert last_commit["operationParameters"] == {"columns": '["Super Name"]'}
 
     result = (
         QueryBuilder()

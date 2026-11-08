@@ -31,8 +31,8 @@ use crate::delta_datafusion::expr::{
 };
 use crate::kernel::transaction::{CommitProperties, PROTOCOL};
 use crate::kernel::{
-    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, SnapshotMetadataRef, StructField,
-    StructTypeExt, resolve_snapshot,
+    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, SnapshotMetadataRef, StructTypeExt,
+    resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
 use crate::operations::commit_actions_in_scope;
@@ -203,11 +203,11 @@ fn plan_drop_columns_actions(
     let table_schema = snapshot.table_configuration.logical_schema();
 
     // Resolve the requested names against the schema.
-    let mut removed: Vec<StructField> = Vec::with_capacity(column_names.len());
+    let mut removed: Vec<String> = Vec::with_capacity(column_names.len());
     for name in column_names {
         match table_schema.field(name) {
-            Some(field) if removed.iter().any(|f| f.name == field.name) => {}
-            Some(field) => removed.push(field.clone()),
+            Some(_) if removed.contains(name) => {}
+            Some(_) => removed.push(name.clone()),
             None if raise_if_not_exists => {
                 return Err(DeltaTableError::Generic(format!(
                     "No column with the name '{name}' in the schema"
@@ -220,7 +220,7 @@ fn plan_drop_columns_actions(
         return Ok(None);
     }
 
-    let dropped: HashSet<String> = removed.iter().map(|f| f.name.clone()).collect();
+    let dropped: HashSet<String> = removed.iter().cloned().collect();
 
     // A table must retain at least one column - `CREATE TABLE` rejects an empty schema, so a
     // drop must not be able to produce one either.
@@ -285,7 +285,20 @@ fn plan_drop_columns_actions(
         .apply_column_metadata_to_protocol(&updated_table_schema)?
         .move_table_properties_into_features(metadata.configuration());
 
-    let operation = DeltaOperation::DropColumns { columns: removed };
+    // Record the names the way Spark does (`UnresolvedAttribute.name`), which backtick-quotes a
+    // name that contains a dot.
+    let operation = DeltaOperation::DropColumns {
+        columns: removed
+            .into_iter()
+            .map(|name| {
+                if name.contains('.') {
+                    format!("`{name}`")
+                } else {
+                    name
+                }
+            })
+            .collect(),
+    };
 
     let mut metadata = metadata.with_schema(&updated_table_schema)?;
     for name in dropped_constraints {
@@ -380,7 +393,7 @@ impl std::future::IntoFuture for DropColumnsBuilder {
 mod tests {
     use futures::TryStreamExt as _;
 
-    use crate::kernel::{DataType, PrimitiveType};
+    use crate::kernel::{DataType, PrimitiveType, StructField};
     use crate::writer::test_utils::TestResult;
 
     use super::*;
@@ -406,6 +419,13 @@ mod tests {
             .await
     }
 
+    /// The column names recorded in the `columns` parameter of the last commit.
+    async fn last_dropped_columns(table: &DeltaTable) -> Vec<String> {
+        let history: Vec<_> = table.history(Some(1)).try_collect().await.unwrap();
+        let columns = &history[0].operation_parameters.as_ref().unwrap()["columns"];
+        serde_json::from_str(columns.as_str().unwrap()).unwrap()
+    }
+
     #[tokio::test]
     async fn drop_columns_removes_field_and_keeps_the_rest() -> TestResult {
         let table = column_mapped_table().await?;
@@ -418,6 +438,7 @@ mod tests {
 
         let history: Vec<_> = table.history(Some(1)).try_collect().await?;
         assert_eq!(history[0].operation.as_deref(), Some("DROP COLUMNS"));
+        assert_eq!(last_dropped_columns(&table).await, ["legacy"]);
         Ok(())
     }
 
@@ -751,6 +772,7 @@ mod tests {
         let table = table.drop_columns().with_columns(["a.b"]).await?;
 
         assert!(table.snapshot()?.schema().field("a.b").is_none());
+        assert_eq!(last_dropped_columns(&table).await, ["`a.b`"]);
         Ok(())
     }
 
@@ -763,10 +785,7 @@ mod tests {
             .with_columns(["legacy", "legacy"])
             .await?;
 
-        let history: Vec<_> = table.history(Some(1)).try_collect().await?;
-        let columns = &history[0].operation_parameters.as_ref().unwrap()["columns"];
-        let columns: Vec<serde_json::Value> = serde_json::from_str(columns.as_str().unwrap())?;
-        assert_eq!(columns.len(), 1);
+        assert_eq!(last_dropped_columns(&table).await, ["legacy"]);
         Ok(())
     }
 }
