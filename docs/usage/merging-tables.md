@@ -45,6 +45,9 @@ with persistent deletion vectors, including any previously deleted rows. Only in
 and updated rows are written to new data files. When Change Data Feed is enabled, the
 existing CDC writer emits the corresponding change records. New data, CDC files and
 the logical file remove/add pairs are published in one transaction.
+DV mode streams batches through duplicate validation and output filtering instead of
+buffering untouched rows in the file-rewrite barrier. Query execution, duplicate
+validation and accumulated deletion vectors still require memory.
 
 A commit conflict requires rerunning MERGE against a fresh table snapshot. Physical row
 locations and prepared deletion vectors must not be reused after a conflict. File

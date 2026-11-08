@@ -8,6 +8,9 @@
 //!
 //! Bookkeeping is maintained to determine which files have modifications, so
 //! they can be removed from the delta log.
+//!
+//! DV mode collects changed row positions and forwards batches without per-file buffering.
+//! Downstream duplicate validation and filtering decide which rows are written.
 
 use std::{
     collections::HashMap,
@@ -342,7 +345,13 @@ impl Stream for MergeBarrierStream {
                     match self.input.poll_next_unpin(cx) {
                         Poll::Ready(Some(Ok(batch))) => {
                             if let Some(deleted_rows) = &self.deleted_rows {
-                                collect_deleted_rows(&batch, &self.file_column, deleted_rows)?;
+                                if let Err(error) =
+                                    collect_deleted_rows(&batch, &self.file_column, deleted_rows)
+                                {
+                                    self.state = State::Abort;
+                                    return Poll::Ready(Some(Err(error)));
+                                }
+                                return Poll::Ready(Some(Ok(batch)));
                             }
                             let file_dictionary = get_path_column(&batch, &self.file_column)?;
 
@@ -555,7 +564,7 @@ pub(crate) fn find_node<T: ExecutionPlan>(
 
 #[cfg(test)]
 mod tests {
-    use super::{BarrierSurvivorSet, collect_deleted_rows};
+    use super::{BarrierSurvivorSet, MergeBarrierStream, collect_deleted_rows};
     use crate::operations::merge::MergeBarrierExec;
     use crate::operations::merge::TARGET_ROW_ORDINAL_IN_FILE_COLUMN;
     use crate::operations::merge::{
@@ -575,8 +584,11 @@ mod tests {
     use datafusion::physical_plan::ExecutionPlan;
     #[allow(deprecated)]
     use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
-    use futures::StreamExt;
+    use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+    use futures::{Stream, StreamExt};
+    use std::pin::Pin;
     use std::sync::Arc;
+    use std::task::{Context, Poll};
 
     fn deletion_batch(
         paths: Vec<Option<&str>>,
@@ -596,6 +608,7 @@ mod tests {
             ),
             Field::new(TARGET_UPDATE_COLUMN, ArrowDataType::Boolean, true),
             Field::new(TARGET_DELETE_COLUMN, ArrowDataType::Boolean, true),
+            Field::new(TARGET_INSERT_COLUMN, ArrowDataType::Boolean, true),
         ]));
         let mut dictionary =
             arrow_array::builder::StringDictionaryBuilder::<arrow::datatypes::UInt16Type>::new();
@@ -614,6 +627,7 @@ mod tests {
                 Arc::new(dictionary.finish()),
                 Arc::new(UInt64Array::from(ordinals)),
                 Arc::new(BooleanArray::from(updates)),
+                Arc::new(BooleanArray::from(vec![false; count])),
                 Arc::new(BooleanArray::from(vec![false; count])),
             ],
         )
@@ -666,6 +680,95 @@ mod tests {
         let batch = deletion_batch(vec![None], vec![Some(1)], vec![None]);
         assert!(collect_deleted_rows(&batch, "__delta_rs_path", &deleted).is_err());
         assert!(deleted.is_empty());
+    }
+
+    #[test]
+    fn dv_stream_returns_batches_without_buffering_untouched_files() {
+        let paths: Vec<_> = (0..64)
+            .map(|index| format!("file-{index}.parquet"))
+            .collect();
+        let batches: Vec<_> = paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                deletion_batch(
+                    vec![Some(path)],
+                    vec![Some(7)],
+                    vec![if index == paths.len() - 1 {
+                        None
+                    } else {
+                        Some(false)
+                    }],
+                )
+            })
+            .collect();
+        let schema = batches[0].schema();
+        let input = futures::stream::iter(batches.clone().into_iter().map(Ok))
+            .chain(futures::stream::pending());
+        let input = Box::pin(RecordBatchStreamAdapter::new(schema.clone(), input));
+        let deleted_rows = Arc::new(DashMap::new());
+        let mut stream = MergeBarrierStream::new(
+            input,
+            schema,
+            BarrierSurvivorSet::default(),
+            Arc::new("__delta_rs_path".into()),
+            Some(deleted_rows.clone()),
+        );
+        let mut context = Context::from_waker(futures::task::noop_waker_ref());
+        for expected in &batches {
+            let actual = match Pin::new(&mut stream).poll_next(&mut context) {
+                Poll::Ready(Some(Ok(batch))) => batch,
+                result => {
+                    panic!("Expected one batch without waiting for the input to finish: {result:?}")
+                }
+            };
+            assert_eq!(&actual, expected);
+            assert!(stream.map.is_empty());
+            assert!(
+                stream
+                    .file_partitions
+                    .iter()
+                    .all(|file| file.buffer.is_empty())
+            );
+        }
+        assert!(Pin::new(&mut stream).poll_next(&mut context).is_pending());
+        assert_eq!(deleted_rows.len(), 1);
+        assert_eq!(
+            deleted_rows
+                .get(paths.last().unwrap())
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![7]
+        );
+    }
+
+    #[test]
+    fn dv_stream_rejects_invalid_positions_before_forwarding() {
+        let batch = deletion_batch(vec![Some("file.parquet")], vec![None], vec![None]);
+        let schema = batch.schema();
+        let input = Box::pin(RecordBatchStreamAdapter::new(
+            schema.clone(),
+            futures::stream::iter([Ok(batch)]),
+        ));
+        let deleted_rows = Arc::new(DashMap::new());
+        let mut stream = MergeBarrierStream::new(
+            input,
+            schema,
+            BarrierSurvivorSet::default(),
+            Arc::new("__delta_rs_path".into()),
+            Some(deleted_rows.clone()),
+        );
+        let mut context = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(matches!(
+            Pin::new(&mut stream).poll_next(&mut context),
+            Poll::Ready(Some(Err(_)))
+        ));
+        assert!(matches!(
+            Pin::new(&mut stream).poll_next(&mut context),
+            Poll::Ready(None)
+        ));
+        assert!(deleted_rows.is_empty());
     }
 
     #[tokio::test]

@@ -688,6 +688,94 @@ async fn test_dv_merge_preserves_files_and_previous_deletions(#[case] cdf: bool)
     );
 }
 
+#[rstest]
+#[case::empty(false)]
+#[case::fully_pruned(true)]
+#[tokio::test]
+async fn test_dv_merge_empty_or_fully_pruned_target(
+    #[case] has_files: bool,
+    #[values(false, true)] cdf: bool,
+) {
+    let mut table = DeltaTable::new_in_memory()
+        .create()
+        .with_columns(id_value_delta_schema().fields().cloned())
+        .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+        .with_configuration_property(
+            TableProperty::EnableChangeDataFeed,
+            Some(if cdf { "true" } else { "false" }),
+        )
+        .await
+        .unwrap();
+    if has_files {
+        table = table
+            .write(vec![id_value_batch(vec![1, 2], vec![10, 20])])
+            .await
+            .unwrap();
+    }
+    let version = table.version().unwrap();
+    let ctx = SessionContext::new();
+    let (table, metrics) = table
+        .merge(
+            ctx.read_batch(id_value_batch(vec![99], vec![990])).unwrap(),
+            col("target.id")
+                .eq(col("source.id"))
+                .and(col("target.id").eq(lit(99))),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_matched_update(|update| update.update("value", col("source.value")))
+        .unwrap()
+        .when_not_matched_insert(|insert| {
+            insert
+                .set("id", col("source.id"))
+                .set("value", col("source.value"))
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(table.version(), Some(version + 1));
+    assert_eq!(metrics.num_source_rows, 1);
+    assert_eq!(metrics.num_target_rows_inserted, 1);
+    assert_eq!(metrics.num_target_rows_updated, 0);
+    assert_eq!(metrics.num_target_rows_copied, 0);
+    assert_eq!(metrics.num_target_files_scanned, 0);
+    assert_eq!(
+        metrics.num_target_files_skipped_during_scan,
+        usize::from(has_files)
+    );
+    let actions = latest_dv_merge_actions(&table).await;
+    assert!(
+        actions
+            .iter()
+            .all(|action| !matches!(action, Action::Remove(_)))
+    );
+    let adds: Vec<_> = actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::Add(add) => Some(add),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(adds.len(), 1);
+    assert!(adds[0].deletion_vector.is_none());
+    ctx.register_table("result", table.table_provider().await.unwrap())
+        .unwrap();
+    let batches = ctx
+        .sql("SELECT id, value FROM result ORDER BY id")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let mut expected = vec!["+----+-------+", "| id | value |", "+----+-------+"];
+    if has_files {
+        expected.extend(["| 1  | 10    |", "| 2  | 20    |"]);
+    }
+    expected.extend(["| 99 | 990   |", "+----+-------+"]);
+    datafusion::assert_batches_eq!(&expected, &batches);
+}
+
 #[tokio::test]
 async fn test_dv_merge_delete_only_insert_only_and_noop() {
     let ctx = SessionContext::new();
