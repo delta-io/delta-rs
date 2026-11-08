@@ -200,12 +200,25 @@ fn plan_drop_columns_actions(
 ) -> DeltaResult<Option<(Vec<Action>, DeltaOperation)>> {
     let table_schema = snapshot.table_configuration.logical_schema();
 
-    // Resolve the requested names against the schema.
+    // Resolve the requested names against the schema. A name can be backtick-quoted the way the
+    // history records it (`a.b`), so a quoted name that matches no column as is resolves to the
+    // single column it names.
     let mut removed: Vec<String> = Vec::with_capacity(column_names.len());
     for name in column_names {
-        match table_schema.field(name) {
-            Some(_) if removed.contains(name) => {}
-            Some(_) => removed.push(name.clone()),
+        let field = table_schema.field(name).or_else(|| {
+            // Only a name in backticks is parsed: parsing drops the spaces around a name, and
+            // `"legacy "` must not match `legacy`.
+            if !name.starts_with('`') {
+                return None;
+            }
+            match name.parse::<ColumnName>().ok()?.path() {
+                [part] => table_schema.field(part),
+                _ => None,
+            }
+        });
+        match field {
+            Some(field) if removed.contains(&field.name) => {}
+            Some(field) => removed.push(field.name.clone()),
             None if raise_if_not_exists => {
                 return Err(DeltaTableError::Generic(format!(
                     "No column with the name '{name}' in the schema"
@@ -896,6 +909,25 @@ mod tests {
             .await?;
 
         let table = table.drop_columns().with_columns(["a.b"]).await?;
+
+        assert!(table.snapshot()?.schema().field("a.b").is_none());
+        assert_eq!(last_dropped_columns(&table).await, ["`a.b`"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_accepts_the_quoted_name_from_the_history() -> TestResult {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                id_field(),
+                StructField::new("a.b", DataType::Primitive(PrimitiveType::String), true),
+            ])
+            .with_configuration_property(TableProperty::ColumnMappingMode, Some("name"))
+            .await?;
+
+        // The quoted and the plain name are the same column, so it is dropped once.
+        let table = table.drop_columns().with_columns(["`a.b`", "a.b"]).await?;
 
         assert!(table.snapshot()?.schema().field("a.b").is_none());
         assert_eq!(last_dropped_columns(&table).await, ["`a.b`"]);
