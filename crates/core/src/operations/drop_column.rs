@@ -329,8 +329,17 @@ fn plan_drop_columns_actions(
         )?;
     }
 
+    // `apply_column_metadata_to_protocol` and `move_table_properties_into_features` keep the
+    // features in sets, so they can return them in a different order. Compare the versions and
+    // the feature sets, so an unchanged protocol is not committed again.
+    let protocol_changed = current_protocol.min_reader_version()
+        != new_protocol.min_reader_version()
+        || current_protocol.min_writer_version() != new_protocol.min_writer_version()
+        || current_protocol.reader_features_set() != new_protocol.reader_features_set()
+        || current_protocol.writer_features_set() != new_protocol.writer_features_set();
+
     let mut actions = vec![metadata.into()];
-    if current_protocol != &new_protocol {
+    if protocol_changed {
         actions.push(new_protocol.into())
     }
 
@@ -506,6 +515,31 @@ mod tests {
                 .get("delta.columnMapping.maxColumnId")
                 .cloned(),
             max_column_id_before
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drop_columns_does_not_commit_an_unchanged_protocol() -> TestResult {
+        // With several features, a feature list in a different order is almost certain.
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([id_field(), value_field(), legacy_field()])
+            .with_configuration_property(TableProperty::ColumnMappingMode, Some("name"))
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+            .await?;
+
+        let table = table.drop_columns().with_columns(["legacy"]).await?;
+
+        let version = table.version().unwrap();
+        let commit = table.log_store().read_commit_entry(version).await?.unwrap();
+        let commit = std::str::from_utf8(&commit)?;
+        assert!(
+            !commit
+                .lines()
+                .any(|line| line.starts_with(r#"{"protocol""#)),
+            "{commit}"
         );
         Ok(())
     }
