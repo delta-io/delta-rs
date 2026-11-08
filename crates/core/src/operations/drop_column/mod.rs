@@ -39,7 +39,7 @@ use crate::delta_datafusion::expr::{
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{
     Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, SnapshotMetadataRef, StructTypeExt,
-    resolve_snapshot,
+    resolve_snapshot, spawn_blocking_with_span,
 };
 use crate::logstore::{LogStoreRef, with_operation};
 use crate::protocol::DeltaOperation;
@@ -384,6 +384,7 @@ fn plan_drop_columns_actions(
     snapshot: SnapshotMetadataRef<'_>,
     column_names: &[String],
     raise_if_not_exists: bool,
+    clustering_columns: &[ColumnName],
     session: &dyn Session,
 ) -> DeltaResult<Option<(Vec<Action>, DeltaOperation)>> {
     let table_schema = snapshot.table_configuration.logical_schema();
@@ -454,6 +455,18 @@ fn plan_drop_columns_actions(
         if removed.contains(&ColumnName::new([column])) {
             return Err(DeltaTableError::Generic(format!(
                 "Cannot drop column '{column}': it is a partition column"
+            )));
+        }
+    }
+
+    // The `delta.clustering` domain metadata names the clustering columns, so they cannot be
+    // dropped, and neither can a struct that contains one.
+    for column in clustering_columns {
+        if let Some(dropped) = removed.iter().find(|dropped| column.starts_with(dropped)) {
+            return Err(DeltaTableError::Generic(format!(
+                "Cannot drop column '{}': the table is clustered by '{}'",
+                display_name(dropped),
+                display_name(column)
             )));
         }
     }
@@ -554,6 +567,24 @@ impl std::future::IntoFuture for DropColumnsBuilder {
                 return Err(DeltaTableError::column_mapping_required("DROP COLUMNS"));
             }
 
+            // The kernel returns no clustering columns unless the table has the clustering
+            // feature. Writes to such tables are not supported yet, so `can_write_to` rejects
+            // them above and this finds none. It guards the drop once liquid clustering is
+            // supported.
+            let clustering_columns = {
+                let kernel_snapshot = snapshot.snapshot().inner.clone();
+                let engine = this.log_store.engine();
+                spawn_blocking_with_span(move || {
+                    kernel_snapshot.get_clustering_column_infos(engine.as_ref())
+                })
+                .await
+                .map_err(|e| DeltaTableError::GenericError { source: e.into() })??
+                .into_iter()
+                .flatten()
+                .map(|info| info.logical_column)
+                .collect_vec()
+            };
+
             let session = this
                 .session
                 .clone()
@@ -563,6 +594,7 @@ impl std::future::IntoFuture for DropColumnsBuilder {
                 snapshot.snapshot().metadata_state(),
                 &this.column_names,
                 this.raise_if_not_exists,
+                &clustering_columns,
                 session.as_ref(),
             )?
             else {

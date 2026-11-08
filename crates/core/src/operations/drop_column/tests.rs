@@ -6,7 +6,8 @@ use datafusion::prelude::SessionContext;
 use futures::TryStreamExt as _;
 
 use crate::kernel::transaction::{CommitConflictError, TransactionError};
-use crate::kernel::{ArrayType, DataType, MapType, PrimitiveType, StructField};
+use crate::kernel::{ArrayType, DataType, DomainMetadata, MapType, PrimitiveType, StructField};
+use crate::test_utils::ActionFactory;
 use crate::writer::test_utils::TestResult;
 use crate::writer::test_utils::datafusion::get_data;
 
@@ -693,6 +694,95 @@ async fn drop_columns_rejects_partition_column() -> TestResult {
         .unwrap_err();
 
     assert!(err.to_string().contains("partition column"), "got: {err}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn drop_columns_rejects_clustering_column_and_its_struct() -> TestResult {
+    // Writes to clustered tables are not supported yet, so the clustering columns are given to
+    // the planning directly.
+    let table = struct_table().await?;
+    let snapshot = table.snapshot()?.snapshot().snapshot();
+    let session = create_session().into_inner().state();
+    let clustering_columns = [ColumnName::new(["s", "a"])];
+    let plan = |name: &str| {
+        plan_drop_columns_actions(
+            snapshot.metadata_state(),
+            &[name.to_string()],
+            true,
+            &clustering_columns,
+            &session,
+        )
+    };
+
+    for name in ["s.a", "s"] {
+        let err = plan(name).unwrap_err();
+        assert!(
+            err.to_string().contains(&format!(
+                "Cannot drop column '{name}': the table is clustered by 's.a'"
+            )),
+            "got: {err}"
+        );
+    }
+    // A field next to a clustering column can be dropped.
+    assert!(plan("s.b")?.is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn drop_columns_rejects_a_clustered_table() -> TestResult {
+    let table = column_mapped_table().await?;
+    let value = table
+        .snapshot()?
+        .schema()
+        .field("value")
+        .unwrap()
+        .physical_name(ColumnMappingMode::Name)
+        .to_string();
+    let commit = CommitBuilder::default()
+        .with_actions(vec![
+            ActionFactory::protocol(
+                Some(3),
+                Some(7),
+                Some([TableFeature::ColumnMapping]),
+                Some([
+                    TableFeature::ColumnMapping,
+                    TableFeature::DomainMetadata,
+                    TableFeature::ClusteredTable,
+                ]),
+            )
+            .into(),
+            Action::DomainMetadata(DomainMetadata {
+                domain: "delta.clustering".to_string(),
+                configuration: format!(r#"{{"clusteringColumns":[["{value}"]]}}"#),
+                removed: false,
+            }),
+        ])
+        .build(
+            Some(table.snapshot()?.snapshot()),
+            table.log_store(),
+            DeltaOperation::Update { predicate: None },
+        )
+        .await?;
+    let table = DeltaTable::new_with_state(table.log_store(), commit.snapshot());
+
+    // delta-rs does not write to clustered tables yet. Once it does, this drop reaches the
+    // clustering check instead.
+    let err = table
+        .drop_columns()
+        .with_columns(["value"])
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            err,
+            DeltaTableError::Transaction {
+                source: TransactionError::UnsupportedTableFeatures(_)
+            }
+        ),
+        "got: {err}"
+    );
     Ok(())
 }
 
