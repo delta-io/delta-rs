@@ -3618,6 +3618,7 @@ def test_remove_action_constructor():
     )
 
 
+@pytest.mark.pyarrow
 def test_write_deltalake_overwrite_with_tuple_predicate(tmp_path: pathlib.Path):
     import pyarrow as pa
 

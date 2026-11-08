@@ -294,6 +294,7 @@ def test_delete_partition_predicate_follows_sql_semantics(
     assert metrics["num_deleted_rows"] == 4 - len(expected_remaining)
 
 
+@pytest.mark.pyarrow
 def test_delete_tuple_predicate(tmp_path: pathlib.Path):
     import pyarrow as pa
 

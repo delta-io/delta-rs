@@ -386,6 +386,7 @@ def test_update_stats_columns_stats_provided(tmp_path: pathlib.Path):
         get_value("null_count.bar")
 
 
+@pytest.mark.pyarrow
 def test_update_tuple_predicate(tmp_path: pathlib.Path):
     import pyarrow as pa
     import pyarrow.compute as pc
