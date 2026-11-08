@@ -48,7 +48,9 @@ and updated rows are written to new data files. When Change Data Feed is enabled
 existing CDC writer emits the corresponding change records. New data, CDC files and
 the logical file remove/add pairs are published in one transaction.
 DV mode streams batches through duplicate validation and output filtering instead of
-buffering untouched rows in the file-rewrite barrier. Query execution, duplicate
+buffering untouched rows in the file-rewrite barrier. Matched no-op rows are discarded
+without materializing per-row copies; duplicate-action validation remains enabled.
+Query execution, duplicate
 validation and accumulated deletion vectors still require memory.
 
 A commit conflict requires rerunning MERGE against a fresh table snapshot. Physical row
@@ -61,6 +63,9 @@ the file expire. Active files and explicitly kept versions remain protected, inc
 when several vectors share one DV file.
 FULL and LITE VACUUM retain a removed Parquet file until its newest removal expires,
 including when compaction retires a file that was previously updated using DVs.
+Both modes use the same table-relative physical-path identity for relative and absolute
+Add/Remove paths, including explicitly kept snapshots. References outside the table
+root are not VACUUM deletion candidates.
 
 MERGE uploads data and DV files before committing. Failed or cancelled attempts can
 leave unreferenced files. FULL VACUUM reclaims these orphans after the retention

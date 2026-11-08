@@ -35,6 +35,7 @@ pub(crate) struct MergeValidationExec {
     file_expr: Arc<dyn PhysicalExpr>,
     file_column: Arc<String>,
     row_index_column: Arc<String>,
+    preserve_matched_noops: bool,
 }
 
 impl MergeValidationExec {
@@ -43,12 +44,14 @@ impl MergeValidationExec {
         file_expr: Arc<dyn PhysicalExpr>,
         file_column: Arc<String>,
         row_index_column: Arc<String>,
+        preserve_matched_noops: bool,
     ) -> Self {
         Self {
             input,
             file_expr,
             file_column,
             row_index_column,
+            preserve_matched_noops,
         }
     }
 }
@@ -95,6 +98,7 @@ impl ExecutionPlan for MergeValidationExec {
             self.file_expr.clone(),
             Arc::clone(&self.file_column),
             Arc::clone(&self.row_index_column),
+            self.preserve_matched_noops,
         )))
     }
 
@@ -119,6 +123,7 @@ impl ExecutionPlan for MergeValidationExec {
             self.schema(),
             Arc::clone(&self.file_column),
             Arc::clone(&self.row_index_column),
+            self.preserve_matched_noops,
         )))
     }
 
@@ -161,6 +166,7 @@ struct MergeValidationStream {
     input: SendableRecordBatchStream,
     file_column: Arc<String>,
     row_index_column: Arc<String>,
+    preserve_matched_noops: bool,
     file_id_by_path: HashMap<String, usize>,
     file_paths: Vec<String>,
     /// Match state of the target rows, by file id
@@ -176,12 +182,14 @@ impl MergeValidationStream {
         schema: SchemaRef,
         file_column: Arc<String>,
         row_index_column: Arc<String>,
+        preserve_matched_noops: bool,
     ) -> Self {
         Self {
             schema,
             input,
             file_column,
             row_index_column,
+            preserve_matched_noops,
             file_id_by_path: HashMap::new(),
             file_paths: Vec::new(),
             target_row_state: Vec::new(),
@@ -306,7 +314,8 @@ impl MergeValidationStream {
             }
 
             if cardinality_class == MatchParticipationClass::MatchedNoop as i32 {
-                if !matches.action.contains(ordinal)
+                if self.preserve_matched_noops
+                    && !matches.action.contains(ordinal)
                     && !matches.unconditional_delete.contains(ordinal)
                     && matches.buffered_noop.insert(ordinal)
                 {
@@ -409,6 +418,7 @@ pub(super) fn build_duplicate_match_validation_plan(
     )],
     file_column: Arc<String>,
     row_index_column: Arc<String>,
+    preserve_matched_noops: bool,
 ) -> DataFusionResult<LogicalPlan> {
     let mut cardinality_when = Vec::with_capacity(ops.len());
     let mut cardinality_then = Vec::with_capacity(ops.len());
@@ -436,6 +446,7 @@ pub(super) fn build_duplicate_match_validation_plan(
             file_expr: col(file_column.as_str()),
             file_column: Arc::clone(&file_column),
             row_index_column: Arc::clone(&row_index_column),
+            preserve_matched_noops,
         }),
     });
 
@@ -453,6 +464,7 @@ pub(crate) struct MergeValidation {
     pub(super) file_expr: Expr,
     pub(super) file_column: Arc<String>,
     pub(super) row_index_column: Arc<String>,
+    pub(super) preserve_matched_noops: bool,
 }
 
 impl UserDefinedLogicalNodeCore for MergeValidation {
@@ -486,6 +498,7 @@ impl UserDefinedLogicalNodeCore for MergeValidation {
             file_expr: exprs[0].clone(),
             file_column: Arc::clone(&self.file_column),
             row_index_column: Arc::clone(&self.row_index_column),
+            preserve_matched_noops: self.preserve_matched_noops,
         })
     }
 }
@@ -560,7 +573,10 @@ mod tests {
         Box::pin(RecordBatchStreamAdapter::new(schema, Box::pin(stream)))
     }
 
-    async fn collect_validated(batches: Vec<RecordBatch>) -> DataFusionResult<Vec<RecordBatch>> {
+    async fn collect_validated(
+        batches: Vec<RecordBatch>,
+        preserve_matched_noops: bool,
+    ) -> DataFusionResult<Vec<RecordBatch>> {
         let schema = batches
             .first()
             .expect("expected at least one batch")
@@ -570,6 +586,7 @@ mod tests {
             schema,
             Arc::new(PATH_COLUMN.to_string()),
             Arc::new(TARGET_ROW_ORDINAL_IN_FILE_COLUMN.to_string()),
+            preserve_matched_noops,
         );
 
         stream.try_collect::<Vec<_>>().await
@@ -613,6 +630,7 @@ mod tests {
             schema,
             Arc::new(PATH_COLUMN.to_string()),
             Arc::new(TARGET_ROW_ORDINAL_IN_FILE_COLUMN.to_string()),
+            true,
         );
         for batch in batches {
             s.validate_batch(batch)?;
@@ -706,6 +724,7 @@ mod tests {
             schema,
             Arc::new(PATH_COLUMN.to_string()),
             Arc::new(TARGET_ROW_ORDINAL_IN_FILE_COLUMN.to_string()),
+            true,
         );
 
         s.validate_batch(&b).expect("ignore rows pass validation");
@@ -784,8 +803,11 @@ mod tests {
             .expect("dictionary keys must be remapped per batch before cross batch validation");
     }
 
+    #[rstest::rstest]
     #[tokio::test]
-    async fn test_cross_batch_dedup_outputs_highest_priority_match() {
+    async fn test_cross_batch_dedup_outputs_highest_priority_match(
+        #[values(false, true)] preserve_matched_noops: bool,
+    ) {
         let first = batch(
             vec![7, 8, 9],
             vec![
@@ -796,7 +818,7 @@ mod tests {
         );
         let second = batch(vec![7], vec![MatchParticipationClass::MatchedAction as i32]);
 
-        let output = collect_validated(vec![first, second])
+        let output = collect_validated(vec![first, second], preserve_matched_noops)
             .await
             .expect("validation passes");
         let rows = output_rows(&output);
@@ -804,6 +826,73 @@ mod tests {
         assert_eq!(rows.iter().filter(|(ordinal, _)| *ordinal == 7).count(), 1);
         assert!(rows.contains(&(7, MatchParticipationClass::MatchedAction as i32)));
         assert!(rows.contains(&(8, MatchParticipationClass::Ignore as i32)));
-        assert!(rows.contains(&(9, MatchParticipationClass::MatchedNoop as i32)));
+        assert_eq!(
+            rows.contains(&(9, MatchParticipationClass::MatchedNoop as i32)),
+            preserve_matched_noops
+        );
+    }
+
+    #[test]
+    fn dv_noops_do_not_materialize_or_retain_rows() {
+        let b = batch(
+            (0..100_000).collect(),
+            vec![MatchParticipationClass::MatchedNoop as i32; 100_000],
+        );
+        let schema = b.schema();
+        let mut stream = MergeValidationStream::new(
+            empty_stream(schema.clone()),
+            schema,
+            Arc::new(PATH_COLUMN.to_string()),
+            Arc::new(TARGET_ROW_ORDINAL_IN_FILE_COLUMN.to_string()),
+            false,
+        );
+
+        for _ in 0..2 {
+            assert!(stream.validate_batch(&b).unwrap().is_none());
+            assert!(stream.buffered_noops.is_empty());
+            assert!(stream.buffered_noop_order.is_empty());
+            assert!(stream.target_row_state.iter().all(|matches| {
+                matches.action.is_empty()
+                    && matches.unconditional_delete.is_empty()
+                    && matches.buffered_noop.is_empty()
+            }));
+        }
+        stream.queue_buffered_noops();
+        assert!(stream.pending_output.is_empty());
+    }
+
+    #[rstest::rstest]
+    #[case(vec![MatchParticipationClass::MatchedNoop, MatchParticipationClass::MatchedAction, MatchParticipationClass::MatchedNoop], Some(1))]
+    #[case(vec![MatchParticipationClass::MatchedAction, MatchParticipationClass::MatchedNoop, MatchParticipationClass::MatchedAction], None)]
+    #[case(vec![MatchParticipationClass::MatchedNoop, MatchParticipationClass::MatchedUnconditionalDelete, MatchParticipationClass::MatchedUnconditionalDelete], Some(1))]
+    #[case(vec![MatchParticipationClass::MatchedUnconditionalDelete, MatchParticipationClass::MatchedNoop, MatchParticipationClass::MatchedAction], None)]
+    #[case(vec![MatchParticipationClass::MatchedAction, MatchParticipationClass::MatchedNoop, MatchParticipationClass::MatchedUnconditionalDelete], None)]
+    #[case(vec![MatchParticipationClass::MatchedNoop, MatchParticipationClass::MatchedNoop], Some(0))]
+    #[tokio::test]
+    async fn dv_noop_suppression_preserves_duplicate_validation(
+        #[case] classes: Vec<MatchParticipationClass>,
+        #[case] expected_rows: Option<usize>,
+    ) {
+        let batches = classes
+            .into_iter()
+            .map(|class| batch(vec![0], vec![class as i32]))
+            .collect();
+        let result = collect_validated(batches, false).await;
+        match expected_rows {
+            Some(expected) => assert_eq!(
+                result
+                    .unwrap()
+                    .iter()
+                    .map(RecordBatch::num_rows)
+                    .sum::<usize>(),
+                expected
+            ),
+            None => assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("duplicate relevant WHEN MATCHED clauses")
+            ),
+        }
     }
 }

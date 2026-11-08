@@ -849,6 +849,7 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
                 )?,
                 Arc::clone(&validation.file_column),
                 Arc::clone(&validation.row_index_column),
+                validation.preserve_matched_noops,
             ))));
         }
 
@@ -909,6 +910,7 @@ fn build_merge_barrier_validation_plan(
             ops,
             file_column,
             Arc::new(row_index_column.to_string()),
+            !deletion_vectors,
         )
     } else {
         Ok(merge_barrier)
@@ -2204,6 +2206,7 @@ mod tests {
                 Arc::clone(&expression),
                 Arc::new("path".to_string()),
                 Arc::new("row_ordinal".to_string()),
+                true,
             )),
         ];
 
@@ -3080,6 +3083,7 @@ mod tests {
             &ops,
             Arc::new(PATH_COLUMN.to_string()),
             Arc::new(TARGET_ROW_ORDINAL_IN_FILE_COLUMN.to_string()),
+            true,
         )
         .expect("duplicate validation plan builds");
 

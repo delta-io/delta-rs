@@ -28,11 +28,13 @@ impl TombstoneView {
 
     /// Returns the file path with URL decoding applied.
     pub fn path(&self) -> Cow<'_, str> {
+        percent_decode_str(self.path_raw()).decode_utf8_lossy()
+    }
+
+    pub(crate) fn path_raw(&self) -> &str {
         static FIELD_INDEX: LazyLock<usize> =
             LazyLock::new(|| Remove::to_schema().field_with_index("path").unwrap().0);
-        let raw = get_string_value(self.data.column(*FIELD_INDEX), self.index)
-            .expect("valid string field");
-        percent_decode_str(raw).decode_utf8_lossy()
+        get_string_value(self.data.column(*FIELD_INDEX), self.index).expect("valid string field")
     }
 
     /// Returns the deletion timestamp (milliseconds since epoch), if recorded.

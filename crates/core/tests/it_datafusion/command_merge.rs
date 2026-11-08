@@ -410,6 +410,7 @@ async fn test_dv_merge_absolute_add_without_row_count(
         .unwrap();
     table.update_state().await.unwrap();
     let version = table.version().unwrap();
+    let previous = table.clone();
     let ctx = SessionContext::new();
     let (table, _) = table
         .merge(
@@ -439,6 +440,41 @@ async fn test_dv_merge_absolute_add_without_row_count(
         store.get(&data_path).await.unwrap().bytes().await.unwrap(),
         bytes
     );
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(directory.path().join(data_path.as_ref()))
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(14 * 24 * 60 * 60),
+        ))
+        .unwrap();
+    for mode in [VacuumMode::Lite, VacuumMode::Full] {
+        for keep in [false, true] {
+            let mut vacuum = table
+                .clone()
+                .vacuum()
+                .with_mode(mode.clone())
+                .with_dry_run(true);
+            if keep {
+                vacuum = vacuum.with_keep_versions(&[version]);
+            }
+            let (_, result) = vacuum.await.unwrap();
+            assert!(!result.files_deleted.contains(&data_path.to_string()));
+        }
+    }
+    let (_, result) = table
+        .clone()
+        .vacuum()
+        .with_mode(VacuumMode::Full)
+        .with_keep_versions(&[version])
+        .with_dry_run(false)
+        .await
+        .unwrap();
+    assert!(!result.files_deleted.contains(&data_path.to_string()));
+    assert_eq!(
+        store.get(&data_path).await.unwrap().bytes().await.unwrap(),
+        bytes
+    );
     ctx.register_table("result", table.table_provider().await.unwrap())
         .unwrap();
     let result = ctx
@@ -459,6 +495,27 @@ async fn test_dv_merge_absolute_add_without_row_count(
             "+----+-------+",
         ],
         &result
+    );
+    ctx.register_table("previous", previous.table_provider().await.unwrap())
+        .unwrap();
+    let previous_rows = ctx
+        .sql("SELECT id, value FROM previous ORDER BY id")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    datafusion::assert_batches_eq!(
+        &[
+            "+----+-------+",
+            "| id | value |",
+            "+----+-------+",
+            "| 1  | 10    |",
+            "| 2  | 20    |",
+            "| 3  | 30    |",
+            "+----+-------+",
+        ],
+        &previous_rows
     );
 }
 
@@ -1684,13 +1741,29 @@ async fn test_merge_large_single_file_unique_source_does_not_report_duplicate_ma
     Ok(())
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_merge_noop_heavy_matched_update_with_inserts_does_not_rewrite_target_file()
--> DeltaResult<()> {
+async fn test_merge_noop_heavy_matched_update_with_inserts_does_not_rewrite_target_file(
+    #[values(false, true)] deletion_vectors: bool,
+    #[values(false, true)] cdf: bool,
+) -> DeltaResult<()> {
     let target_rows = 25_000;
     let inserted_rows = 1_000;
     let total_source_rows = target_rows + inserted_rows;
-    let table = single_file_id_value_table(target_rows).await;
+    let table = DeltaTable::new_in_memory()
+        .create()
+        .with_columns(id_value_delta_schema().fields().cloned())
+        .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+        .with_configuration_property(
+            TableProperty::EnableChangeDataFeed,
+            Some(if cdf { "true" } else { "false" }),
+        )
+        .await?
+        .write(vec![id_value_batch(
+            (0..target_rows).collect(),
+            vec![1_i64; target_rows as usize],
+        )])
+        .await?;
 
     let config = SessionConfig::new().with_target_partitions(4);
     let ctx = SessionContext::new_with_config(config);
@@ -1706,6 +1779,7 @@ async fn test_merge_noop_heavy_matched_update_with_inserts_does_not_rewrite_targ
         .with_source_alias("source")
         .with_target_alias("target")
         .with_session_state(Arc::new(ctx.state()))
+        .with_deletion_vectors(deletion_vectors)
         .when_matched_update(|update| {
             update
                 .predicate(

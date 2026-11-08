@@ -127,7 +127,6 @@ impl LogicalFileView {
     }
 
     /// Returns the raw file path as stored in the log, without URL decoding.
-    #[cfg(any(test, feature = "datafusion"))]
     pub(crate) fn path_raw(&self) -> &str {
         get_string_value(
             self.files

@@ -85,17 +85,45 @@ async fn collect_active_paths(
             },
         )
         .try_fold(HashSet::new(), |mut paths, file| {
-            ready(
-                deletion_vector_path(file.deletion_vector_descriptor(), table_root).map(
-                    |dv_path| {
-                        paths.insert(file.object_store_path());
-                        paths.extend(dv_path);
-                        paths
-                    },
-                ),
-            )
+            ready((|| {
+                paths.extend(table_relative_object_store_path(
+                    file.path_raw(),
+                    table_root,
+                )?);
+                paths.extend(deletion_vector_path(
+                    file.deletion_vector_descriptor(),
+                    table_root,
+                )?);
+                Ok(paths)
+            })())
         })
         .await
+}
+
+fn table_relative_object_store_path(path: &str, table_root: &Url) -> DeltaResult<Option<Path>> {
+    let mut file_url = table_root.join(path).map_err(|error| {
+        DeltaTableError::InvalidTableLocation(format!(
+            "Failed to resolve a VACUUM file URI: {error}"
+        ))
+    })?;
+    let mut root = table_root.clone();
+    file_url.set_query(None);
+    file_url.set_fragment(None);
+    root.set_query(None);
+    root.set_fragment(None);
+    let same_store = file_url.scheme() == root.scheme()
+        && file_url.host_str() == root.host_str()
+        && file_url.port_or_known_default() == root.port_or_known_default()
+        && file_url.username() == root.username();
+    match same_store.then(|| root.make_relative(&file_url)).flatten() {
+        Some(relative) if !relative.is_empty() && !relative.starts_with("../") => {
+            Ok(Some(Path::from_url_path(relative)?))
+        }
+        _ => {
+            debug!("Skipping a VACUUM reference outside the table root");
+            Ok(None)
+        }
+    }
 }
 
 fn deletion_vector_path(
@@ -109,16 +137,7 @@ fn deletion_vector_path(
     let Some(dv_url) = dv.absolute_path(table_root)? else {
         return Ok(None);
     };
-    match table_root.make_relative(&dv_url) {
-        Some(relative) if !relative.starts_with("../") => Ok(Some(Path::from_url_path(relative)?)),
-        _ => Ok(None),
-    }
-}
-
-fn tombstone_object_store_path(tombstone: &TombstoneView) -> Path {
-    let path = tombstone.path();
-    // Use `Path::parse` to preserve percent encoding. `Path::from` converts percent signs to `%25`.
-    Path::parse(path.as_ref()).unwrap_or_else(|_| Path::from(path.as_ref()))
+    table_relative_object_store_path(dv_url.as_str(), table_root)
 }
 
 async fn collect_keep_version_paths(
@@ -401,7 +420,13 @@ impl VacuumBuilder {
         // VacuumMode::Lite file set
         // A physical file is eligible only after every removal referencing it has expired.
         for tombs in expired_tombstones.iter() {
-            let path = tombstone_object_store_path(tombs);
+            let Some(path) = table_relative_object_store_path(
+                tombs.path_raw(),
+                snapshot.table_configuration().table_root(),
+            )?
+            else {
+                continue;
+            };
             if ok_to_delete(&path, &valid_files, &keep_files, partition_columns)? {
                 queued_paths.insert(path.clone());
                 files_to_delete.push(path);
@@ -993,11 +1018,16 @@ async fn collect_tombstones(
             (Vec::new(), TombstonePathSets::default()),
             |(mut expired_tombstones, mut tombstone_path_sets), tombstone| {
                 let is_expired = is_tombstone_expired(&tombstone, tombstone_retention_timestamp);
-                let dv_path =
-                    deletion_vector_path(tombstone.deletion_vector_descriptor(), table_root);
-                ready(dv_path.map(|dv_path| {
-                    let path = tombstone_object_store_path(&tombstone);
-                    tombstone_path_sets.record(path, is_expired);
+                ready((|| {
+                    let path = table_relative_object_store_path(tombstone.path_raw(), table_root)?;
+                    let dv_path =
+                        deletion_vector_path(tombstone.deletion_vector_descriptor(), table_root)?;
+                    if let Some(path) = path {
+                        tombstone_path_sets.record(path.clone(), is_expired);
+                        if is_expired {
+                            expired_tombstones.push((tombstone, path));
+                        }
+                    }
                     if let Some(path) = dv_path {
                         tombstone_path_sets.record(path.clone(), is_expired);
                         if is_expired {
@@ -1006,23 +1036,26 @@ async fn collect_tombstones(
                                 .insert(path);
                         }
                     }
-                    if is_expired {
-                        expired_tombstones.push(tombstone);
-                    }
-                    (expired_tombstones, tombstone_path_sets)
-                }))
+                    Ok((expired_tombstones, tombstone_path_sets))
+                })())
             },
         )
         .await?;
     let mut queued_paths = HashSet::new();
-    expired_tombstones.retain(|tombstone| {
-        let path = tombstone_object_store_path(tombstone);
-        tombstone_path_sets.expired_tombstone_paths.contains(&path) && queued_paths.insert(path)
+    expired_tombstones.retain(|(_, path)| {
+        tombstone_path_sets.expired_tombstone_paths.contains(path)
+            && queued_paths.insert(path.clone())
     });
     tombstone_path_sets
         .expired_deletion_vector_paths
         .retain(|path| tombstone_path_sets.expired_tombstone_paths.contains(path));
-    Ok((expired_tombstones, tombstone_path_sets))
+    Ok((
+        expired_tombstones
+            .into_iter()
+            .map(|(tombstone, _)| tombstone)
+            .collect(),
+        tombstone_path_sets,
+    ))
 }
 
 /// List files no longer referenced by a Delta table and are older than the retention threshold.
@@ -1269,9 +1302,26 @@ mod tests {
         Ok(())
     }
 
-    async fn encoded_tombstone_table() -> DeltaResult<(DeltaTable, object_store::path::Path)> {
+    fn absolute_log_path(table: &DeltaTable, path: &str) -> String {
+        let encoded = crate::kernel::models::actions::serde_path::encode_path(path);
+        let url = table.log_store().root_url().join(&encoded).unwrap();
+        percent_encoding::percent_decode_str(url.as_str())
+            .decode_utf8()
+            .unwrap()
+            .into_owned()
+    }
+
+    async fn encoded_tombstone_table(
+        absolute: bool,
+    ) -> DeltaResult<(DeltaTable, object_store::path::Path)> {
         let encoded_path = "partition=a/file%20name.parquet";
-        let table = DeltaTable::new_in_memory()
+        let table = DeltaTable::new_in_memory();
+        let log_path = if absolute {
+            absolute_log_path(&table, encoded_path)
+        } else {
+            encoded_path.to_string()
+        };
+        let table = table
             .create()
             .with_columns([StructField::new(
                 "id".to_string(),
@@ -1279,7 +1329,7 @@ mod tests {
                 false,
             )])
             .with_actions([Action::Add(crate::test_utils::make_test_add(
-                encoded_path,
+                &log_path,
                 &[],
                 0,
             ))])
@@ -1292,7 +1342,7 @@ mod tests {
         commit_test_actions(
             &table,
             vec![Action::Remove(Remove {
-                path: encoded_path.to_string(),
+                path: log_path,
                 data_change: true,
                 deletion_timestamp: Some(0),
                 size: Some(7),
@@ -1306,8 +1356,9 @@ mod tests {
 
     async fn encoded_tombstone_plan(
         mode: VacuumMode,
+        absolute: bool,
     ) -> DeltaResult<(VacuumPlan, object_store::path::Path)> {
-        let (table, expected_path) = encoded_tombstone_table().await?;
+        let (table, expected_path) = encoded_tombstone_table(absolute).await?;
         let log_store = table.log_store();
         let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
         let plan = VacuumBuilder::new(log_store, None)
@@ -1321,19 +1372,24 @@ mod tests {
         Ok((plan, expected_path))
     }
 
+    #[rstest::rstest]
     #[tokio::test]
-    async fn lite_vacuum_preserves_encoded_tombstone_identity() -> DeltaResult<()> {
-        let (plan, expected_path) = encoded_tombstone_plan(VacuumMode::Lite).await?;
+    async fn lite_vacuum_preserves_encoded_tombstone_identity(
+        #[values(false, true)] absolute: bool,
+    ) -> DeltaResult<()> {
+        let (plan, expected_path) = encoded_tombstone_plan(VacuumMode::Lite, absolute).await?;
 
         assert_eq!(plan.files_to_delete, vec![expected_path]);
         assert_eq!(plan.file_sizes, vec![7]);
         Ok(())
     }
 
+    #[rstest::rstest]
     #[tokio::test]
-    async fn full_vacuum_preserves_encoded_tombstone_identity_without_duplicate_orphan()
-    -> DeltaResult<()> {
-        let (plan, expected_path) = encoded_tombstone_plan(VacuumMode::Full).await?;
+    async fn full_vacuum_preserves_encoded_tombstone_identity_without_duplicate_orphan(
+        #[values(false, true)] absolute: bool,
+    ) -> DeltaResult<()> {
+        let (plan, expected_path) = encoded_tombstone_plan(VacuumMode::Full, absolute).await?;
 
         assert_eq!(plan.files_to_delete, vec![expected_path]);
         assert_eq!(plan.file_sizes, vec![7]);
@@ -1366,10 +1422,17 @@ mod tests {
         Ok(())
     }
 
+    #[rstest::rstest]
     #[tokio::test]
-    async fn encoded_active_and_kept_paths_share_canonical_identity() -> DeltaResult<()> {
+    async fn encoded_active_and_kept_paths_share_canonical_identity(
+        #[values(false, true)] absolute: bool,
+        #[values(VacuumMode::Lite, VacuumMode::Full)] mode: VacuumMode,
+    ) -> DeltaResult<()> {
         let encoded = "partition=a/file%20name.parquet";
-        let table = DeltaTable::new_in_memory()
+        let table = DeltaTable::new_in_memory();
+        let absolute_path = absolute_log_path(&table, encoded);
+        let log_path = if absolute { &absolute_path } else { encoded };
+        let table = table
             .create()
             .with_columns([StructField::new(
                 "id".to_string(),
@@ -1377,7 +1440,7 @@ mod tests {
                 false,
             )])
             .with_actions([Action::Add(crate::test_utils::make_test_add(
-                encoded,
+                log_path,
                 &[],
                 0,
             ))])
@@ -1394,6 +1457,150 @@ mod tests {
         assert!(active_paths.contains(&path));
         assert!(!lazy.has_materialized_files_for_test());
 
+        table
+            .object_store()
+            .put(&path, PutPayload::from_static(b"active"))
+            .await?;
+        commit_test_actions(
+            &table,
+            vec![Action::Remove(Remove {
+                path: if absolute {
+                    encoded.to_string()
+                } else {
+                    absolute_path
+                },
+                data_change: true,
+                deletion_timestamp: Some(0),
+                size: Some(6),
+                ..Default::default()
+            })],
+        )
+        .await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
+        let plan = VacuumBuilder::new(log_store, None)
+            .with_retention_period(Duration::milliseconds(1))
+            .with_enforce_retention_duration(false)
+            .with_mode(mode)
+            .with_clock(Arc::new(MockClock::new(2_000_000_000_000)))
+            .create_vacuum_plan(&snapshot)
+            .await?;
+        assert!(plan.files_to_delete.is_empty());
+
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case("memory:///table/", "file%20name.parquet", Some("file name.parquet"))]
+    #[case(
+        "memory:///table/",
+        "file%2520name.parquet",
+        Some("file%20name.parquet")
+    )]
+    #[case(
+        "memory:///table/",
+        "memory:///table/part=a/file%25%23%3Fname.parquet",
+        Some("part=a/file%#?name.parquet")
+    )]
+    #[case("memory:///table/", "../table/file.parquet", Some("file.parquet"))]
+    #[case("memory:///table/", "../file.parquet", None)]
+    #[case("memory:///table/", "memory:///table2/file.parquet", None)]
+    #[case("s3://bucket/table/", "s3://other/table/file.parquet", None)]
+    #[case(
+        "abfss://left@account.dfs.core.windows.net/table/",
+        "abfss://right@account.dfs.core.windows.net/table/file.parquet",
+        None
+    )]
+    fn vacuum_paths_resolve_only_within_the_same_table(
+        #[case] root: &str,
+        #[case] path: &str,
+        #[case] expected: Option<&str>,
+    ) -> DeltaResult<()> {
+        let actual = table_relative_object_store_path(path, &Url::parse(root).unwrap())?;
+        assert_eq!(
+            actual,
+            expected.map(|path| object_store::path::Path::parse(path).unwrap())
+        );
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn vacuum_path_aliases_share_removal_retention(
+        #[values(false, true)] recent_absolute: bool,
+        #[values(VacuumMode::Lite, VacuumMode::Full)] mode: VacuumMode,
+    ) -> DeltaResult<()> {
+        let path = "partition=a/file%20name.parquet";
+        let table = DeltaTable::new_in_memory();
+        let absolute_path = absolute_log_path(&table, path);
+        let (recent, old) = if recent_absolute {
+            (absolute_path.as_str(), path)
+        } else {
+            (path, absolute_path.as_str())
+        };
+        let table = table
+            .create()
+            .with_columns([StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::Integer),
+                false,
+            )])
+            .with_actions([Action::Add(crate::test_utils::make_test_add(
+                recent,
+                &[],
+                0,
+            ))])
+            .await?;
+        let physical_path = object_store::path::Path::parse(path)?;
+        table
+            .object_store()
+            .put(&physical_path, PutPayload::from_static(b"retired"))
+            .await?;
+        commit_test_actions(
+            &table,
+            vec![
+                Action::Remove(Remove {
+                    path: old.to_string(),
+                    deletion_timestamp: Some(0),
+                    size: Some(7),
+                    data_change: true,
+                    ..Default::default()
+                }),
+                Action::Remove(Remove {
+                    path: recent.to_string(),
+                    deletion_timestamp: Some(99_500),
+                    size: Some(7),
+                    data_change: true,
+                    ..Default::default()
+                }),
+            ],
+        )
+        .await?;
+        let log_store = table.log_store();
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
+        for now in [100_000, 100_500, 100_501] {
+            let plan = VacuumBuilder::new(log_store.clone(), None)
+                .with_mode(mode.clone())
+                .with_retention_period(Duration::milliseconds(1_000))
+                .with_enforce_retention_duration(false)
+                .with_clock(Arc::new(MockClock::new(now)))
+                .create_vacuum_plan(&snapshot)
+                .await?;
+            if now > 100_500 {
+                assert_eq!(plan.files_to_delete, vec![physical_path.clone()]);
+                assert_eq!(plan.file_sizes, vec![7]);
+            } else {
+                assert!(plan.files_to_delete.is_empty());
+            }
+        }
+        let kept = VacuumBuilder::new(log_store, None)
+            .with_mode(mode)
+            .with_retention_period(Duration::milliseconds(1_000))
+            .with_enforce_retention_duration(false)
+            .with_keep_versions(&[0])
+            .with_clock(Arc::new(MockClock::new(100_501)))
+            .create_vacuum_plan(&snapshot)
+            .await?;
+        assert!(kept.files_to_delete.is_empty());
         Ok(())
     }
 
