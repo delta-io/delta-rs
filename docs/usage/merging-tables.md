@@ -49,6 +49,8 @@ the logical file remove/add pairs are published in one transaction.
 A commit conflict requires rerunning MERGE against a fresh table snapshot. Physical row
 locations and prepared deletion vectors must not be reused after a conflict. File
 compaction and vacuum remain separate maintenance operations.
+FULL VACUUM retains replaced deletion-vector files until their Remove actions have
+expired, even when the DV files themselves are older than the retention period.
 
 This option is currently exposed by the Rust builder, not the Python or .NET bindings.
 

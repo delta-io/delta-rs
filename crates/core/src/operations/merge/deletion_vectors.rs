@@ -51,7 +51,18 @@ pub(super) async fn prepare_deletion_vectors(
             continue;
         };
         updated_paths.insert(file_id.to_string());
-        let path = file.object_store_path();
+        let file_url = url::Url::parse(&file_id).map_err(|error| {
+            DeltaTableError::InvalidTableLocation(format!("Invalid DV data file URL: {error}"))
+        })?;
+        let relative_path = root
+            .make_relative(&file_url)
+            .filter(|path| !path.starts_with("../"))
+            .ok_or_else(|| {
+                DeltaTableError::InvalidTableLocation(format!(
+                    "DV data file is outside table root: {file_url}"
+                ))
+            })?;
+        let path = Path::from_url_path(relative_path)?;
         let remove = file.remove_action(true);
         let mut add = file.to_add();
         let (mut stats, num_records) = physical_row_count(&add, &path, log_store).await?;

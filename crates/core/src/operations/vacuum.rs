@@ -40,8 +40,8 @@ use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
-    ActiveAddOptions, AddStatsPolicy, EagerSnapshot, LogicalFileView, Snapshot, TombstoneView,
-    Version, resolve_snapshot,
+    ActiveAddOptions, AddStatsPolicy, DeletionVectorDescriptor, EagerSnapshot, Snapshot,
+    TombstoneView, Version, resolve_snapshot,
 };
 use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef};
@@ -85,17 +85,24 @@ async fn collect_active_paths(
             },
         )
         .try_fold(HashSet::new(), |mut paths, file| {
-            ready(deletion_vector_path(&file, table_root).map(|dv_path| {
-                paths.insert(file.object_store_path());
-                paths.extend(dv_path);
-                paths
-            }))
+            ready(
+                deletion_vector_path(file.deletion_vector_descriptor(), table_root).map(
+                    |dv_path| {
+                        paths.insert(file.object_store_path());
+                        paths.extend(dv_path);
+                        paths
+                    },
+                ),
+            )
         })
         .await
 }
 
-fn deletion_vector_path(file: &LogicalFileView, table_root: &Url) -> DeltaResult<Option<Path>> {
-    let Some(dv) = file.deletion_vector_descriptor() else {
+fn deletion_vector_path(
+    dv: Option<DeletionVectorDescriptor>,
+    table_root: &Url,
+) -> DeltaResult<Option<Path>> {
+    let Some(dv) = dv else {
         return Ok(None);
     };
     let dv = KernelDeletionVectorDescriptor::try_from(dv)?;
@@ -957,18 +964,28 @@ async fn collect_full_mode_tombstones(
     tombstone_retention_timestamp: i64,
     store: &dyn LogStore,
 ) -> DeltaResult<(Vec<TombstoneView>, TombstonePathSets)> {
+    let table_root = snapshot.table_configuration().table_root();
     snapshot
         .active_tombstones(store)
         .try_fold(
             (Vec::new(), TombstonePathSets::default()),
             |(mut expired_tombstones, mut tombstone_path_sets), tombstone| {
                 let is_expired = is_tombstone_expired(&tombstone, tombstone_retention_timestamp);
-                let path = tombstone_object_store_path(&tombstone);
-                tombstone_path_sets.record(path, is_expired);
-                if is_expired {
-                    expired_tombstones.push(tombstone);
-                }
-                ready(Ok((expired_tombstones, tombstone_path_sets)))
+                let dv_path =
+                    deletion_vector_path(tombstone.deletion_vector_descriptor(), table_root);
+                ready(dv_path.map(|dv_path| {
+                    let path = tombstone_object_store_path(&tombstone);
+                    tombstone_path_sets.record(path, is_expired);
+                    // A shared DV file remains protected until all its recent removals expire.
+                    // Expired DVs are found by the orphan scan, not the data-file deletion queue.
+                    if !is_expired {
+                        tombstone_path_sets.all_tombstone_paths.extend(dv_path);
+                    }
+                    if is_expired {
+                        expired_tombstones.push(tombstone);
+                    }
+                    (expired_tombstones, tombstone_path_sets)
+                }))
             },
         )
         .await
@@ -1012,7 +1029,9 @@ mod tests {
 
     use super::*;
     use crate::kernel::transaction::CommitBuilder;
-    use crate::kernel::{Action, DataType, PrimitiveType, Remove, Snapshot, StructField};
+    use crate::kernel::{
+        Action, DataType, LogicalFileView, PrimitiveType, Remove, Snapshot, StructField,
+    };
     use crate::logstore::LogStoreConfig;
     use crate::protocol::SaveMode;
     use crate::writer::test_utils::create_initialized_table;
@@ -1767,6 +1786,229 @@ mod tests {
             .set_accessed(last_modified)
             .set_modified(last_modified);
         file.set_times(times).unwrap();
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn test_vacuum_full_retired_dv_obeys_tombstone_retention(
+        #[values(false, true)] parallel: bool,
+    ) -> DeltaResult<()> {
+        let directory = tempfile::tempdir().unwrap();
+        let root = Url::from_directory_path(directory.path()).unwrap();
+        let table = DeltaTable::try_from_url(root.clone())
+            .await?
+            .create()
+            .with_column(
+                "id",
+                DataType::Primitive(PrimitiveType::Integer),
+                false,
+                None,
+            )
+            .with_column(
+                "value",
+                DataType::Primitive(PrimitiveType::Integer),
+                false,
+                None,
+            )
+            .with_column(
+                "part1",
+                DataType::Primitive(PrimitiveType::String),
+                false,
+                None,
+            )
+            .with_column(
+                "part2",
+                DataType::Primitive(PrimitiveType::String),
+                false,
+                None,
+            )
+            .with_partition_columns(["part1", "part2"])
+            .with_configuration_property(crate::TableProperty::EnableDeletionVectors, Some("true"))
+            .await?;
+        let batch = arrow_array::RecordBatch::try_from_iter([
+            (
+                "id",
+                Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3])) as arrow_array::ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(arrow_array::Int32Array::from(vec![10, 20, 30])),
+            ),
+            (
+                "part1",
+                Arc::new(arrow_array::StringArray::from(vec!["a"; 3])),
+            ),
+            (
+                "part2",
+                Arc::new(arrow_array::StringArray::from(vec!["b"; 3])),
+            ),
+        ])?;
+        let mut table = table.write(vec![batch]).await?;
+        let ctx = datafusion::prelude::SessionContext::new();
+        let mut previous = None;
+        for id in [1, 2] {
+            let source = arrow_array::RecordBatch::try_from_iter([(
+                "id",
+                Arc::new(arrow_array::Int32Array::from(vec![id])) as arrow_array::ArrayRef,
+            )])?;
+            (table, _) = table
+                .merge(
+                    ctx.read_batch(source)?,
+                    datafusion::logical_expr::col("target.id")
+                        .eq(datafusion::logical_expr::col("source.id")),
+                )
+                .with_source_alias("source")
+                .with_target_alias("target")
+                .with_deletion_vectors(true)
+                .when_matched_update(|update| {
+                    update.update("value", datafusion::logical_expr::lit(id * 100))
+                })?
+                .await?;
+            if id == 1 {
+                previous = Some(table.clone());
+            }
+        }
+        let previous = previous.unwrap();
+        let root = table
+            .snapshot()?
+            .snapshot()
+            .table_configuration()
+            .table_root()
+            .clone();
+        let previous_files = previous
+            .get_active_add_actions_by_partitions(&[])
+            .try_collect::<Vec<_>>()
+            .await?;
+        let old_descriptor = previous_files
+            .iter()
+            .find_map(LogicalFileView::deletion_vector_descriptor)
+            .unwrap();
+        let old_url = KernelDeletionVectorDescriptor::try_from(old_descriptor.clone())?
+            .absolute_path(&root)?
+            .unwrap();
+        let old_path =
+            object_store::path::Path::from_url_path(root.make_relative(&old_url).unwrap())?;
+        let bytes = table
+            .log_store()
+            .read_commit_entry(table.version().unwrap())
+            .await?
+            .unwrap();
+        let retired_at = std::str::from_utf8(&bytes)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Action>(line).unwrap())
+            .find_map(|action| match action {
+                Action::Remove(remove)
+                    if remove.deletion_vector.as_ref() == Some(&old_descriptor) =>
+                {
+                    remove.deletion_timestamp
+                }
+                _ => None,
+            })
+            .unwrap();
+        let retention = Duration::hours(24);
+        let stale_time = UNIX_EPOCH
+            + StdDuration::from_millis(
+                u64::try_from(retired_at - Duration::days(10).num_milliseconds()).unwrap(),
+            );
+        set_last_modified(&old_url.to_file_path().unwrap(), stale_time);
+        let orphan = "deletion_vector_orphan.bin";
+        std::fs::write(directory.path().join(orphan), b"untracked DV").unwrap();
+        set_last_modified(&directory.path().join(orphan), stale_time);
+        for delta in [-1, 0, 1] {
+            let now = retired_at + retention.num_milliseconds() + delta;
+            let (_, plan) =
+                VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                    .with_retention_period(retention)
+                    .with_enforce_retention_duration(false)
+                    .with_mode(VacuumMode::Full)
+                    .with_dry_run(true)
+                    .parallel_scan(parallel)
+                    .with_clock(Arc::new(MockClock::new(now)))
+                    .await?;
+            assert_eq!(
+                plan.files_deleted.contains(&old_path.to_string()),
+                delta > 0,
+                "retired DV eligibility must follow its removal timestamp, not file age"
+            );
+            assert!(plan.files_deleted.contains(&orphan.to_string()));
+        }
+        let (_, kept) =
+            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                .with_retention_period(retention)
+                .with_enforce_retention_duration(false)
+                .with_mode(VacuumMode::Full)
+                .with_dry_run(true)
+                .parallel_scan(parallel)
+                .with_keep_versions(&[previous.version().unwrap()])
+                .with_clock(Arc::new(MockClock::new(
+                    retired_at + retention.num_milliseconds() + 1,
+                )))
+                .await?;
+        assert!(!kept.files_deleted.contains(&old_path.to_string()));
+        let (_, vacuumed) =
+            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                .with_retention_period(retention)
+                .with_enforce_retention_duration(false)
+                .with_mode(VacuumMode::Full)
+                .with_dry_run(false)
+                .parallel_scan(parallel)
+                .with_clock(Arc::new(MockClock::new(
+                    retired_at + retention.num_milliseconds() - 1,
+                )))
+                .await?;
+        assert!(!vacuumed.files_deleted.contains(&old_path.to_string()));
+        ctx.register_table("previous", previous.table_provider().await?)?;
+        let rows = ctx
+            .sql("SELECT id, value FROM previous ORDER BY id")
+            .await?
+            .collect()
+            .await?;
+        datafusion::assert_batches_eq!(
+            &[
+                "+----+-------+",
+                "| id | value |",
+                "+----+-------+",
+                "| 1  | 100   |",
+                "| 2  | 20    |",
+                "| 3  | 30    |",
+                "+----+-------+",
+            ],
+            &rows
+        );
+        let (_, expired) =
+            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                .with_retention_period(retention)
+                .with_enforce_retention_duration(false)
+                .with_mode(VacuumMode::Full)
+                .with_dry_run(false)
+                .parallel_scan(parallel)
+                .with_clock(Arc::new(MockClock::new(
+                    retired_at + retention.num_milliseconds() + 1,
+                )))
+                .await?;
+        assert!(expired.files_deleted.contains(&old_path.to_string()));
+        assert!(!old_url.to_file_path().unwrap().exists());
+        ctx.register_table("current", table.table_provider().await?)?;
+        let rows = ctx
+            .sql("SELECT id, value FROM current ORDER BY id")
+            .await?
+            .collect()
+            .await?;
+        datafusion::assert_batches_eq!(
+            &[
+                "+----+-------+",
+                "| id | value |",
+                "+----+-------+",
+                "| 1  | 100   |",
+                "| 2  | 200   |",
+                "| 3  | 30    |",
+                "+----+-------+",
+            ],
+            &rows
+        );
+        Ok(())
     }
 
     #[tokio::test]

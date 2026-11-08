@@ -10,15 +10,20 @@ use datafusion::common::{Column, ScalarValue, TableReference};
 use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::{Expr, col, lit};
 use datafusion::prelude::{SessionConfig, SessionContext};
-use deltalake_core::kernel::transaction::TransactionError;
+use delta_kernel::actions::deletion_vector_writer::{
+    KernelDeletionVector, StreamingDeletionVectorWriter,
+};
+use deltalake_core::kernel::transaction::{CommitBuilder, TransactionError};
 use deltalake_core::kernel::{
     Action, DataType as DeltaDataType, PrimitiveType, StructField, StructType,
 };
 use deltalake_core::operations::merge::MergeMetrics;
+use deltalake_core::protocol::DeltaOperation;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::{DeltaResult, DeltaTable, DeltaTableError, TableProperty, open_table};
 use futures::TryStreamExt;
 use object_store::ObjectStoreExt;
+use object_store::path::Path;
 use parquet::file::properties::WriterProperties;
 use rstest::rstest;
 use std::{collections::HashSet, sync::Arc};
@@ -183,6 +188,251 @@ async fn latest_dv_merge_actions(table: &DeltaTable) -> Vec<Action> {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
+}
+
+#[tokio::test]
+async fn test_dv_merge_absolute_add_without_row_count() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = Url::from_directory_path(directory.path()).unwrap();
+    let mut table = DeltaTable::try_from_url(root.clone())
+        .await
+        .unwrap()
+        .create()
+        .with_columns(id_value_delta_schema().fields().cloned())
+        .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+        .await
+        .unwrap()
+        .write(vec![id_value_batch(vec![1, 2, 3], vec![10, 20, 30])])
+        .await
+        .unwrap();
+    let actions = latest_dv_merge_actions(&table).await;
+    let mut add = actions
+        .into_iter()
+        .find_map(|action| match action {
+            Action::Add(add) => Some(add),
+            _ => None,
+        })
+        .unwrap();
+    let files = table
+        .get_active_add_actions_by_partitions(&[])
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let remove = files[0].remove_action(true);
+    let store = table.log_store().object_store();
+    let bytes = store
+        .get(&files[0].object_store_path())
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let data_path = Path::parse("data dir%/part %name.parquet").unwrap();
+    store.put(&data_path, bytes.clone().into()).await.unwrap();
+    let root = table
+        .snapshot()
+        .unwrap()
+        .snapshot()
+        .table_configuration()
+        .table_root()
+        .clone();
+    let absolute_path = root
+        .join("data%20dir%25/part%20%25name.parquet")
+        .unwrap()
+        .to_string();
+    let absolute_path = percent_encoding::percent_decode_str(&absolute_path)
+        .decode_utf8()
+        .unwrap()
+        .into_owned();
+    add.path = absolute_path.clone();
+    add.stats = None;
+    CommitBuilder::default()
+        .with_actions(vec![Action::Remove(remove), Action::Add(add)])
+        .build(
+            Some(table.snapshot().unwrap()),
+            table.log_store(),
+            DeltaOperation::Write {
+                mode: SaveMode::Overwrite,
+                partition_by: None,
+                predicate: None,
+            },
+        )
+        .await
+        .unwrap();
+    table.update_state().await.unwrap();
+    let version = table.version().unwrap();
+    let ctx = SessionContext::new();
+    let (table, _) = table
+        .merge(
+            ctx.read_batch(id_value_batch(vec![2], vec![222])).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_matched_update(|update| update.update("value", col("source.value")))
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(table.version(), Some(version + 1));
+    let actions = latest_dv_merge_actions(&table).await;
+    let updated = actions
+        .iter()
+        .find_map(|action| match action {
+            Action::Add(add) if add.path == absolute_path => Some(add),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(updated.deletion_vector.as_ref().unwrap().cardinality, 1);
+    let stats: serde_json::Value = serde_json::from_str(updated.stats.as_ref().unwrap()).unwrap();
+    assert_eq!(stats["numRecords"], 3);
+    assert_eq!(
+        store.get(&data_path).await.unwrap().bytes().await.unwrap(),
+        bytes
+    );
+    ctx.register_table("result", table.table_provider().await.unwrap())
+        .unwrap();
+    let result = ctx
+        .sql("SELECT id, value FROM result ORDER BY id")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    datafusion::assert_batches_eq!(
+        &[
+            "+----+-------+",
+            "| id | value |",
+            "+----+-------+",
+            "| 1  | 10    |",
+            "| 2  | 222   |",
+            "| 3  | 30    |",
+            "+----+-------+",
+        ],
+        &result
+    );
+}
+
+#[tokio::test]
+async fn test_dv_merge_rejects_duplicate_active_physical_paths() {
+    let mut table = DeltaTable::new_in_memory()
+        .create()
+        .with_columns(id_value_delta_schema().fields().cloned())
+        .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+        .await
+        .unwrap()
+        .write(vec![id_value_batch(vec![1, 2], vec![10, 20])])
+        .await
+        .unwrap();
+    let add = latest_dv_merge_actions(&table)
+        .await
+        .into_iter()
+        .find_map(|action| match action {
+            Action::Add(add) => Some(add),
+            _ => None,
+        })
+        .unwrap();
+    let files = table
+        .get_active_add_actions_by_partitions(&[])
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let mut actions = vec![Action::Remove(files[0].remove_action(true))];
+    let store = table.log_store().object_store();
+    for deleted_row in [0, 1] {
+        let mut bytes = Vec::new();
+        let mut writer = StreamingDeletionVectorWriter::new(&mut bytes);
+        let mut vector = KernelDeletionVector::new();
+        vector.add_deleted_row_indexes([deleted_row]);
+        let result = writer.write_deletion_vector(vector).unwrap();
+        writer.finalize().unwrap();
+        let path = Path::from(format!("deletion_vector_{deleted_row}.bin"));
+        store.put(&path, bytes.into()).await.unwrap();
+        let mut add = add.clone();
+        add.deletion_vector = Some(deltalake_core::kernel::DeletionVectorDescriptor {
+            storage_type: deltalake_core::kernel::StorageType::AbsolutePath,
+            path_or_inline_dv: table
+                .log_store()
+                .root_url()
+                .join(path.as_ref())
+                .unwrap()
+                .to_string(),
+            offset: Some(result.offset),
+            size_in_bytes: result.size_in_bytes,
+            cardinality: result.cardinality,
+        });
+        let mut stats: serde_json::Value =
+            serde_json::from_str(add.stats.as_ref().unwrap()).unwrap();
+        stats["tightBounds"] = false.into();
+        add.stats = Some(stats.to_string());
+        actions.push(Action::Add(add));
+    }
+    CommitBuilder::default()
+        .with_actions(actions)
+        .build(
+            Some(table.snapshot().unwrap()),
+            table.log_store(),
+            DeltaOperation::Write {
+                mode: SaveMode::Overwrite,
+                partition_by: None,
+                predicate: None,
+            },
+        )
+        .await
+        .unwrap();
+    table.update_state().await.unwrap();
+    let active = table
+        .get_active_add_actions_by_partitions(&[])
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    assert_eq!(active.len(), 2);
+    assert_eq!(active[0].path(), active[1].path());
+    assert_ne!(
+        active[0].deletion_vector_descriptor(),
+        active[1].deletion_vector_descriptor()
+    );
+    let version = table.version().unwrap();
+    let ctx = SessionContext::new();
+    ctx.register_table("before", table.table_provider().await.unwrap())
+        .unwrap();
+    let before = ctx
+        .sql("SELECT id, value FROM before WHERE id = 1")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert!(before.iter().any(|batch| batch.num_rows() > 0));
+    let error = table
+        .clone()
+        .merge(
+            ctx.read_batch(id_value_batch(vec![99], vec![100])).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_not_matched_by_source_update(|update| {
+            update
+                .predicate(col("target.id").eq(lit(1)))
+                .update("value", lit(100))
+        })
+        .unwrap()
+        .await
+        .unwrap_err();
+    assert!(matches!(error, DeltaTableError::Generic(ref message)
+        if message.contains("multiple active logical files")));
+    assert!(
+        table
+            .log_store()
+            .read_commit_entry(version + 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    table.load().await.unwrap();
+    assert_eq!(table.version(), Some(version));
 }
 
 #[rstest]
