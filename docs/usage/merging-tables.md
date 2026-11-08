@@ -56,6 +56,9 @@ locations and prepared deletion vectors must not be reused after a conflict. Fil
 compaction and vacuum remain separate maintenance operations.
 FULL VACUUM retains replaced deletion-vector files until their Remove actions have
 expired, even when the DV files themselves are older than the retention period.
+Both FULL and LITE VACUUM reclaim tracked retired DV files after all removals referencing
+the file expire. Active files and explicitly kept versions remain protected, including
+when several vectors share one DV file.
 FULL and LITE VACUUM retain a removed Parquet file until its newest removal expires,
 including when compaction retires a file that was previously updated using DVs.
 
@@ -64,6 +67,9 @@ leave unreferenced files. FULL VACUUM reclaims these orphans after the retention
 period; LITE VACUUM does not discover untracked outputs. Do not delete output files
 solely because MERGE returned an error: an error during post-commit work can occur
 after the commit has already been published.
+
+`num_target_files_added` counts logical Add actions in both MERGE modes, including
+DV replacement Adds and excluding CDC files and metadata actions.
 
 This option is currently exposed by the Rust builder, not the Python or .NET bindings.
 

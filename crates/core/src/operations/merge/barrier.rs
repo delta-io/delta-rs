@@ -38,7 +38,7 @@ use crate::{
     DeltaTableError,
     delta_datafusion::get_path_column,
     operations::merge::{
-        TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_ROW_ORDINAL_IN_FILE_COLUMN,
+        TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_PHYSICAL_ROW_INDEX_COLUMN,
         TARGET_UPDATE_COLUMN,
     },
 };
@@ -283,7 +283,7 @@ fn collect_deleted_rows(
 ) -> DataFusionResult<()> {
     let files = get_path_column(batch, file_column)?;
     let ordinals = batch
-        .column_by_name(TARGET_ROW_ORDINAL_IN_FILE_COLUMN)
+        .column_by_name(TARGET_PHYSICAL_ROW_INDEX_COLUMN)
         .and_then(|column| column.as_any().downcast_ref::<UInt64Array>())
         .ok_or_else(|| {
             DataFusionError::Execution("DV MERGE requires physical UInt64 row indexes".into())
@@ -566,7 +566,7 @@ pub(crate) fn find_node<T: ExecutionPlan>(
 mod tests {
     use super::{BarrierSurvivorSet, MergeBarrierStream, collect_deleted_rows};
     use crate::operations::merge::MergeBarrierExec;
-    use crate::operations::merge::TARGET_ROW_ORDINAL_IN_FILE_COLUMN;
+    use crate::operations::merge::TARGET_PHYSICAL_ROW_INDEX_COLUMN;
     use crate::operations::merge::{
         TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_UPDATE_COLUMN,
     };
@@ -602,7 +602,7 @@ mod tests {
                 true,
             ),
             Field::new(
-                TARGET_ROW_ORDINAL_IN_FILE_COLUMN,
+                TARGET_PHYSICAL_ROW_INDEX_COLUMN,
                 ArrowDataType::UInt64,
                 true,
             ),

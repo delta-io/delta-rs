@@ -120,6 +120,7 @@ const TARGET_COLUMN: &str = "__delta_rs_target";
 const OPERATION_COLUMN: &str = "__delta_rs_operation";
 const DELETE_COLUMN: &str = "__delta_rs_delete";
 const TARGET_ROW_ORDINAL_IN_FILE_COLUMN: &str = "__delta_rs_target_row_ordinal_in_file";
+const TARGET_PHYSICAL_ROW_INDEX_COLUMN: &str = "__delta_rs_target_physical_row_index";
 pub(crate) const TARGET_INSERT_COLUMN: &str = "__delta_rs_target_insert";
 pub(crate) const TARGET_UPDATE_COLUMN: &str = "__delta_rs_target_update";
 pub(crate) const TARGET_DELETE_COLUMN: &str = "__delta_rs_target_delete";
@@ -727,7 +728,7 @@ pub struct MergeMetrics {
     pub num_target_files_scanned: usize,
     /// Amount of files not considered (pruned) during table scan
     pub num_target_files_skipped_during_scan: usize,
-    /// Number of files added to the sink(target)
+    /// Number of logical Add actions, including DV replacements but excluding CDC and metadata.
     pub num_target_files_added: usize,
     /// Number of files removed from the sink(target)
     pub num_target_files_removed: usize,
@@ -847,7 +848,7 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
                     planning_ctx,
                 )?,
                 Arc::clone(&validation.file_column),
-                Arc::clone(&validation.row_ordinal_column),
+                Arc::clone(&validation.row_index_column),
             ))));
         }
 
@@ -875,11 +876,6 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
     }
 }
 
-const DUPLICATE_MATCH_MARKER_COLUMNS: &[&str] = &[
-    TARGET_ROW_ORDINAL_IN_FILE_COLUMN,
-    TARGET_MATCH_CARDINALITY_CLASS_COLUMN,
-];
-
 fn build_merge_barrier_validation_plan(
     input: LogicalPlan,
     state: &SessionState,
@@ -902,7 +898,18 @@ fn build_merge_barrier_validation_plan(
     });
 
     if needs_duplicate_match_validation {
-        build_duplicate_match_validation_plan(merge_barrier, state, ops, file_column)
+        let row_index_column = if deletion_vectors {
+            TARGET_PHYSICAL_ROW_INDEX_COLUMN
+        } else {
+            TARGET_ROW_ORDINAL_IN_FILE_COLUMN
+        };
+        build_duplicate_match_validation_plan(
+            merge_barrier,
+            state,
+            ops,
+            file_column,
+            Arc::new(row_index_column.to_string()),
+        )
     } else {
         Ok(merge_barrier)
     }
@@ -1125,7 +1132,7 @@ async fn execute(
             .with_file_column(file_column.as_str());
 
         if deletion_vectors {
-            builder = builder.with_physical_row_index_column(TARGET_ROW_ORDINAL_IN_FILE_COLUMN);
+            builder = builder.with_physical_row_index_column(TARGET_PHYSICAL_ROW_INDEX_COLUMN);
         } else if needs_duplicate_match_validation {
             builder = builder.with_row_index_column(TARGET_ROW_ORDINAL_IN_FILE_COLUMN);
         }
@@ -1615,7 +1622,9 @@ async fn execute(
             col(TARGET_DELETE_COLUMN),
             col(TARGET_COPY_COLUMN),
         ];
-        if needs_duplicate_match_validation || deletion_vectors {
+        if deletion_vectors {
+            fields.push(col(TARGET_PHYSICAL_ROW_INDEX_COLUMN));
+        } else if needs_duplicate_match_validation {
             fields.push(col(TARGET_ROW_ORDINAL_IN_FILE_COLUMN));
         }
 
@@ -1754,14 +1763,6 @@ async fn execute(
 
     metrics.rewrite_time_ms = write_plan_metrics.write_time_ms;
     metrics.scan_time_ms = write_plan_metrics.scan_time_ms;
-    metrics.num_target_files_added = if deletion_vectors {
-        actions
-            .iter()
-            .filter(|action| matches!(action, Action::Add(_)))
-            .count()
-    } else {
-        actions.len()
-    };
 
     let survivors = barrier
         .downcast_ref::<MergeBarrierExec>()
@@ -1782,10 +1783,6 @@ async fn execute(
             .iter()
             .filter(|action| matches!(action, Action::Remove(_)))
             .count();
-        metrics.num_target_files_added += updates
-            .iter()
-            .filter(|action| matches!(action, Action::Add(_)))
-            .count();
         actions.extend(updates);
     } else {
         let mut active_adds = snapshot.snapshot().active_adds(
@@ -1803,6 +1800,10 @@ async fn execute(
         }
     }
 
+    metrics.num_target_files_added = actions
+        .iter()
+        .filter(|action| matches!(action, Action::Add(_)))
+        .count();
     let source_count_metrics = source_count.metrics().unwrap();
     let target_count_metrics = op_count.metrics().unwrap();
     let scan_count_metrics = scan_count.metrics().unwrap();
@@ -2168,7 +2169,7 @@ mod tests {
         DELETE_COLUMN, MatchParticipationClass, MergeMetrics, OPERATION_COLUMN, OperationType,
         SOURCE_COLUMN, TARGET_COLUMN, TARGET_COPY_COLUMN, TARGET_DELETE_COLUMN,
         TARGET_INSERT_COLUMN, TARGET_MATCH_CARDINALITY_CLASS_COLUMN,
-        TARGET_ROW_ORDINAL_IN_FILE_COLUMN, TARGET_UPDATE_COLUMN,
+        TARGET_PHYSICAL_ROW_INDEX_COLUMN, TARGET_ROW_ORDINAL_IN_FILE_COLUMN, TARGET_UPDATE_COLUMN,
         build_duplicate_match_validation_plan, build_merge_barrier_validation_plan,
     };
 
@@ -3078,6 +3079,7 @@ mod tests {
             &state,
             &ops,
             Arc::new(PATH_COLUMN.to_string()),
+            Arc::new(TARGET_ROW_ORDINAL_IN_FILE_COLUMN.to_string()),
         )
         .expect("duplicate validation plan builds");
 
@@ -3160,6 +3162,61 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(!field_names.contains(&TARGET_ROW_ORDINAL_IN_FILE_COLUMN));
         assert!(!field_names.contains(&TARGET_MATCH_CARDINALITY_CLASS_COLUMN));
+    }
+
+    #[test]
+    fn test_dv_duplicate_validation_uses_physical_index_column() {
+        let state = SessionContext::new().state();
+        let input = datafusion::prelude::DataFrame::new(
+            state.clone(),
+            duplicate_match_validation_input_plan(),
+        )
+        .with_column(
+            TARGET_PHYSICAL_ROW_INDEX_COLUMN,
+            col(TARGET_ROW_ORDINAL_IN_FILE_COLUMN),
+        )
+        .unwrap()
+        .drop_columns(&[TARGET_ROW_ORDINAL_IN_FILE_COLUMN])
+        .unwrap()
+        .into_unoptimized_plan();
+        let ops = vec![(
+            HashMap::new(),
+            OperationType::Update,
+            MatchParticipationClass::MatchedAction,
+        )];
+        let plan = build_merge_barrier_validation_plan(
+            input,
+            &state,
+            &ops,
+            Arc::new(PATH_COLUMN.to_string()),
+            true,
+            true,
+        )
+        .unwrap();
+        let validation = find_merge_validation(&plan).unwrap();
+        assert_eq!(
+            validation.row_index_column.as_str(),
+            TARGET_PHYSICAL_ROW_INDEX_COLUMN
+        );
+        assert!(
+            validation
+                .input
+                .schema()
+                .field_with_unqualified_name(TARGET_PHYSICAL_ROW_INDEX_COLUMN)
+                .is_ok()
+        );
+        assert!(
+            validation
+                .input
+                .schema()
+                .field_with_unqualified_name(TARGET_ROW_ORDINAL_IN_FILE_COLUMN)
+                .is_err()
+        );
+        assert!(
+            plan.schema()
+                .field_with_unqualified_name(TARGET_PHYSICAL_ROW_INDEX_COLUMN)
+                .is_err()
+        );
     }
 
     #[tokio::test]

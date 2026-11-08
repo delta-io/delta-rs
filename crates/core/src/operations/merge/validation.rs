@@ -26,8 +26,7 @@ use roaring::RoaringTreemap;
 use crate::DeltaTableError;
 use crate::delta_datafusion::get_path_column;
 use crate::operations::merge::{
-    DUPLICATE_MATCH_MARKER_COLUMNS, MatchParticipationClass, OPERATION_COLUMN, OperationType,
-    TARGET_MATCH_CARDINALITY_CLASS_COLUMN, TARGET_ROW_ORDINAL_IN_FILE_COLUMN,
+    MatchParticipationClass, OPERATION_COLUMN, OperationType, TARGET_MATCH_CARDINALITY_CLASS_COLUMN,
 };
 
 #[derive(Debug)]
@@ -35,7 +34,7 @@ pub(crate) struct MergeValidationExec {
     input: Arc<dyn ExecutionPlan>,
     file_expr: Arc<dyn PhysicalExpr>,
     file_column: Arc<String>,
-    row_ordinal_column: Arc<String>,
+    row_index_column: Arc<String>,
 }
 
 impl MergeValidationExec {
@@ -43,13 +42,13 @@ impl MergeValidationExec {
         input: Arc<dyn ExecutionPlan>,
         file_expr: Arc<dyn PhysicalExpr>,
         file_column: Arc<String>,
-        row_ordinal_column: Arc<String>,
+        row_index_column: Arc<String>,
     ) -> Self {
         Self {
             input,
             file_expr,
             file_column,
-            row_ordinal_column,
+            row_index_column,
         }
     }
 }
@@ -95,7 +94,7 @@ impl ExecutionPlan for MergeValidationExec {
             children[0].clone(),
             self.file_expr.clone(),
             Arc::clone(&self.file_column),
-            Arc::clone(&self.row_ordinal_column),
+            Arc::clone(&self.row_index_column),
         )))
     }
 
@@ -119,7 +118,7 @@ impl ExecutionPlan for MergeValidationExec {
             input,
             self.schema(),
             Arc::clone(&self.file_column),
-            Arc::clone(&self.row_ordinal_column),
+            Arc::clone(&self.row_index_column),
         )))
     }
 
@@ -161,7 +160,7 @@ struct MergeValidationStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
     file_column: Arc<String>,
-    row_ordinal_column: Arc<String>,
+    row_index_column: Arc<String>,
     file_id_by_path: HashMap<String, usize>,
     file_paths: Vec<String>,
     /// Match state of the target rows, by file id
@@ -176,13 +175,13 @@ impl MergeValidationStream {
         input: SendableRecordBatchStream,
         schema: SchemaRef,
         file_column: Arc<String>,
-        row_ordinal_column: Arc<String>,
+        row_index_column: Arc<String>,
     ) -> Self {
         Self {
             schema,
             input,
             file_column,
-            row_ordinal_column,
+            row_index_column,
             file_id_by_path: HashMap::new(),
             file_paths: Vec::new(),
             target_row_state: Vec::new(),
@@ -215,11 +214,11 @@ impl MergeValidationStream {
         }
 
         let row_ordinal_col = batch
-            .column_by_name(self.row_ordinal_column.as_str())
+            .column_by_name(self.row_index_column.as_str())
             .ok_or_else(|| {
                 DataFusionError::External(Box::new(DeltaTableError::Generic(format!(
                     "Required column {} is missing",
-                    self.row_ordinal_column
+                    self.row_index_column
                 ))))
             })?;
 
@@ -229,7 +228,7 @@ impl MergeValidationStream {
             .ok_or_else(|| {
                 DataFusionError::External(Box::new(DeltaTableError::Generic(format!(
                     "Column {} is not UInt64",
-                    self.row_ordinal_column
+                    self.row_index_column
                 ))))
             })?;
 
@@ -409,6 +408,7 @@ pub(super) fn build_duplicate_match_validation_plan(
         MatchParticipationClass,
     )],
     file_column: Arc<String>,
+    row_index_column: Arc<String>,
 ) -> DataFusionResult<LogicalPlan> {
     let mut cardinality_when = Vec::with_capacity(ops.len());
     let mut cardinality_then = Vec::with_capacity(ops.len());
@@ -435,12 +435,15 @@ pub(super) fn build_duplicate_match_validation_plan(
             input,
             file_expr: col(file_column.as_str()),
             file_column: Arc::clone(&file_column),
-            row_ordinal_column: Arc::new(TARGET_ROW_ORDINAL_IN_FILE_COLUMN.to_string()),
+            row_index_column: Arc::clone(&row_index_column),
         }),
     });
 
     Ok(DataFrame::new(state.clone(), validated)
-        .drop_columns(DUPLICATE_MATCH_MARKER_COLUMNS)?
+        .drop_columns(&[
+            row_index_column.as_str(),
+            TARGET_MATCH_CARDINALITY_CLASS_COLUMN,
+        ])?
         .into_unoptimized_plan())
 }
 
@@ -449,7 +452,7 @@ pub(crate) struct MergeValidation {
     pub(super) input: LogicalPlan,
     pub(super) file_expr: Expr,
     pub(super) file_column: Arc<String>,
-    pub(super) row_ordinal_column: Arc<String>,
+    pub(super) row_index_column: Arc<String>,
 }
 
 impl UserDefinedLogicalNodeCore for MergeValidation {
@@ -482,7 +485,7 @@ impl UserDefinedLogicalNodeCore for MergeValidation {
             input: inputs[0].clone(),
             file_expr: exprs[0].clone(),
             file_column: Arc::clone(&self.file_column),
-            row_ordinal_column: Arc::clone(&self.row_ordinal_column),
+            row_index_column: Arc::clone(&self.row_index_column),
         })
     }
 }

@@ -336,8 +336,11 @@ async fn test_dv_merge_conflict_orphans_are_reclaimed_by_full_vacuum() {
     );
 }
 
+#[rstest]
 #[tokio::test]
-async fn test_dv_merge_absolute_add_without_row_count() {
+async fn test_dv_merge_absolute_add_without_row_count(
+    #[values(None, Some(r#"{"numRecords":null}"#))] statistics: Option<&str>,
+) {
     let directory = tempfile::tempdir().unwrap();
     let root = Url::from_directory_path(directory.path()).unwrap();
     let mut table = DeltaTable::try_from_url(root.clone())
@@ -391,7 +394,7 @@ async fn test_dv_merge_absolute_add_without_row_count() {
         .unwrap()
         .into_owned();
     add.path = absolute_path.clone();
-    add.stats = None;
+    add.stats = statistics.map(ToOwned::to_owned);
     CommitBuilder::default()
         .with_actions(vec![Action::Remove(remove), Action::Add(add)])
         .build(
@@ -456,6 +459,74 @@ async fn test_dv_merge_absolute_add_without_row_count() {
             "+----+-------+",
         ],
         &result
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_dv_merge_file_metrics_exclude_cdc_and_metadata(
+    #[values(false, true)] dv: bool,
+    #[values(false, true)] schema_change: bool,
+) {
+    let table = DeltaTable::new_in_memory()
+        .create()
+        .with_columns(id_value_delta_schema().fields().cloned())
+        .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+        .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+        .await
+        .unwrap()
+        .write(vec![id_value_batch(vec![1, 2], vec![10, 20])])
+        .await
+        .unwrap();
+    let mut fields = id_value_schema().fields().to_vec();
+    fields.push(Arc::new(Field::new("extra", DataType::Int64, true)));
+    let source = RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(fields)),
+        vec![
+            Arc::new(Int64Array::from(vec![1])),
+            Arc::new(Int64Array::from(vec![100])),
+            Arc::new(Int64Array::from(vec![700])),
+        ],
+    )
+    .unwrap();
+    let ctx = SessionContext::new();
+    let (table, metrics) = table
+        .merge(
+            ctx.read_batch(source).unwrap(),
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(dv)
+        .with_merge_schema(schema_change)
+        .when_matched_update(|update| {
+            let update = update.update("value", col("source.value"));
+            if schema_change {
+                update.update("extra", col("source.extra"))
+            } else {
+                update
+            }
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    let actions = latest_dv_merge_actions(&table).await;
+    let adds = actions
+        .iter()
+        .filter(|action| matches!(action, Action::Add(_)))
+        .count();
+    assert_eq!(adds, if dv { 2 } else { 1 });
+    assert_eq!(metrics.num_target_files_added, adds);
+    assert!(
+        actions
+            .iter()
+            .any(|action| matches!(action, Action::Cdc(_)))
+    );
+    assert_eq!(
+        actions
+            .iter()
+            .any(|action| matches!(action, Action::Metadata(_))),
+        schema_change
     );
 }
 
