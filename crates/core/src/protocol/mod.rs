@@ -402,7 +402,8 @@ pub enum DeltaOperation {
     /// Drop one or more columns from the table schema
     #[serde(rename_all = "camelCase")]
     DropColumns {
-        /// The names of the columns that were removed from the schema
+        /// The names of the columns, or the paths of the nested fields, that were removed from
+        /// the schema
         columns: Vec<String>,
     },
 }

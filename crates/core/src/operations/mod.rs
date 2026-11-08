@@ -284,7 +284,7 @@ impl DeltaTable {
         DropConstraintBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
     }
 
-    /// Drops top-level columns from a table
+    /// Drops columns, or fields nested inside them, from a table
     ///
     /// Requires column mapping to be enabled on the table.
     #[must_use]

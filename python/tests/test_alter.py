@@ -617,8 +617,7 @@ def test_drop_columns_requires_column_mapping(
         dt.alter.drop_columns("price")
 
 
-def test_drop_columns_nested_column_rejected(tmp_path: pathlib.Path):
-    """Nested (dotted) column paths are not supported yet."""
+def test_drop_columns_nested_field(tmp_path: pathlib.Path):
     dt = DeltaTable.create(
         tmp_path,
         schema=DeltaSchema(
@@ -626,15 +625,29 @@ def test_drop_columns_nested_column_rejected(tmp_path: pathlib.Path):
                 DeltaField("id", PrimitiveType("integer")),
                 DeltaField(
                     "some_struct",
-                    StructType([DeltaField("nested", PrimitiveType("integer"))]),
+                    StructType(
+                        [
+                            DeltaField("nested", PrimitiveType("integer")),
+                            DeltaField("kept", PrimitiveType("integer")),
+                        ]
+                    ),
                 ),
             ]
         ),
         configuration={"delta.columnMapping.mode": "name"},
     )
 
-    with pytest.raises(DeltaError, match="only top-level columns"):
-        dt.alter.drop_columns("some_struct.nested")
+    dt.alter.drop_columns("some_struct.nested")
+
+    some_struct = dt.schema().fields[1].type
+    assert [field.name for field in some_struct.fields] == ["kept"]
+    assert next(dt.history(1))["operationParameters"] == {
+        "columns": '["some_struct.nested"]'
+    }
+
+    # A struct must keep at least one field.
+    with pytest.raises(DeltaError, match="Cannot drop every field of 'some_struct'"):
+        dt.alter.drop_columns("some_struct.kept")
 
 
 def test_set_column_metadata(tmp_path: pathlib.Path, sample_table: Table):
