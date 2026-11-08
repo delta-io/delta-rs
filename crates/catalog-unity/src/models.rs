@@ -60,6 +60,7 @@ impl std::error::Error for ErrorResponse {}
 /// List catalogs response
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum ListCatalogsResponse {
     /// Successful response
     Success {
@@ -74,6 +75,7 @@ pub enum ListCatalogsResponse {
 /// List schemas response
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum ListSchemasResponse {
     /// Successful response
     Success {
@@ -87,6 +89,7 @@ pub enum ListSchemasResponse {
 /// Get table response
 #[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum GetTableResponse {
     /// Successful response
     Success(Table),
@@ -97,6 +100,7 @@ pub enum GetTableResponse {
 /// List schemas response
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum GetSchemaResponse {
     /// Successful response
     Success(Box<Schema>),
@@ -107,6 +111,7 @@ pub enum GetSchemaResponse {
 /// List table summaries response
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum ListTableSummariesResponse {
     /// Successful response
     Success {
@@ -122,6 +127,7 @@ pub enum ListTableSummariesResponse {
 
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum TableTempCredentialsResponse {
     Success(TemporaryTableCredentials),
     Error(ErrorResponse),
@@ -131,6 +137,7 @@ pub enum TableTempCredentialsResponse {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[allow(missing_docs)]
 /// Whether the current securable is accessible from all workspaces or a specific set of workspaces.
+#[non_exhaustive]
 pub enum IsolationMode {
     #[default]
     Undefined,
@@ -142,6 +149,7 @@ pub enum IsolationMode {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[allow(missing_docs)]
 /// The type of the catalog.
+#[non_exhaustive]
 pub enum CatalogType {
     #[default]
     Undefined,
@@ -194,6 +202,7 @@ pub struct ProvisioningInfo {
 
 #[derive(Deserialize, Debug, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
 pub enum ProvisioningState {
     #[default]
     Provisioning,
@@ -271,6 +280,7 @@ pub struct Schema {
 #[allow(missing_docs)]
 /// Possible data source formats for unity tables
 #[derive(Clone, PartialEq)]
+#[non_exhaustive]
 pub enum DataSourceFormat {
     Delta,
     Csv,
@@ -305,6 +315,7 @@ pub enum DataSourceFormat {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[allow(missing_docs)]
 /// Possible data source formats for unity tables
+#[non_exhaustive]
 pub enum TableType {
     Managed,
     External,
@@ -412,6 +423,7 @@ pub struct ColumnInfo {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
 pub enum ColumnTypeName {
     Boolean,
     Byte,

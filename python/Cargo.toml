@@ -139,3 +139,6 @@ default = ["rustls", "nanosecond-timestamps"]
 native-tls = ["deltalake/s3-native-tls", "deltalake/glue"]
 rustls = ["deltalake/s3", "deltalake/glue"]
 nanosecond-timestamps = ["deltalake/nanosecond-timestamps"]
+
+[lints]
+workspace = true
