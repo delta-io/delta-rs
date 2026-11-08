@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion::common::{DFSchema, ToDFSchema};
+use delta_kernel::column_trie::ColumnTrie;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+use delta_kernel::expressions::ColumnName;
 use delta_kernel::schema::StructType;
 use delta_kernel::table_features::{ColumnMappingMode, TableFeature};
 use futures::future::BoxFuture;
@@ -261,17 +263,17 @@ fn plan_drop_columns_actions(
         .data_skipping_stats_columns
         .as_ref()
         .and_then(|columns| {
+            let dropped_columns = removed
+                .iter()
+                .map(|name| ColumnName::new([name]))
+                .collect_vec();
+            let dropped_trie = ColumnTrie::from_columns(&dropped_columns);
             let kept = columns
                 .iter()
-                .filter(|column| {
-                    !column
-                        .path()
-                        .first()
-                        .is_some_and(|name| dropped.contains(name))
-                })
+                .filter(|column| !dropped_trie.contains_prefix_of(column.path()))
                 .collect_vec();
-            // `ColumnName` renders as a dotted path with backtick-quoted parts where needed,
-            // which parses back to the same column.
+            // `ColumnName`'s `Display` backtick-quotes parts where needed, so the joined list
+            // parses back with `ColumnName::parse_column_name_list`, as the kernel reads it.
             (kept.len() < columns.len()).then(|| kept.iter().join(","))
         });
 
@@ -675,24 +677,34 @@ mod tests {
     async fn drop_columns_removes_column_from_stats_columns() -> TestResult {
         let table = DeltaTable::new_in_memory()
             .create()
-            .with_columns([id_field(), value_field(), legacy_field()])
+            .with_columns([
+                id_field(),
+                value_field(),
+                StructField::new(
+                    "legacy name",
+                    DataType::Primitive(PrimitiveType::String),
+                    true,
+                ),
+            ])
             .with_configuration_property(TableProperty::ColumnMappingMode, Some("name"))
             .with_configuration_property(
                 TableProperty::DataSkippingStatsColumns,
-                Some("id,value,legacy"),
+                Some("id,value,`legacy name`"),
             )
             .await?;
 
         let table = table.drop_columns().with_columns(["value"]).await?;
 
+        let snapshot = table.snapshot()?;
+        let stats_columns = snapshot
+            .metadata()
+            .configuration()
+            .get("delta.dataSkippingStatsColumns")
+            .unwrap();
+        assert_eq!(stats_columns, "id,`legacy name`");
         assert_eq!(
-            table
-                .snapshot()?
-                .metadata()
-                .configuration()
-                .get("delta.dataSkippingStatsColumns")
-                .map(String::as_str),
-            Some("id,legacy")
+            ColumnName::parse_column_name_list(stats_columns)?,
+            [ColumnName::new(["id"]), ColumnName::new(["legacy name"])]
         );
         Ok(())
     }
