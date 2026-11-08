@@ -2629,7 +2629,7 @@ class TableAlterer:
         self,
         column_names: str | list[str],
         raise_if_not_exists: bool = True,
-        *args: Any,
+        *,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
