@@ -410,6 +410,9 @@ impl std::future::IntoFuture for DropColumnsBuilder {
 
             // The drop reads no files. Without a list of read files, the conflict checker treats
             // the commit as if it read every file, so a concurrent DELETE would make it fail.
+            // TODO(ion): add `DeltaOperation::reads_data()`, return `false` for `DropColumns`, and let
+            // the commit path give the conflict checker an empty list for such operations. Then
+            // remove `with_read_files` here and use `commit_actions_in_scope` again.
             let commit_properties = this.commit_properties;
             let state = with_operation(&this.log_store, |log_store| async move {
                 let commit = CommitBuilder::from(commit_properties)
