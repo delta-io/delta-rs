@@ -10,11 +10,10 @@ use roaring::RoaringTreemap;
 use serde_json::Value;
 
 use super::barrier::DeletedRows;
-use crate::delta_datafusion::normalize_path_as_file_id;
 use crate::kernel::{Action, ActiveAddOptions, Add, AddStatsPolicy, DeletionVectorDescriptor};
 use crate::kernel::{EagerSnapshot, StorageType};
-use crate::logstore::LogStoreRef;
 use crate::logstore::parquet_reader::ParquetObjectReader;
+use crate::logstore::{LogStoreRef, TablePathResolver};
 use crate::{DeltaResult, DeltaTableError};
 
 const FILE_NORMALIZATION_BATCH_SIZE: usize = 128;
@@ -27,13 +26,31 @@ pub(super) async fn prepare_deletion_vectors(
     if deleted_rows.is_empty() {
         return Ok(Vec::new());
     }
-    let mut changes: HashMap<String, RoaringTreemap> = deleted_rows
-        .iter()
-        .map(|entry| (entry.key().clone(), entry.value().clone()))
-        .collect();
     let mut actions = Vec::new();
     let mut updated_paths = HashSet::new();
     let root = snapshot.table_configuration().table_root().clone();
+    let pending: Vec<_> = deleted_rows
+        .iter()
+        .map(|entry| (entry.key().clone(), entry.value().clone()))
+        .collect();
+    let file_root = root.clone();
+    let (resolver, mut changes) = crate::kernel::spawn_blocking_with_span(move || {
+        let resolver = TablePathResolver::new(file_root)?;
+        let mut changes: HashMap<String, RoaringTreemap> = HashMap::new();
+        for (path, rows) in pending {
+            let id = resolver.file_id(&path)?.ok_or_else(|| {
+                DeltaTableError::InvalidTableLocation(
+                    "Selected DV file is outside the table root".into(),
+                )
+            })?;
+            *changes.entry(id).or_default() |= rows;
+        }
+        Ok::<_, DeltaTableError>((resolver, changes))
+    })
+    .await
+    .map_err(|error| {
+        DeltaTableError::Generic(format!("DV file identity task failed: {error}"))
+    })??;
     let mut files = snapshot.snapshot().active_adds(
         log_store.as_ref(),
         ActiveAddOptions {
@@ -49,13 +66,16 @@ pub(super) async fn prepare_deletion_vectors(
         if batch.is_empty() {
             break;
         }
-        let file_root = root.clone();
-        let normalized = tokio::task::spawn_blocking(move || {
+        let resolver = resolver.clone();
+        let normalized = crate::kernel::spawn_blocking_with_span(move || {
             batch
                 .into_iter()
                 .map(|file| {
-                    let file_id =
-                        normalize_path_as_file_id(file.path_raw(), &file_root, "merge DV")?;
+                    let file_id = resolver.file_id(file.path_raw())?.ok_or_else(|| {
+                        DeltaTableError::InvalidTableLocation(
+                            "Active DV file is outside the table root".into(),
+                        )
+                    })?;
                     Ok((file, file_id))
                 })
                 .collect::<DeltaResult<Vec<_>>>()
@@ -203,9 +223,11 @@ mod tests {
 
     use arrow_array::{Int32Array, RecordBatch};
     use futures::TryStreamExt;
+    use object_store::ObjectStoreExt;
 
     use super::*;
     use crate::DeltaTable;
+    use crate::delta_datafusion::normalize_path_as_file_id;
     use crate::kernel::{DataType, PrimitiveType};
 
     #[tokio::test]
@@ -250,8 +272,11 @@ mod tests {
         }).count(), FILE_NORMALIZATION_BATCH_SIZE + 1);
     }
 
+    #[rstest::rstest]
     #[tokio::test]
-    async fn missing_row_count_is_read_from_parquet_metadata() {
+    async fn missing_row_count_is_read_from_parquet_metadata(
+        #[values(None, Some("{}"), Some(r#"{"numRecords":null}"#))] statistics: Option<&str>,
+    ) {
         let table = DeltaTable::new_in_memory()
             .create()
             .with_column(
@@ -277,7 +302,7 @@ mod tests {
             .await
             .unwrap();
         let mut add = files[0].to_add();
-        add.stats = None;
+        add.stats = statistics.map(ToOwned::to_owned);
         let (stats, count) =
             physical_row_count(&add, &files[0].object_store_path(), &table.log_store())
                 .await
@@ -289,6 +314,195 @@ mod tests {
             physical_row_count(&add, &files[0].object_store_path(), &table.log_store())
                 .await
                 .is_err()
+        );
+    }
+
+    async fn table_with_dv_file(add: Add) -> DeltaTable {
+        DeltaTable::new_in_memory()
+            .create()
+            .with_column(
+                "id",
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+                None,
+            )
+            .with_configuration_property(crate::TableProperty::EnableDeletionVectors, Some("true"))
+            .with_actions([Action::Add(add)])
+            .await
+            .unwrap()
+    }
+
+    fn selected_rows(
+        table: &DeltaTable,
+        file: &str,
+        positions: impl IntoIterator<Item = u64>,
+    ) -> DeletedRows {
+        let rows = DeletedRows::default();
+        let id = normalize_path_as_file_id(
+            file,
+            table
+                .snapshot()
+                .unwrap()
+                .snapshot()
+                .table_configuration()
+                .table_root(),
+            "test",
+        )
+        .unwrap();
+        rows.insert(id, RoaringTreemap::from_iter(positions));
+        rows
+    }
+
+    #[rstest::rstest]
+    #[case(r#"{"numRecords":3}"#, Some(3))]
+    #[case(r#"{"numRecords":0}"#, Some(0))]
+    #[case(r#"{"numRecords":-1}"#, None)]
+    #[case(r#"{"numRecords":1.5}"#, None)]
+    #[case(r#"{"numRecords":"3"}"#, None)]
+    #[case("[]", None)]
+    #[case("true", None)]
+    #[case("{broken", None)]
+    #[tokio::test]
+    async fn physical_row_count_validates_statistics(
+        #[case] statistics: &str,
+        #[case] expected: Option<u64>,
+    ) {
+        let mut add = crate::test_utils::make_test_add("file.parquet", &[], 0);
+        add.stats = Some(statistics.to_string());
+        let table = DeltaTable::new_in_memory();
+        let result =
+            physical_row_count(&add, &Path::from("file.parquet"), &table.log_store()).await;
+        match expected {
+            Some(count) => assert_eq!(result.unwrap().1, count),
+            None => assert!(result.is_err()),
+        }
+    }
+
+    #[rstest::rstest]
+    #[case(3)]
+    #[case(i64::MAX as u64 + 1)]
+    #[tokio::test]
+    async fn invalid_physical_positions_fail_before_writing_vectors(#[case] position: u64) {
+        let mut add = crate::test_utils::make_test_add("file.parquet", &[], 0);
+        add.stats = Some(r#"{"numRecords":3}"#.into());
+        let table = table_with_dv_file(add).await;
+        let rows = selected_rows(&table, "file.parquet", [position]);
+        let error = prepare_deletion_vectors(
+            table.snapshot().unwrap().snapshot(),
+            &table.log_store(),
+            &rows,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("exceeds the physical row count"));
+        assert!(
+            table
+                .object_store()
+                .list(None)
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap()
+                .iter()
+                .all(|file| !file.location.as_ref().ends_with(".bin"))
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_and_inactive_selections_do_not_write_vectors() {
+        let mut add = crate::test_utils::make_test_add("file.parquet", &[], 0);
+        add.stats = Some(r#"{"numRecords":3}"#.into());
+        let table = table_with_dv_file(add).await;
+        let snapshot = table.snapshot().unwrap().snapshot();
+        assert!(
+            prepare_deletion_vectors(snapshot, &table.log_store(), &DeletedRows::default())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let rows = selected_rows(&table, "inactive.parquet", [0]);
+        let error = prepare_deletion_vectors(snapshot, &table.log_store(), &rows)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not active in its snapshot"));
+        assert!(
+            table
+                .object_store()
+                .list(None)
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap()
+                .iter()
+                .all(|file| !file.location.as_ref().ends_with(".bin"))
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::wrong_cardinality(false)]
+    #[case::corrupt_vector(true)]
+    #[tokio::test]
+    async fn invalid_prior_vectors_fail_before_writing_replacements(#[case] corrupt: bool) {
+        let table = DeltaTable::new_in_memory();
+        let path = Path::from("prior.bin");
+        let root = table.log_store().root_url().clone();
+        let mut vector = KernelDeletionVector::new();
+        vector.add_deleted_row_indexes([0]);
+        let mut bytes = Vec::new();
+        let mut writer = StreamingDeletionVectorWriter::new(&mut bytes);
+        let descriptor = writer.write_deletion_vector(vector).unwrap();
+        writer.finalize().unwrap();
+        if corrupt {
+            let magic = usize::try_from(descriptor.offset).unwrap() + 4;
+            bytes[magic] ^= 255;
+        }
+        table.object_store().put(&path, bytes.into()).await.unwrap();
+        let mut add = crate::test_utils::make_test_add("file.parquet", &[], 0);
+        add.stats = Some(r#"{"numRecords":3}"#.into());
+        add.deletion_vector = Some(DeletionVectorDescriptor {
+            storage_type: StorageType::AbsolutePath,
+            path_or_inline_dv: root.join(path.as_ref()).unwrap().to_string(),
+            offset: Some(descriptor.offset),
+            size_in_bytes: descriptor.size_in_bytes,
+            cardinality: if corrupt { 1 } else { 2 },
+        });
+        let table = table
+            .create()
+            .with_column(
+                "id",
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+                None,
+            )
+            .with_configuration_property(crate::TableProperty::EnableDeletionVectors, Some("true"))
+            .with_actions([Action::Add(add)])
+            .await
+            .unwrap();
+        let rows = selected_rows(&table, "file.parquet", [1]);
+        let result = prepare_deletion_vectors(
+            table.snapshot().unwrap().snapshot(),
+            &table.log_store(),
+            &rows,
+        )
+        .await;
+        assert!(result.is_err());
+        if !corrupt {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("cardinality does not match")
+            );
+        }
+        assert_eq!(
+            table
+                .object_store()
+                .list(None)
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|file| file.location.as_ref().ends_with(".bin"))
+                .count(),
+            1
         );
     }
 }

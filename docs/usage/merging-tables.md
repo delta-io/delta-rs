@@ -50,6 +50,8 @@ the logical file remove/add pairs are published in one transaction.
 DV mode streams batches through duplicate validation and output filtering instead of
 buffering untouched rows in the file-rewrite barrier. Matched no-op rows are discarded
 without materializing per-row copies; duplicate-action validation remains enabled.
+Ignored unmatched source rows are also discarded before constraint validation and CDF
+projection. Accepted inserts and updates still enforce NOT NULL and other constraints.
 Query execution, duplicate
 validation and accumulated deletion vectors still require memory.
 
@@ -64,8 +66,13 @@ when several vectors share one DV file.
 FULL and LITE VACUUM retain a removed Parquet file until its newest removal expires,
 including when compaction retires a file that was previously updated using DVs.
 Both modes use the same table-relative physical-path identity for relative and absolute
-Add/Remove paths, including explicitly kept snapshots. References outside the table
-root are not VACUUM deletion candidates.
+Add/Remove paths, including explicitly kept snapshots. Local file aliases and listed
+objects are canonicalized in bounded batches on the blocking pool before containment
+and retention checks. References outside the physical table root are not VACUUM
+deletion candidates, including paths reached through directory symlinks.
+LITE fetches whole retired-DV file sizes with bounded HEAD concurrency. FULL reuses
+storage-listing sizes without issuing a HEAD request for each retired vector. Both
+paths continue to use removal timestamps, rather than blob age, for tracked-DV retention.
 
 MERGE uploads data and DV files before committing. Failed or cancelled attempts can
 leave unreferenced files. FULL VACUUM reclaims these orphans after the retention

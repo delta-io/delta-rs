@@ -667,18 +667,23 @@ mod tests {
         );
     }
 
-    #[test]
-    fn invalid_changed_row_does_not_partially_update_deleted_rows() {
+    #[rstest::rstest]
+    #[case(None, Some(1), "has no physical file")]
+    #[case(Some("a"), None, "no physical file or row index")]
+    #[case(Some("a"), Some(i64::MAX as u64 + 1), "exceeds i64::MAX")]
+    fn invalid_changed_row_does_not_partially_update_deleted_rows(
+        #[case] file: Option<&str>,
+        #[case] position: Option<u64>,
+        #[case] message: &str,
+    ) {
         let deleted = Arc::new(DashMap::new());
         let batch = deletion_batch(
-            vec![Some("a"), Some("a")],
-            vec![Some(1), Some(i64::MAX as u64 + 1)],
+            vec![Some("a"), file],
+            vec![Some(1), position],
             vec![None, None],
         );
-        assert!(collect_deleted_rows(&batch, "__delta_rs_path", &deleted).is_err());
-        assert!(deleted.is_empty());
-        let batch = deletion_batch(vec![None], vec![Some(1)], vec![None]);
-        assert!(collect_deleted_rows(&batch, "__delta_rs_path", &deleted).is_err());
+        let error = collect_deleted_rows(&batch, "__delta_rs_path", &deleted).unwrap_err();
+        assert!(error.to_string().contains(message));
         assert!(deleted.is_empty());
     }
 

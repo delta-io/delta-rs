@@ -667,6 +667,32 @@ mod tests {
         validate(&b).expect("should not fail for non-duplicate matches");
     }
 
+    #[rstest::rstest]
+    #[case::missing(false)]
+    #[case::wrong_type(true)]
+    fn invalid_row_index_columns_fail_validation(#[case] wrong_type: bool) {
+        let mut b = batch(vec![0], vec![MatchParticipationClass::MatchedAction as i32]);
+        if wrong_type {
+            let mut fields = b.schema().fields().to_vec();
+            fields[1] = Arc::new(Field::new(
+                TARGET_ROW_ORDINAL_IN_FILE_COLUMN,
+                DataType::Int64,
+                false,
+            ));
+            let mut columns = b.columns().to_vec();
+            columns[1] = Arc::new(arrow_array::Int64Array::from(vec![0]));
+            b = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
+        } else {
+            b.remove_column(1);
+        }
+        let error = validate(&b).unwrap_err().to_string();
+        assert!(error.contains(if wrong_type {
+            "not UInt64"
+        } else {
+            "is missing"
+        }));
+    }
+
     #[test]
     fn test_unconditional_duplicate_deletes_passes() {
         let b = batch(

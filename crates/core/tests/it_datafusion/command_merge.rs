@@ -192,8 +192,176 @@ async fn latest_dv_merge_actions(table: &DeltaTable) -> Vec<Action> {
         .collect()
 }
 
+#[rstest]
+#[case::update(false, true)]
+#[case::delete(true, true)]
+#[case::noop(false, false)]
+#[tokio::test]
+async fn ignored_unmatched_source_rows_do_not_validate_null_targets(
+    #[case] delete: bool,
+    #[case] change: bool,
+    #[values(false, true)] cdf: bool,
+    #[values(false, true)] deletion_vectors: bool,
+) -> DeltaResult<()> {
+    let table = DeltaTable::new_in_memory()
+        .create()
+        .with_columns(id_value_delta_schema().fields().cloned())
+        .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+        .with_configuration_property(
+            TableProperty::EnableChangeDataFeed,
+            Some(if cdf { "true" } else { "false" }),
+        )
+        .await?
+        .write(vec![id_value_batch(vec![1], vec![10])])
+        .await?;
+    let original_version = table.version().unwrap();
+    let ctx = SessionContext::new();
+    let merge = table
+        .merge(
+            ctx.read_batch(id_value_batch(vec![1, 2], vec![100, 200]))?,
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(deletion_vectors);
+    let merge = if delete {
+        merge.when_matched_delete(|delete| delete)?
+    } else {
+        merge.when_matched_update(|update| {
+            update
+                .predicate(lit(change))
+                .update("value", col("source.value"))
+        })?
+    };
+    let (table, metrics) = merge.await?;
+    assert_eq!(metrics.num_source_rows, 2);
+    assert_eq!(metrics.num_target_rows_inserted, 0);
+    assert_eq!(
+        metrics.num_target_rows_updated,
+        usize::from(change && !delete)
+    );
+    assert_eq!(metrics.num_target_rows_deleted, usize::from(delete));
+    assert_eq!(table.version(), Some(original_version + u64::from(change)));
+    ctx.register_table("result", table.table_provider().await?)?;
+    let batches = ctx
+        .sql("SELECT id, value FROM result ORDER BY id")
+        .await?
+        .collect()
+        .await?;
+    let rows = batches
+        .iter()
+        .flat_map(|batch| {
+            (0..batch.num_rows())
+                .map(|row| [int64_value(batch, 0, row), int64_value(batch, 1, row)])
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        if delete {
+            Vec::new()
+        } else {
+            vec![[1, if change { 100 } else { 10 }]]
+        }
+    );
+    if cdf && change {
+        let changes = table
+            .clone()
+            .scan_cdf()
+            .with_starting_version(original_version + 1)
+            .with_ending_version(original_version + 1)
+            .build(&ctx.state(), None)
+            .await?;
+        let batches = datafusion::physical_plan::collect(changes, ctx.task_ctx()).await?;
+        let changes =
+            datafusion::datasource::MemTable::try_new(batches[0].schema(), vec![batches])?;
+        ctx.register_table("changes", Arc::new(changes))?;
+        let batches = ctx
+            .sql("SELECT id, value, _change_type FROM changes ORDER BY value")
+            .await?
+            .collect()
+            .await?;
+        if delete {
+            datafusion::assert_batches_eq!(
+                &[
+                    "+----+-------+--------------+",
+                    "| id | value | _change_type |",
+                    "+----+-------+--------------+",
+                    "| 1  | 10    | delete       |",
+                    "+----+-------+--------------+",
+                ],
+                &batches
+            );
+        } else {
+            datafusion::assert_batches_eq!(
+                &[
+                    "+----+-------+------------------+",
+                    "| id | value | _change_type     |",
+                    "+----+-------+------------------+",
+                    "| 1  | 10    | update_preimage  |",
+                    "| 1  | 100   | update_postimage |",
+                    "+----+-------+------------------+",
+                ],
+                &batches
+            );
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct DvVacuumClock(i64);
+
+#[rstest]
+#[tokio::test]
+async fn accepted_null_mutations_still_fail_not_null_validation(
+    #[values(false, true)] update: bool,
+    #[values(false, true)] cdf: bool,
+    #[values(false, true)] deletion_vectors: bool,
+) -> DeltaResult<()> {
+    let mut table = DeltaTable::new_in_memory()
+        .create()
+        .with_columns(id_value_delta_schema().fields().cloned())
+        .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+        .with_configuration_property(
+            TableProperty::EnableChangeDataFeed,
+            Some(if cdf { "true" } else { "false" }),
+        )
+        .await?
+        .write(vec![id_value_batch(vec![1], vec![10])])
+        .await?;
+    let original_version = table.version();
+    let source = RecordBatch::try_from_iter([
+        (
+            "id",
+            Arc::new(Int64Array::from(vec![if update { 1 } else { 2 }])) as arrow_array::ArrayRef,
+        ),
+        ("value", Arc::new(Int64Array::from(vec![None]))),
+    ])?;
+    let ctx = SessionContext::new();
+    let merge = table
+        .clone()
+        .merge(
+            ctx.read_batch(source)?,
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(deletion_vectors);
+    let merge = if update {
+        merge.when_matched_update(|update| update.update("value", col("source.value")))?
+    } else {
+        merge.when_not_matched_insert(|insert| {
+            insert
+                .set("id", col("source.id"))
+                .set("value", col("source.value"))
+        })?
+    };
+    let error = merge.await.unwrap_err();
+    assert!(error.to_string().contains("non-nullable column `value`"));
+    table.update_state().await?;
+    assert_eq!(table.version(), original_version);
+    Ok(())
+}
 
 impl Clock for DvVacuumClock {
     fn current_timestamp_millis(&self) -> i64 {

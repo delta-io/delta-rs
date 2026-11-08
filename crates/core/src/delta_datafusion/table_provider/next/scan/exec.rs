@@ -3036,12 +3036,31 @@ mod tests {
             row_ordinals(&valid[0], "physical_row"),
             vec![0, i64::MAX as u64]
         );
-        for invalid in [batch.slice(0, 1), batch.slice(3, 1)] {
-            assert!(matches!(
-                stream.batch_project(invalid),
-                Err(DataFusionError::Execution(_))
-            ));
+        for (invalid, message) in [
+            (batch.slice(0, 1), "Physical row position is negative"),
+            (batch.slice(3, 1), "Physical row position is null"),
+        ] {
+            let error = stream.batch_project(invalid).unwrap_err();
+            assert!(error.to_string().contains(message));
         }
+        let position_idx = batch
+            .schema()
+            .index_of(super::super::PHYSICAL_POSITION_COLUMN)?;
+        let mut fields = batch.schema().fields().to_vec();
+        fields[position_idx] = Arc::new(Field::new(
+            super::super::PHYSICAL_POSITION_COLUMN,
+            DataType::Int32,
+            false,
+        ));
+        let mut columns = batch.columns().to_vec();
+        columns[position_idx] = Arc::new(arrow_array::Int32Array::from(vec![0; batch.num_rows()]));
+        let invalid = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+        let error = stream.batch_project(invalid).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("physical row position is not Int64")
+        );
         let empty = stream.batch_project(batch.slice(0, 0))?;
         assert_eq!(empty[0].num_rows(), 0);
         assert_eq!(empty[0].schema(), valid[0].schema());

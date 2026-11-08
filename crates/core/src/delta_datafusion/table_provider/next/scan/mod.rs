@@ -309,19 +309,75 @@ async fn resolve_input_file_ids_on_blocking_pool(
 
 async fn collect_selected_active_file_ids(
     table_root: &Url,
-    stream: ScanMetadataStream,
+    mut stream: ScanMetadataStream,
     missing_file_ids: &mut HashSet<String>,
 ) -> Result<HashSet<String>> {
-    let mut selected_active_file_ids = HashSet::new();
-    for_each_selected_file(table_root, stream, |file_url| {
-        let file_id = file_url.to_string();
-        if missing_file_ids.remove(&file_id) {
-            selected_active_file_ids.insert(file_id);
-        }
-        !missing_file_ids.is_empty()
+    let root = table_root.clone();
+    let resolver = crate::kernel::spawn_blocking_with_span(move || {
+        crate::logstore::TablePathResolver::new(root)
     })
-    .await?;
+    .await
+    .map_err(|error| DataFusionError::External(Box::new(error)))?
+    .map_err(DataFusionError::from)?;
+    let requested = missing_file_ids.clone();
+    let mut selected_active_file_ids = HashSet::new();
+    while let Some(scan_data) = stream.try_next().await? {
+        let (data, selection_vector) = scan_data.scan_files.into_parts();
+        let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)
+            .map_err(DeltaTableError::from)?
+            .into();
+        let urls = selected_file_urls(table_root, batch, selection_vector)?;
+        for urls in urls.chunks(128) {
+            let urls = urls.to_vec();
+            let resolver = resolver.clone();
+            let local = resolver.is_local();
+            let normalize = move || {
+                urls.into_iter()
+                    .map(|url| {
+                        let physical_id = resolver.file_id(url.as_str())?;
+                        Ok::<_, DeltaTableError>((url.to_string(), physical_id))
+                    })
+                    .collect::<crate::DeltaResult<Vec<_>>>()
+            };
+            let identities = if local {
+                crate::kernel::spawn_blocking_with_span(normalize)
+                    .await
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?
+            } else {
+                normalize()
+            }
+            .map_err(DataFusionError::from)?;
+            for (snapshot_id, physical_id) in identities {
+                if let Some(physical_id) = physical_id
+                    && requested.contains(&physical_id)
+                {
+                    missing_file_ids.remove(&physical_id);
+                    selected_active_file_ids.insert(snapshot_id);
+                }
+            }
+        }
+    }
     Ok(selected_active_file_ids)
+}
+
+fn selected_file_urls(
+    table_root: &Url,
+    batch: RecordBatch,
+    mut selection_vector: Vec<bool>,
+) -> Result<Vec<Url>> {
+    // Delta Kernel omits trailing selected rows from short selection vectors.
+    selection_vector.resize(batch.num_rows(), true);
+    selection_vector
+        .into_iter()
+        .enumerate()
+        .filter(|(_, selected)| *selected)
+        .map(|(index, _)| {
+            replay::parse_path(
+                table_root,
+                LogicalFileView::new(batch.clone(), index).path_raw(),
+            )
+        })
+        .collect()
 }
 
 /// Call `f` with the URL of each file that a kernel scan selects, until `f` returns `false`.
@@ -331,22 +387,13 @@ async fn for_each_selected_file(
     mut f: impl FnMut(Url) -> bool,
 ) -> Result<()> {
     while let Some(scan_data) = stream.try_next().await? {
-        let (data, mut selection_vector) = scan_data.scan_files.into_parts();
+        let (data, selection_vector) = scan_data.scan_files.into_parts();
         let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)
             .map_err(DeltaTableError::from)?
             .into();
-        // Delta Kernel may return a short selection vector. Missing entries are selected.
-        selection_vector.resize(batch.num_rows(), true);
-
-        for (idx, selected) in selection_vector.into_iter().enumerate() {
-            if selected {
-                let file_url = replay::parse_path(
-                    table_root,
-                    LogicalFileView::new(batch.clone(), idx).path_raw(),
-                )?;
-                if !f(file_url) {
-                    return Ok(());
-                }
+        for file_url in selected_file_urls(table_root, batch, selection_vector)? {
+            if !f(file_url) {
+                return Ok(());
             }
         }
     }

@@ -1,5 +1,4 @@
-//! An object store that delays every upload and records how many ran at once.
-//! It exercises the writers' upload bounds.
+//! An object store that delays uploads or metadata HEAD requests and tracks concurrency.
 
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -17,11 +16,12 @@ use object_store::{
 /// Wraps [`InMemory`]: every `put` sleeps `delay` before it lands, and every
 /// multipart upload sleeps `delay` on `complete`. An upload counts as in flight
 /// from the start of `put` (or `put_multipart_opts`) until it lands, completes,
-/// aborts, or is dropped.
+/// aborts, or is dropped. [`Self::with_delayed_heads`] also delays and counts HEAD requests.
 #[derive(Debug)]
 pub(crate) struct SlowCountingStore {
-    inner: InMemory,
+    inner: Arc<dyn ObjectStore>,
     delay: Duration,
+    slow_heads: bool,
     in_flight: Arc<AtomicUsize>,
     /// Only ever touched through `&self`, so it needs no `Arc`.
     max_in_flight: AtomicUsize,
@@ -30,14 +30,25 @@ pub(crate) struct SlowCountingStore {
 impl SlowCountingStore {
     pub(crate) fn new(delay: Duration) -> Self {
         Self {
-            inner: InMemory::new(),
+            inner: Arc::new(InMemory::new()),
             delay,
+            slow_heads: false,
             in_flight: Arc::default(),
             max_in_flight: AtomicUsize::default(),
         }
     }
 
-    /// Highest number of uploads that were in flight at the same time.
+    pub(crate) fn with_delayed_heads(inner: Arc<dyn ObjectStore>, delay: Duration) -> Self {
+        Self {
+            inner,
+            delay,
+            slow_heads: true,
+            in_flight: Arc::default(),
+            max_in_flight: AtomicUsize::default(),
+        }
+    }
+
+    /// Highest number of tracked requests that were in flight at the same time.
     pub(crate) fn max_in_flight(&self) -> usize {
         self.max_in_flight.load(Ordering::Acquire)
     }
@@ -124,6 +135,13 @@ impl ObjectStore for SlowCountingStore {
         location: &Path,
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
+        let _guard = if self.slow_heads && options.head {
+            let guard = self.track();
+            tokio::time::sleep(self.delay).await;
+            Some(guard)
+        } else {
+            None
+        };
         self.inner.get_opts(location, options).await
     }
 

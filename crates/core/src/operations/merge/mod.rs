@@ -1664,7 +1664,12 @@ async fn execute(
 
     let merge_output = if deletion_vectors {
         DataFrame::new(state.clone(), merge_output)
-            .filter(col(TARGET_COPY_COLUMN).is_not_null())?
+            .filter(
+                col(TARGET_INSERT_COLUMN)
+                    .is_null()
+                    .or(col(TARGET_UPDATE_COLUMN).is_null())
+                    .or(col(TARGET_DELETE_COLUMN).is_null()),
+            )?
             .into_unoptimized_plan()
     } else {
         merge_output
