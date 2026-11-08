@@ -2657,7 +2657,9 @@ class TableAlterer:
         fields inside it. A check constraint that only references dropped columns is dropped
         with them; one that also references a remaining column blocks the drop. Dropped
         columns, and any field nested inside them, are removed from
-        ``delta.dataSkippingStatsColumns``. Dropping every column, or every field of a struct,
+        ``delta.dataSkippingStatsColumns``. When no listed column is left, the property
+        becomes an empty string, so stats are collected for no column. Dropping every column,
+        or every field of a struct,
         is also rejected, since a table must keep at least one column and a struct at least
         one field.
 

@@ -841,6 +841,44 @@ async fn drop_columns_removes_dropped_nested_field_from_stats_columns() -> TestR
 }
 
 #[tokio::test]
+async fn drop_columns_leaves_empty_stats_columns_when_none_is_left() -> TestResult {
+    let table = DeltaTable::new_in_memory()
+        .create()
+        .with_columns([id_field(), value_field(), legacy_field()])
+        .with_configuration_property(TableProperty::ColumnMappingMode, Some("name"))
+        .with_configuration_property(
+            TableProperty::DataSkippingStatsColumns,
+            Some("value,legacy"),
+        )
+        .await?;
+
+    let table = table
+        .drop_columns()
+        .with_columns(["value", "legacy"])
+        .await?;
+
+    // An empty list collects stats for no column, as the dropped columns were the only ones.
+    let snapshot = table.snapshot()?;
+    assert_eq!(
+        snapshot
+            .metadata()
+            .configuration()
+            .get("delta.dataSkippingStatsColumns")
+            .map(String::as_str),
+        Some("")
+    );
+    assert_eq!(
+        snapshot
+            .snapshot()
+            .table_configuration()
+            .table_properties()
+            .data_skipping_stats_columns,
+        Some(vec![])
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn drop_columns_drops_struct_with_nested_invariant() -> TestResult {
     let nested = StructField::new(
         "nested",

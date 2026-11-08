@@ -459,8 +459,10 @@ fn plan_drop_columns_actions(
     }
 
     // Stats are collected for an explicit column list when this property is set. Remove the
-    // dropped columns, and any field nested inside one, from that list. The
-    // property is only rewritten when it lists a dropped column.
+    // dropped columns, and any field nested inside one, from that list. The property is only
+    // rewritten when it lists a dropped column. When no listed column is left, the property
+    // stays as an empty list, so stats are collected for no column. Removing it would collect
+    // stats for the first `delta.dataSkippingNumIndexedCols` columns instead.
     let stats_columns = snapshot
         .table_configuration
         .table_properties()
