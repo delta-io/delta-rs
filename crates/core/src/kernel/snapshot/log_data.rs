@@ -112,7 +112,7 @@ impl IntoIterator for LogDataHandler<'_> {
 #[cfg(feature = "datafusion")]
 mod datafusion {
     use std::collections::HashSet;
-    use std::sync::{Arc, LazyLock};
+    use std::sync::Arc;
 
     use ::datafusion::common::Column;
     use ::datafusion::common::scalar::ScalarValue;
@@ -121,9 +121,9 @@ mod datafusion {
     use arrow_array::{Array, StringArray};
     use arrow_array::{ArrayRef, BooleanArray, UInt64Array};
     use arrow_schema::DataType as ArrowDataType;
+    use delta_kernel::EvaluationHandler;
     use delta_kernel::expressions::Expression;
     use delta_kernel::schema::{DataType, PrimitiveType};
-    use delta_kernel::{EvaluationHandler, ExpressionEvaluator};
     use itertools::Itertools;
 
     use super::*;
@@ -163,11 +163,7 @@ mod datafusion {
             let batch_schema = self.data.first()?.schema();
             let input_schema = Arc::new(batch_schema.as_ref().try_into_kernel().ok()?);
             let evaluator = ARROW_HANDLER
-                .new_expression_evaluator(
-                    input_schema,
-                    expression.into(),
-                    data_type,
-                )
+                .new_expression_evaluator(input_schema, expression.into(), data_type)
                 .ok()?;
 
             let results: Vec<_> = self
@@ -354,21 +350,21 @@ mod datafusion {
         ///
         /// Note: the returned array must contain `num_containers()` rows
         fn row_counts(&self) -> Option<ArrayRef> {
-            static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
-                ARROW_HANDLER
-                    .new_expression_evaluator(
-                        crate::kernel::models::fields::log_schema_ref().clone(),
-                        Expression::column(["stats_parsed", "numRecords"]).into(),
-                        DataType::Primitive(PrimitiveType::Long),
-                    )
-                    .expect("Failed to create row counts evaluator")
-            });
+            let batch_schema = self.data.first()?.schema();
+            let input_schema = Arc::new(batch_schema.as_ref().try_into_kernel().ok()?);
+            let evaluator = ARROW_HANDLER
+                .new_expression_evaluator(
+                    input_schema,
+                    Expression::column(["stats_parsed", "numRecords"]).into(),
+                    DataType::LONG,
+                )
+                .ok()?;
 
             let results: Vec<_> = self
                 .data
                 .iter()
                 .map(|data| -> DeltaResult<_> {
-                    let batch = ROW_COUNTS_EVAL.evaluate_arrow(data.clone())?;
+                    let batch = evaluator.evaluate_arrow(data.clone())?;
                     Ok(arrow_cast::cast(batch.column(0), &ArrowDataType::UInt64)?)
                 })
                 .try_collect()
