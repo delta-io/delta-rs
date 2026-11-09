@@ -66,6 +66,7 @@ impl TryFrom<&str> for DeltaTablePartition {
 
 /// The comparison operator of a `(column, op, value)` filter literal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FilterOp {
     /// `=`
     Eq,
@@ -140,6 +141,7 @@ impl FromStr for FilterOp {
 /// The value of a `(column, op, value)` filter literal: a single partition-value
 /// encoded string, or a set of them for `in` / `not in`.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FilterValue<'a> {
     /// A single encoded value, compared with one of `=`, `!=`, `<`, `<=`, `>`, `>=`.
     Scalar(&'a str),

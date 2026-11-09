@@ -29,3 +29,6 @@ default = ["rustls"]
 native-tls = ["deltalake-core/native-tls"]
 rustls = ["deltalake-core/rustls"]
 integration_test = ["hdfs-native-object-store/integration-test"]
+
+[lints]
+workspace = true
