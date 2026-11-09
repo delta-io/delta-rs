@@ -31,7 +31,11 @@ jobs:
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7
         with:
           path: ./cache
-          key: ${{ runner.os }}-benchmark
+          # A cache entry is never updated after a hit on its key, so key each run
+          # uniquely and restore the newest earlier one.
+          key: ${{ runner.os }}-benchmark-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-benchmark
 
       - name: Run benchmark
         run: |

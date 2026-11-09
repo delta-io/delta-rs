@@ -61,6 +61,8 @@ pub(crate) fn name(op: &Operator) -> &'static str {
         Operator::Aggregate(_) => "aggregate",
         Operator::SemiJoin(_) => "semi_join",
         Operator::UnionAll(_) => "union_all",
+        Operator::RelationSource(_) => "relation_source",
+        Operator::WriteJson(_) => "write_json",
     }
 }
 

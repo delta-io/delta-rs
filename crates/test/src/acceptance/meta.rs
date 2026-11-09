@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum AssertionError {
     #[error("Invalid test case data")]
     InvalidTestCase,

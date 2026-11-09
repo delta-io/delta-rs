@@ -34,3 +34,6 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = []
+
+[lints]
+workspace = true

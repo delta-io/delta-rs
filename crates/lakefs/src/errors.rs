@@ -5,6 +5,7 @@ use deltalake_core::kernel::transaction::TransactionError;
 use reqwest_middleware::Error;
 
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum LakeFSConfigError {
     /// Missing endpoint
     #[error("LakeFS endpoint is missing in storage options. Set `endpoint`.")]
@@ -20,6 +21,7 @@ pub enum LakeFSConfigError {
 }
 
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum LakeFSOperationError {
     /// Failed to send http request to LakeFS. `:#` shows the cause, not only the retry count.
     #[error("Failed to send request to LakeFS: {source:#}")]

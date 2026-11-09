@@ -181,6 +181,7 @@ pub trait Clock: Debug + Send + Sync {
 
 /// Type of Vacuum operation to perform
 #[derive(Debug, Default, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum VacuumMode {
     /// The `lite` mode will only remove files which are referenced in the `_delta_log` associated
     /// with `remove` action

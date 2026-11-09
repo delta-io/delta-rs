@@ -2717,6 +2717,7 @@ impl From<&PyAddAction> for Add {
 }
 
 #[derive(FromPyObject)]
+#[non_exhaustive]
 pub enum PyFileAction {
     Remove(PyRemoveAction),
     Add(PyAddAction),

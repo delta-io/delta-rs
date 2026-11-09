@@ -89,7 +89,7 @@ pub(crate) fn stats_from_parquet_metadata(
 ) -> Result<Stats, DeltaWriterError> {
     let num_rows = parquet_metadata.file_metadata().num_rows();
     let schema_descriptor = parquet_metadata.file_metadata().schema_descr_ptr();
-    let row_group_metadata = parquet_metadata.row_groups().to_vec();
+    let row_group_metadata = parquet_metadata.row_groups();
 
     stats_from_metadata(
         partition_values,
@@ -109,7 +109,7 @@ fn stats_from_file_metadata(
 ) -> Result<Stats, DeltaWriterError> {
     let schema_descriptor = file_metadata.file_metadata().schema_descr();
 
-    let row_group_metadata: Vec<RowGroupMetaData> = file_metadata.row_groups().to_vec();
+    let row_group_metadata = file_metadata.row_groups();
 
     stats_from_metadata(
         partition_values,
@@ -124,7 +124,7 @@ fn stats_from_file_metadata(
 fn stats_from_metadata(
     partition_values: &IndexMap<String, Scalar>,
     schema_descriptor: Arc<SchemaDescriptor>,
-    row_group_metadata: Vec<RowGroupMetaData>,
+    row_group_metadata: &[RowGroupMetaData],
     num_rows: i64,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
