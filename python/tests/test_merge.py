@@ -633,10 +633,6 @@ def test_merge_when_matched_update_all_wo_predicate(
                 [True, True],
                 ArrowField("deleted", type=DataType.bool(), nullable=True),
             ),
-            "weight": Array(
-                [10, 15],
-                ArrowField("weight", type=DataType.int64(), nullable=True),
-            ),
         },
     )
 
@@ -706,10 +702,6 @@ def test_merge_when_matched_update_all_with_exclude(
             "deleted": Array(
                 [True, True],
                 ArrowField("deleted", type=DataType.bool(), nullable=True),
-            ),
-            "weight": Array(
-                [10, 15],
-                ArrowField("weight", type=DataType.int64(), nullable=True),
             ),
         }
     )
@@ -2404,6 +2396,23 @@ def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: b
 
     with pytest.raises(Exception):
         get_value("null_count.bar")
+
+
+def test_merge_unknown_column(tmp_path: pathlib.Path, sample_table: Table):
+    write_deltalake(tmp_path, sample_table, mode="append")
+    dt = DeltaTable(tmp_path)
+
+    merger = dt.merge(
+        source=sample_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+    ).when_not_matched_insert({"id": "s.id", "Price": "s.price"})
+
+    with pytest.raises(DeltaError, match="No field named"):
+        merger.execute()
+
+    assert dt.version() == 0
 
 
 def test_merge_field_special_characters_delete_2438(tmp_path: pathlib.Path):
