@@ -24,6 +24,7 @@ use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 /// One leaf column of the open row group, encoded by its own task.
@@ -34,6 +35,8 @@ struct ColumnWorker {
     encoded_size: Arc<AtomicUsize>,
     /// Memory the encoder holds, published by the worker after each write.
     memory_size: Arc<AtomicUsize>,
+    /// Slices the worker has encoded, published after the two sizes.
+    encoded_slices: watch::Receiver<usize>,
 }
 
 /// Arrow-specific settings for writing parquet data files.
@@ -122,8 +125,8 @@ pub(crate) struct ParallelArrowWriter<W: AsyncFileWriter> {
     /// The maximum number of rows to write to each row group, retrieved from [`WriterProperties`]
     max_rows_in_group_row: usize,
 
-    /// The maximum uncompressed size of a row group in bytes, retrieved from [`WriterProperties`]
-    max_bytes_in_group_row: usize,
+    /// Holds row groups under [`WriterProperties::max_row_group_bytes`]
+    byte_bound: ByteBound,
 
     /// Workers for the open row group; empty until the first write into it.
     workers: Vec<ColumnWorker>,
@@ -162,7 +165,7 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
 
         Ok(Self {
             max_rows_in_group_row: props.max_row_group_row_count().unwrap_or(usize::MAX),
-            max_bytes_in_group_row: props.max_row_group_bytes().unwrap_or(usize::MAX),
+            byte_bound: ByteBound::new(props.max_row_group_bytes()),
             file_writer,
             factory: row_group_factory,
             sink_writer,
@@ -178,18 +181,13 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
         while offset < batch.num_rows() {
             if self.workers.is_empty() {
                 self.start_row_group()?;
+                self.byte_bound.start_row_group(batch);
             }
 
-            // Recomputed after every close: the density changes once a row group has
-            // been measured.
-            let bpr = self.get_estimated_bytes_per_row(batch);
-            let buffered_bytes = self.get_estimated_total_bytes(bpr);
             let length = usize::min(
                 usize::min(
                     self.max_rows_in_group_row - self.buffered_rows,
-                    // One row at least, so a bound under one row's worth still makes progress.
-                    (self.max_bytes_in_group_row as f64 / bpr - buffered_bytes / bpr).max(1.0)
-                        as usize,
+                    self.byte_bound.rows_that_fit,
                 ),
                 batch.num_rows() - offset,
             );
@@ -201,9 +199,8 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
             offset += length;
 
             self.buffered_rows += length;
-            if self.buffered_rows >= self.max_rows_in_group_row
-                || self.get_estimated_total_bytes(bpr) > self.max_bytes_in_group_row as f64
-            {
+            self.byte_bound.rows_that_fit -= length;
+            if self.buffered_rows >= self.max_rows_in_group_row || self.reached_max_bytes().await? {
                 self.close_row_group().await?;
             }
         }
@@ -248,35 +245,53 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
         self.file_writer.flushed_row_groups()
     }
 
-    /// Estimated bytes per row, from the last row group that closed; the first row group of a
-    /// file, having no earlier group to measure, is sized from the batch slice's own memory
-    /// rather than from the buffers it shares.
-    fn get_estimated_bytes_per_row(&self, batch: &RecordBatch) -> f64 {
-        let (rows, bytes) = match self.file_writer.flushed_row_groups().last() {
-            Some(group) => (
-                group.num_rows() as usize,
-                group.total_byte_size().max(0) as usize,
-            ),
-            // `get_array_memory_size` on a slice reports the whole backing buffer,
-            // so seed from the slice's own share where arrow can provide it; else
-            // the first row group of a file lands far under the bound.
-            None => (
-                batch.num_rows(),
-                batch
-                    .columns()
-                    .iter()
-                    .map(|column| column.to_data().get_slice_memory_size().ok())
-                    .sum::<Option<usize>>()
-                    .unwrap_or_else(|| batch.get_array_memory_size()),
-            ),
+    /// Whether the open row group has reached [`WriterProperties::max_row_group_bytes`].
+    ///
+    /// arrow-rs's `ArrowWriter::write` reads the estimated encoded size of the open row group
+    /// before every batch, and closes the row group when not one more row fits at its
+    /// average row size. Here that read has to wait for the workers, so only the first row
+    /// group of a file is measured that way. Each later row group takes the rows that fit at
+    /// the row size of the row group before it, and closes without a wait.
+    async fn reached_max_bytes(&mut self) -> ParquetResult<bool> {
+        let Some(max_bytes) = self.byte_bound.max_bytes else {
+            return Ok(false);
         };
-        // 1 bit per row is parquet's densest encoding, so the density floors there.
-        (bytes as f64 / rows as f64).max(0.125)
+        // This size leaves out the slices the workers have not encoded yet. When it is already
+        // at the bound, the rows are larger than `rows_that_fit` assumed: close the row group.
+        if self.in_progress_size() >= max_bytes {
+            return Ok(true);
+        }
+        // Only the first row group of a file is measured. When it has taken its rows, wait
+        // for the workers and see how many more rows fit.
+        if self.byte_bound.rows_that_fit == 0 && self.byte_bound.is_first_row_group() {
+            let current_bytes = self.get_estimated_total_bytes().await?;
+            self.byte_bound.rows_that_fit = rows_that_fit(
+                max_bytes.saturating_sub(current_bytes),
+                current_bytes,
+                self.buffered_rows,
+            );
+        }
+        // The row group is full when no more rows fit.
+        Ok(self.byte_bound.rows_that_fit == 0)
     }
 
-    /// Estimated encoded bytes the open row group holds, at that density.
-    fn get_estimated_total_bytes(&self, bytes_per_row: f64) -> f64 {
-        self.buffered_rows as f64 * bytes_per_row
+    /// Estimated encoded size of the open row group: parquet's `get_estimated_total_bytes`
+    /// summed over its columns, the figure arrow-rs's `ArrowWriter` holds against
+    /// [`WriterProperties::max_row_group_bytes`]. Waits until the workers have encoded every
+    /// slice sent to them; [`Self::in_progress_size`] does not wait and can be behind.
+    async fn get_estimated_total_bytes(&mut self) -> ParquetResult<usize> {
+        let buffered_slices = self.byte_bound.buffered_slices;
+        for worker in &mut self.workers {
+            worker
+                .encoded_slices
+                .wait_for(|encoded_slices| *encoded_slices >= buffered_slices)
+                .await
+                .map_err(|_| {
+                    // As in `send`: the worker only goes away when its encode failed.
+                    ParquetError::General("column encoder stopped".to_string())
+                })?;
+        }
+        Ok(self.in_progress_size())
     }
 
     fn sum(&self, field: impl Fn(&ColumnWorker) -> &Arc<AtomicUsize>) -> usize {
@@ -297,11 +312,13 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
                 let (sender, receiver) = channel::<ArrowLeafColumn>(2);
                 let encoded_size = Arc::new(AtomicUsize::new(0));
                 let memory_size = Arc::new(AtomicUsize::new(0));
+                let (slices_sender, encoded_slices) = watch::channel(0);
                 let task = encode_column(
                     column_writer,
                     receiver,
                     encoded_size.clone(),
                     memory_size.clone(),
+                    slices_sender,
                 );
                 let handle = tokio::spawn(task);
                 ColumnWorker {
@@ -309,6 +326,7 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
                     handle,
                     encoded_size,
                     memory_size,
+                    encoded_slices,
                 }
             })
             .collect();
@@ -325,6 +343,7 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
                 leaf += 1;
             }
         }
+        self.byte_bound.buffered_slices += 1;
         Ok(())
     }
 
@@ -344,6 +363,7 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
     /// Wait for every column of the open row group, then append it to the file.
     async fn close_row_group(&mut self) -> ParquetResult<()> {
         let mut chunks = Vec::with_capacity(self.workers.len());
+        let mut encoded_size = 0;
         for mut worker in mem::take(&mut self.workers) {
             // Dropping the sender ends the worker's receive loop, which closes
             // its encoder and returns the finished column chunk.
@@ -354,7 +374,9 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
                     .await
                     .map_err(|e| ParquetError::External(Box::new(e)))??,
             );
+            encoded_size += worker.encoded_size.load(Ordering::Relaxed);
         }
+        self.byte_bound.last_row_group = Some((encoded_size, self.buffered_rows));
         self.buffered_rows = 0;
 
         let mut row_group = self.file_writer.next_row_group()?;
@@ -375,6 +397,63 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
     }
 }
 
+/// What [`ParallelArrowWriter`] keeps to hold row groups under
+/// [`WriterProperties::max_row_group_bytes`].
+struct ByteBound {
+    /// The maximum estimated encoded size of a row group in bytes; `None` without a bound.
+    max_bytes: Option<usize>,
+    /// Slices sent to the workers of the open row group.
+    buffered_slices: usize,
+    /// Rows the open row group still takes, see [`ParallelArrowWriter::reached_max_bytes`];
+    /// `usize::MAX` without a bound.
+    rows_that_fit: usize,
+    /// Estimated encoded bytes and rows of the last closed row group.
+    last_row_group: Option<(usize, usize)>,
+}
+
+impl ByteBound {
+    fn new(max_bytes: Option<usize>) -> Self {
+        Self {
+            max_bytes,
+            buffered_slices: 0,
+            rows_that_fit: usize::MAX,
+            last_row_group: None,
+        }
+    }
+
+    /// Whether the open row group is the first of the file: no row group has closed yet.
+    fn is_first_row_group(&self) -> bool {
+        self.last_row_group.is_none()
+    }
+
+    /// Set the rows a new row group takes: the rows that fit at the row size of the last
+    /// closed row group. The first row group of a file has no such row group, so it starts
+    /// from the memory `batch` holds. That is at least the batch's own size, so this row
+    /// group is measured early instead of late.
+    fn start_row_group(&mut self, batch: &RecordBatch) {
+        self.buffered_slices = 0;
+        self.rows_that_fit = match self.max_bytes {
+            None => usize::MAX,
+            Some(max_bytes) => {
+                let (bytes, rows) = self
+                    .last_row_group
+                    .unwrap_or_else(|| (batch.get_array_memory_size(), batch.num_rows()));
+                // One row at least, so a bound under one row's worth still makes progress.
+                rows_that_fit(max_bytes, bytes, rows).max(1)
+            }
+        };
+    }
+}
+
+/// Rows that fit in `remaining_bytes` at the average row size of `rows` rows that took
+/// `bytes`. Rows that took no bytes (all null, for example) give no row size and no limit.
+fn rows_that_fit(remaining_bytes: usize, bytes: usize, rows: usize) -> usize {
+    if bytes == 0 {
+        return usize::MAX;
+    }
+    (remaining_bytes as f64 * rows as f64 / bytes as f64) as usize
+}
+
 /// Encoding time after which a column task yields its runtime worker.
 const YIELD_AFTER: Duration = Duration::from_millis(1);
 
@@ -385,12 +464,14 @@ async fn encode_column(
     mut receiver: Receiver<ArrowLeafColumn>,
     encoded_size: Arc<AtomicUsize>,
     memory_size: Arc<AtomicUsize>,
+    encoded_slices: watch::Sender<usize>,
 ) -> ParquetResult<ArrowColumnChunk> {
     let mut since_yield = Instant::now();
     while let Some(column) = receiver.recv().await {
         writer.write(&column)?;
         encoded_size.store(writer.get_estimated_total_bytes(), Ordering::Relaxed);
         memory_size.store(writer.memory_size(), Ordering::Relaxed);
+        encoded_slices.send_modify(|encoded_slices| *encoded_slices += 1);
 
         // Encoding never awaits, so we yield every 1 ms so other tasks take the thrread
         if since_yield.elapsed() >= YIELD_AFTER {
