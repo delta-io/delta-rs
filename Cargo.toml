@@ -15,6 +15,10 @@ license = "Apache-2.0"
 documentation = "https://docs.rs/deltalake"
 repository = "https://github.com/delta-io/delta.rs"
 
+[workspace.lints.clippy]
+# Public enums must be #[non_exhaustive] so adding variants is not a breaking change.
+exhaustive_enums = "deny"
+
 [workspace.dependencies]
 #delta_kernel = { package = "buoyant_kernel", path = "../delta-kernel-rs/kernel", features = [
 #delta_kernel = { package = "buoyant_kernel", git = "https://github.com/buoyant-data/delta-kernel-rs", rev = "e6b3ff5120149e22b19d9b5eb9213cb6cd4a0a41", features = [

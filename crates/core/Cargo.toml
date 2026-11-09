@@ -167,3 +167,6 @@ harness = false
 
 [package.metadata.cargo-machete]
 ignored = ["foyer", "alloc-stdlib", "brotli-decompressor"]
+
+[lints]
+workspace = true
