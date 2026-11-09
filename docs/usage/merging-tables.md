@@ -41,6 +41,8 @@ Requesting this mode on a table that disables DV writing returns
 `DeltaTableError::DeletionVectorsNotEnabled`; there is no automatic rewrite fallback.
 Tables with multiple active logical files referring to the same physical path are
 not supported by this mode.
+Untouched Add actions outside the physical table root are retained and do not block
+updates to in-root files. Selecting an external file for a DV mutation is still rejected.
 
 In this mode, MERGE preserves the original Parquet files and hides changed target rows
 with persistent deletion vectors, including any previously deleted rows. Only inserted

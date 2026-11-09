@@ -192,6 +192,166 @@ async fn latest_dv_merge_actions(table: &DeltaTable) -> Vec<Action> {
         .collect()
 }
 
+#[rstest]
+#[tokio::test]
+async fn dv_merge_preserves_unselected_external_adds(
+    #[values(false, true)] select_external: bool,
+    #[values(false, true)] cdf: bool,
+) -> DeltaResult<()> {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("table");
+    let external_root = directory.path().join("external");
+    std::fs::create_dir_all(&root)?;
+    std::fs::create_dir_all(&external_root)?;
+    let root_url = Url::from_directory_path(&root).unwrap();
+    let mut table = DeltaTable::try_from_url(root_url.clone())
+        .await?
+        .create()
+        .with_columns(id_value_delta_schema().fields().cloned())
+        .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+        .with_configuration_property(
+            TableProperty::EnableChangeDataFeed,
+            Some(if cdf { "true" } else { "false" }),
+        )
+        .await?
+        .write(vec![id_value_batch(vec![1], vec![10])])
+        .await?;
+    let external = DeltaTable::try_from_url(Url::from_directory_path(&external_root).unwrap())
+        .await?
+        .create()
+        .with_columns(id_value_delta_schema().fields().cloned())
+        .await?
+        .write(vec![id_value_batch(vec![99], vec![990])])
+        .await?;
+    let external_files = external
+        .get_active_add_actions_by_partitions(&[])
+        .try_collect::<Vec<_>>()
+        .await?;
+    assert_eq!(external_files.len(), 1);
+    let external_key = external_files[0].object_store_path();
+    let external_bytes = external
+        .object_store()
+        .get(&external_key)
+        .await?
+        .bytes()
+        .await?;
+    let mut add = latest_dv_merge_actions(&external)
+        .await
+        .into_iter()
+        .find_map(|action| match action {
+            Action::Add(add) => Some(add),
+            _ => None,
+        })
+        .unwrap();
+    let url = external
+        .log_store()
+        .root_url()
+        .join(external_key.as_ref())
+        .unwrap();
+    add.path = percent_encoding::percent_decode_str(url.as_str())
+        .decode_utf8()
+        .unwrap()
+        .into_owned();
+    let external_path = add.path.clone();
+    CommitBuilder::default()
+        .with_actions(vec![Action::Add(add)])
+        .build(
+            Some(table.snapshot()?),
+            table.log_store(),
+            DeltaOperation::Write {
+                mode: SaveMode::Append,
+                partition_by: None,
+                predicate: None,
+            },
+        )
+        .await?;
+    table.update_state().await?;
+    let version = table.version().unwrap();
+    let ctx = SessionContext::new();
+    let result = table
+        .clone()
+        .merge(
+            ctx.read_batch(id_value_batch(
+                vec![if select_external { 99 } else { 1 }],
+                vec![111],
+            ))?,
+            col("target.id").eq(col("source.id")),
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_deletion_vectors(true)
+        .when_matched_update(|update| update.update("value", col("source.value")))?
+        .await;
+    if select_external {
+        let error = result.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Selected DV file is outside the table root"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            table
+                .object_store()
+                .list(None)
+                .try_collect::<Vec<_>>()
+                .await?
+                .iter()
+                .all(|file| !file.location.as_ref().ends_with(".bin"))
+        );
+    } else {
+        let (updated, metrics) = result?;
+        assert_eq!(updated.version(), Some(version + 1));
+        assert_eq!(metrics.num_target_files_removed, 1);
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        let actions = latest_dv_merge_actions(&updated).await;
+        assert!(actions.iter().all(
+            |action| !matches!(action, Action::Remove(remove) if remove.path == external_path)
+        ));
+    }
+    let reloaded = open_table(root_url).await?;
+    assert_eq!(
+        reloaded.version(),
+        Some(version + u64::from(!select_external))
+    );
+    let active = reloaded
+        .get_active_add_actions_by_partitions(&[])
+        .try_collect::<Vec<_>>()
+        .await?;
+    let external_add = active
+        .iter()
+        .find(|file| file.path() == external_path)
+        .unwrap();
+    assert!(external_add.deletion_vector_descriptor().is_none());
+    assert_eq!(
+        external
+            .object_store()
+            .get(&external_key)
+            .await?
+            .bytes()
+            .await?,
+        external_bytes
+    );
+    ctx.register_table("current", reloaded.table_provider().await?)?;
+    let rows = ctx
+        .sql("SELECT id, value FROM current ORDER BY id")
+        .await?
+        .collect()
+        .await?;
+    let actual = rows
+        .iter()
+        .flat_map(|batch| {
+            (0..batch.num_rows())
+                .map(|row| (int64_value(batch, 0, row), int64_value(batch, 1, row)))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![(1, if select_external { 10 } else { 111 }), (99, 990)]
+    );
+    Ok(())
+}
+
 #[cfg(unix)]
 #[rstest]
 #[case::rewrite_merge(true, false)]

@@ -70,13 +70,11 @@ pub(super) async fn prepare_deletion_vectors(
         let normalized = crate::kernel::spawn_blocking_with_span(move || {
             batch
                 .into_iter()
-                .map(|file| {
-                    let file_id = resolver.file_id(file.path_raw())?.ok_or_else(|| {
-                        DeltaTableError::InvalidTableLocation(
-                            "Active DV file is outside the table root".into(),
-                        )
-                    })?;
-                    Ok((file, file_id))
+                .filter_map(|file| match resolver.file_id(file.path_raw()) {
+                    Ok(Some(file_id)) => Some(Ok((file, file_id))),
+                    // Selected files were validated above; unrelated external Adds stay untouched.
+                    Ok(None) => None,
+                    Err(error) => Some(Err(error)),
                 })
                 .collect::<DeltaResult<Vec<_>>>()
         })
@@ -351,6 +349,54 @@ mod tests {
         .unwrap();
         rows.insert(id, RoaringTreemap::from_iter(positions));
         rows
+    }
+
+    #[rstest::rstest]
+    #[case::unselected_external("https://example.com/external.parquet", false)]
+    #[case::malformed_url("http://[invalid", true)]
+    #[tokio::test]
+    async fn dv_file_lookup_skips_only_out_of_root_adds(
+        #[case] external_path: &str,
+        #[case] invalid: bool,
+    ) -> DeltaResult<()> {
+        let adds = ["selected.parquet", external_path].map(|path| {
+            let mut add = crate::test_utils::make_test_add(path, &[], 0);
+            add.stats = Some(r#"{"numRecords":3}"#.into());
+            Action::Add(add)
+        });
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_column(
+                "id",
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+                None,
+            )
+            .with_configuration_property(crate::TableProperty::EnableDeletionVectors, Some("true"))
+            .with_actions(adds)
+            .await?;
+        let result = prepare_deletion_vectors(
+            table.snapshot()?.snapshot(),
+            &table.log_store(),
+            &selected_rows(&table, "selected.parquet", [0]),
+        )
+        .await;
+        if invalid {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to resolve table file URI")
+            );
+        } else {
+            let actions = result?;
+            assert_eq!(actions.len(), 2);
+            assert!(
+                actions.iter().any(|action| matches!(action, Action::Add(add)
+                    if add.path == "selected.parquet" && add.deletion_vector.as_ref().is_some_and(|dv| dv.cardinality == 1)))
+            );
+        }
+        Ok(())
     }
 
     #[rstest::rstest]

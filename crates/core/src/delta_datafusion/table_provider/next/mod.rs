@@ -128,6 +128,7 @@ impl FileSelection {
     /// Select files from Add actions.
     ///
     /// Only the path is used. File metadata is loaded from the scan snapshot.
+    /// Absolute URL authorities are preserved; credentials, query and fragment are stripped.
     pub fn from_adds(adds: impl IntoIterator<Item = Add>) -> Self {
         Self {
             paths: adds.into_iter().map(add_path_for_selection).collect(),
@@ -235,17 +236,34 @@ impl ResolvedFileSelection {
 }
 
 fn add_path_for_selection(add: Add) -> String {
-    let path = if Url::parse(&add.path).is_ok() {
-        add.path.split(['?', '#']).next().unwrap_or(&add.path)
-    } else {
-        &add.path
-    };
-    let path = crate::kernel::models::actions::serde_path::encode_path(path);
-    if let Ok(mut url) = Url::parse(&path) {
-        strip_url_sensitive_parts(&mut url);
-        url.to_string()
-    } else {
-        path
+    match Url::parse(&add.path) {
+        Ok(mut url) => {
+            let (_, after_scheme) = add
+                .path
+                .split_once(':')
+                .expect("A parsed URL has a scheme delimiter");
+            let raw_path = if let Some(authority) = after_scheme.strip_prefix("//") {
+                let path_start = authority
+                    .find(['/', '\\', '?', '#'])
+                    .unwrap_or(authority.len());
+                &authority[path_start..]
+            } else {
+                after_scheme
+            };
+            let raw_path = raw_path.split(['?', '#']).next().unwrap_or("");
+            // Add paths are decoded, so encode the original path without interpreting literal '%'.
+            url.set_path(&crate::kernel::models::actions::serde_path::encode_path(
+                raw_path,
+            ));
+            strip_url_sensitive_parts(&mut url);
+            url.to_string()
+        }
+        Err(_) if add.path.contains("://") => {
+            crate::kernel::models::actions::serde_path::encode_path(
+                &strip_unparsed_url_sensitive_parts(&add.path),
+            )
+        }
+        Err(_) => crate::kernel::models::actions::serde_path::encode_path(&add.path),
     }
 }
 
@@ -2683,6 +2701,96 @@ mod tests {
             FileSelection::from_file_paths([path]).resolve_input_file_ids(&root)?,
             HashSet::from([root.join("data/part%20%2520name.parquet")?.to_string()])
         );
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::http("http", 8080)]
+    #[case::https("https", 8443)]
+    #[test]
+    fn add_selection_preserves_ipv6_authorities_and_redacts_credentials(
+        #[case] scheme: &str,
+        #[case] port: u16,
+        #[values(false, true)] credentials: bool,
+    ) -> TestResult {
+        let userinfo = if credentials {
+            "urluser:urlpassword@"
+        } else {
+            ""
+        };
+        let add = make_test_add(
+            format!(
+                "{scheme}://{userinfo}[2001:db8::1]:{port}/table dir%/part %20[raw].parquet?token=urltoken#frag"
+            ),
+            &[],
+            0,
+        );
+        let selection = FileSelection::from_adds([add]);
+        let serialized = serde_json::to_string(&selection)?;
+        for text in [&serialized, &format!("{selection:?}")] {
+            for forbidden in ["urluser", "urlpassword", "urltoken", "frag"] {
+                assert!(!text.contains(forbidden), "selection contains {forbidden}");
+            }
+        }
+        let root = Url::parse(&format!("{scheme}://[2001:db8::1]:{port}/table%20dir%25/"))?;
+        let expected = root.join("part%20%2520%5Braw%5D.parquet")?.to_string();
+        assert_eq!(selection.paths, vec![expected.clone()]);
+        let restored: FileSelection = serde_json::from_str(&serialized)?;
+        assert_eq!(
+            restored.resolve_input_file_ids(&root)?,
+            HashSet::from([expected])
+        );
+        let other = Url::parse(&format!("{scheme}://[2001:db8::2]:{port}/table%20dir%25/"))?;
+        assert!(restored.resolve_input_file_ids(&other).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn add_selection_redacts_malformed_url_authorities() -> TestResult {
+        let add = make_test_add(
+            "https://urluser:urlpassword@[invalid]/table/file.parquet?token=urltoken#frag",
+            &[],
+            0,
+        );
+        let selection = FileSelection::from_adds([add]);
+        let serialized = serde_json::to_string(&selection)?;
+        for text in [&serialized, &format!("{selection:?}")] {
+            for forbidden in ["urluser", "urlpassword", "urltoken", "frag"] {
+                assert!(!text.contains(forbidden), "selection contains {forbidden}");
+            }
+        }
+        assert!(
+            selection
+                .resolve_input_file_ids(&Url::parse("https://example.com/table/")?)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::abfs("abfs")]
+    #[case::abfss("abfss")]
+    #[test]
+    fn add_selection_preserves_abfs_container_authorities(#[case] scheme: &str) -> TestResult {
+        let add = make_test_add(
+            format!(
+                "{scheme}://left:urlpassword@account.dfs.core.windows.net/table/part%20 name.parquet?token=urltoken#frag"
+            ),
+            &[],
+            0,
+        );
+        let selection = FileSelection::from_adds([add]);
+        let root = Url::parse(&format!(
+            "{scheme}://left@account.dfs.core.windows.net/table/"
+        ))?;
+        assert_eq!(
+            selection.resolve_input_file_ids(&root)?,
+            HashSet::from([root.join("part%2520%20name.parquet")?.to_string()])
+        );
+        let serialized = serde_json::to_string(&selection)?;
+        for forbidden in ["urlpassword", "urltoken", "frag"] {
+            assert!(!serialized.contains(forbidden));
+        }
         Ok(())
     }
 
