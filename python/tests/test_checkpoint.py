@@ -549,3 +549,89 @@ def test_refresh_snapshot_after_log_cleanup_3057(tmp_path):
     )
 
     assert vacuum_log == []
+
+
+@pytest.mark.pyarrow
+def test_cleanup_metadata_with_incomplete_multipart_checkpoint(
+    tmp_path: pathlib.Path,
+):
+    """https://github.com/delta-io/delta-rs/issues/4980
+
+    Readers must ignore a multi-part checkpoint with a missing part per
+    PROTOCOL.md, so metadata cleanup must not treat it as a boundary and
+    delete the commits behind it.
+    """
+    import time
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    table_path = tmp_path / "t"
+    for x in (1, 2, 3):
+        write_deltalake(table_path, pa.table({"x": [x]}), mode="append")
+    DeltaTable(table_path).create_checkpoint()
+
+    # rewrite the version 2 checkpoint as 2 parts, leaving part 2 out
+    checkpoint = table_path / "_delta_log" / f"{2:020}.checkpoint"
+    rows = pq.read_table(f"{checkpoint}.parquet")
+    os.remove(f"{checkpoint}.parquet")
+    os.remove(table_path / "_delta_log" / "_last_checkpoint")
+    pq.write_table(rows.slice(0, 2), f"{checkpoint}.0000000001.0000000002.parquet")
+
+    # age all log entries past the default 30-day logRetentionDuration
+    old = time.time() - 40 * 86400
+    for f in os.listdir(table_path / "_delta_log"):
+        os.utime(table_path / "_delta_log" / f, (old, old))
+
+    def read_x() -> list:
+        result = (
+            QueryBuilder()
+            .register("tbl", DeltaTable(table_path))
+            .execute("select x from tbl order by x")
+            .read_all()
+        )
+        return result["x"].to_pylist()
+
+    # the reader ignores the incomplete checkpoint and replays commits 0 to 2
+    assert read_x() == [1, 2, 3]
+
+    DeltaTable(table_path).cleanup_metadata()
+
+    # cleanup must keep commits 0 and 1 so the table still loads
+    assert read_x() == [1, 2, 3]
+
+
+@pytest.mark.pyarrow
+def test_failed_post_commit_checkpoint_does_not_fail_write(
+    tmp_path: pathlib.Path,
+):
+    """https://github.com/delta-io/delta-rs/issues/4986
+
+    A failed post-commit checkpoint must not raise from write_deltalake after
+    the commit is already durable, otherwise a caller that retries appends
+    the rows again.
+    """
+    import pyarrow as pa
+
+    table_path = tmp_path / "t"
+    write_deltalake(
+        table_path,
+        pa.table({"x": [1]}),
+        configuration={"delta.checkpointInterval": "1"},
+    )
+    # make the checkpoint write for version 1 fail
+    os.mkdir(table_path / "_delta_log" / "00000000000000000001.checkpoint.parquet")
+
+    # currently raises "Unable to rename file: Is a directory" even though the
+    # append itself is committed
+    write_deltalake(table_path, pa.table({"x": [2]}), mode="append")
+
+    dt = DeltaTable(table_path)
+    assert dt.version() == 1
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select x from tbl order by x")
+        .read_all()
+    )
+    assert result["x"].to_pylist() == [1, 2]

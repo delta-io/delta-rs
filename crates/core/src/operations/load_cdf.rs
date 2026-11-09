@@ -171,6 +171,38 @@ impl CdfLoadBuilder {
         Ok(0)
     }
 
+    /// Validate that change data feed was enabled at `version`.
+    ///
+    /// Reads the effective `delta.enableChangeDataFeed` table property as of
+    /// `version` — i.e. from the last metaData action at or before it — rather
+    /// than relying on a metaData action being present in the commit at
+    /// `version` itself. Without this, a starting version whose commit carries
+    /// no metaData action would silently surface rewritten files' remove/add
+    /// pairs as delete/insert change rows even on tables that never had CDF
+    /// enabled.
+    async fn check_cdf_enabled_at_version(
+        &self,
+        version: Version,
+        end: Version,
+    ) -> DeltaResult<()> {
+        let snapshot = crate::kernel::Snapshot::try_new(self.log_store.as_ref(), Some(version))
+            .await
+            .map_err(|e| {
+                DeltaTableError::generic(format!(
+                    "Failed to resolve snapshot at version {version}: {e}"
+                ))
+            })?;
+        match snapshot.table_properties().enable_change_data_feed {
+            Some(true) => Ok(()),
+            Some(false) => Err(DeltaTableError::ChangeDataNotRecorded {
+                version,
+                start: version,
+                end,
+            }),
+            None => Err(DeltaTableError::ChangeDataNotEnabled { version }),
+        }
+    }
+
     /// This is a rust version of https://github.com/delta-io/delta/blob/master/spark/src/main/scala/org/apache/spark/sql/delta/commands/cdc/CDCReader.scala#L418
     /// Which iterates through versions of the delta table collects the relevant actions / commit info and returns those
     /// groupings for later use. The scala implementation has a lot more edge case handling and read schema checking (and just error checking in general)
@@ -264,6 +296,12 @@ impl CdfLoadBuilder {
             "starting timestamp = {starting_timestamp:?}, ending timestamp = {ending_timestamp:?}"
         );
         log::debug!("starting version = {start}, ending version = {end:?}");
+
+        // Validate the effective `delta.enableChangeDataFeed` property as of the
+        // starting version. The per-commit metaData check below only fires when
+        // the starting commit itself carries a metaData action, which is not
+        // guaranteed (e.g. plain writes after the table was created).
+        self.check_cdf_enabled_at_version(start, end).await?;
 
         for version in start..=end {
             let snapshot_bytes = self
