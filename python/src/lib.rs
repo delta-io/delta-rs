@@ -216,7 +216,7 @@ const MAX_OPTIMIZE_TARGET_SIZE: u64 = i64::MAX as u64;
 
 /// Maximum number of file-level deletion vector entries per Arrow RecordBatch when returning
 /// results from `DeltaTable.deletion_vectors()`.  Each entry is one (filepath, selection_vector)
-/// pair, so this bounds memory per batch — not per row within a file's mask.
+/// pair. Batches are also bounded by the List array's cumulative child-element limit.
 const DELETION_VECTOR_BATCH_SIZE: usize = 1024;
 
 fn deletion_vector_schema() -> Arc<arrow::datatypes::Schema> {
@@ -253,6 +253,15 @@ fn build_deletion_vector_batches(
     vectors: Vec<DeletionVectorSelection>,
     batch_size: usize,
 ) -> Result<Vec<arrow::record_batch::RecordBatch>, ArrowError> {
+    build_deletion_vector_batches_with_limit(vectors, batch_size, i32::MAX as usize)
+}
+
+// A smaller limit lets tests exercise offset boundaries without large allocations.
+fn build_deletion_vector_batches_with_limit(
+    vectors: Vec<DeletionVectorSelection>,
+    batch_size: usize,
+    max_values: usize,
+) -> Result<Vec<arrow::record_batch::RecordBatch>, ArrowError> {
     use arrow::datatypes::{DataType, Field};
 
     if vectors.is_empty() {
@@ -262,7 +271,28 @@ fn build_deletion_vector_batches(
     let schema = deletion_vector_schema();
     let mut batches = Vec::new();
     let batch_size = batch_size.max(1);
-    for chunk in vectors.chunks(batch_size) {
+    let max_values = max_values.min(i32::MAX as usize);
+    let mut remaining = vectors.as_slice();
+    while !remaining.is_empty() {
+        let mut values_len = 0;
+        let mut num_files = 0;
+        for dv in remaining.iter().take(batch_size) {
+            let mask_len = dv.keep_mask.len();
+            if mask_len > max_values {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Deletion vector keep mask length {mask_len} exceeds List<Boolean> offset limit {max_values}"
+                )));
+            }
+            // Subtract before comparing to avoid overflowing the cumulative length.
+            if mask_len > max_values - values_len {
+                break;
+            }
+            values_len += mask_len;
+            num_files += 1;
+        }
+
+        let (chunk, rest) = remaining.split_at(num_files);
+        remaining = rest;
         let mut filepath_builder = LargeStringBuilder::new();
         let mut selection_vector_builder = ListBuilder::new(BooleanBuilder::new())
             .with_field(Arc::new(Field::new("item", DataType::Boolean, false)));
@@ -3405,6 +3435,86 @@ mod tests {
     fn test_build_deletion_vector_batches_empty_returns_empty_vec() {
         let batches = build_deletion_vector_batches(vec![], 1024).unwrap();
         assert!(batches.is_empty());
+    }
+
+    #[test]
+    fn test_build_deletion_vector_batches_bounds_child_values() {
+        use arrow::array::{BooleanArray, LargeStringArray, ListArray};
+
+        let vectors: Vec<_> = [
+            vec![true, false, true],
+            vec![false, true, false],
+            vec![true, false],
+            vec![],
+            vec![false],
+            vec![true; 5],
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, keep_mask)| DeletionVectorSelection {
+            filepath: format!("f{i}"),
+            keep_mask,
+        })
+        .collect();
+        let batches = build_deletion_vector_batches_with_limit(vectors.clone(), 1024, 5).unwrap();
+
+        // The second batch hits the element limit exactly and includes an empty mask.
+        assert_eq!(
+            batches
+                .iter()
+                .map(|batch| batch.num_rows())
+                .collect::<Vec<_>>(),
+            vec![1, 3, 1, 1]
+        );
+        let mut actual = Vec::new();
+        for batch in batches {
+            assert_eq!(batch.schema(), deletion_vector_schema());
+            let paths = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<LargeStringArray>()
+                .unwrap();
+            let masks = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap();
+            assert!(masks.values().len() <= 5);
+            for row in 0..batch.num_rows() {
+                let mask = masks.value(row);
+                let mask = mask.as_any().downcast_ref::<BooleanArray>().unwrap();
+                actual.push(DeletionVectorSelection {
+                    filepath: paths.value(row).to_string(),
+                    keep_mask: mask.values().iter().collect(),
+                });
+            }
+        }
+        assert_eq!(actual, vectors);
+    }
+
+    #[test]
+    fn test_build_deletion_vector_batches_rejects_oversized_mask() {
+        let vectors = vec![DeletionVectorSelection {
+            filepath: "f1".to_string(),
+            keep_mask: vec![true; 6],
+        }];
+        let err = build_deletion_vector_batches_with_limit(vectors, 1024, 5).unwrap_err();
+        assert!(matches!(err, ArrowError::InvalidArgumentError(_)));
+        assert!(err.to_string().contains("keep mask length 6"));
+        assert!(err.to_string().contains("offset limit 5"));
+    }
+
+    #[test]
+    fn test_build_deletion_vector_batches_zero_batch_size() {
+        let vectors = (0..3)
+            .map(|i| DeletionVectorSelection {
+                filepath: format!("f{i}"),
+                keep_mask: vec![],
+            })
+            .collect();
+        let batches = build_deletion_vector_batches_with_limit(vectors, 0, 0).unwrap();
+        assert_eq!(batches.len(), 3);
+        assert!(batches.iter().all(|batch| batch.num_rows() == 1));
     }
 
     #[test]
