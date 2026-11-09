@@ -192,6 +192,244 @@ async fn latest_dv_merge_actions(table: &DeltaTable) -> Vec<Action> {
         .collect()
 }
 
+#[cfg(unix)]
+#[rstest]
+#[case::rewrite_merge(true, false)]
+#[case::predicate_mutation(false, false)]
+#[case::dv_merge(true, true)]
+#[tokio::test]
+async fn local_alias_mutations_preserve_snapshot_identity(
+    #[case] merge: bool,
+    #[case] deletion_vectors: bool,
+    #[values(false, true)] delete: bool,
+    #[values(false, true)] cdf: bool,
+    #[values(false, true)] absolute: bool,
+) -> DeltaResult<()> {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("table");
+    std::fs::create_dir_all(&root)?;
+    let root_url = Url::from_directory_path(&root).unwrap();
+    let mut table = DeltaTable::try_from_url(root_url.clone())
+        .await?
+        .create()
+        .with_columns(id_value_delta_schema().fields().cloned())
+        .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+        .with_configuration_property(
+            TableProperty::EnableChangeDataFeed,
+            Some(if cdf { "true" } else { "false" }),
+        )
+        .await?
+        .write(vec![id_value_batch(vec![1, 2, 3], vec![10, 20, 30])])
+        .await?;
+    let original = table
+        .get_active_add_actions_by_partitions(&[])
+        .try_collect::<Vec<_>>()
+        .await?;
+    assert_eq!(original.len(), 1);
+    let mut add = latest_dv_merge_actions(&table)
+        .await
+        .into_iter()
+        .find_map(|action| match action {
+            Action::Add(add) => Some(add),
+            _ => None,
+        })
+        .unwrap();
+    let store = table.object_store();
+    let bytes = store
+        .get(&original[0].object_store_path())
+        .await?
+        .bytes()
+        .await?;
+    let data_path = Path::parse("data dir%/part %20name.parquet")?;
+    store.put(&data_path, bytes.clone().into()).await?;
+    let alias = if absolute {
+        directory.path().join("alias")
+    } else {
+        root.join("alias")
+    };
+    std::os::unix::fs::symlink(root.join("data dir%"), &alias)?;
+    add.path = if absolute {
+        percent_encoding::percent_decode_str(
+            Url::from_file_path(alias.join("part %20name.parquet"))
+                .unwrap()
+                .as_str(),
+        )
+        .decode_utf8()
+        .unwrap()
+        .into_owned()
+    } else {
+        "alias/part %20name.parquet".to_string()
+    };
+    let snapshot_path = add.path.clone();
+    CommitBuilder::default()
+        .with_actions(vec![
+            Action::Remove(original[0].remove_action(true)),
+            Action::Add(add),
+        ])
+        .build(
+            Some(table.snapshot()?),
+            table.log_store(),
+            DeltaOperation::Write {
+                mode: SaveMode::Overwrite,
+                partition_by: None,
+                predicate: None,
+            },
+        )
+        .await?;
+    table.update_state().await?;
+    let version = table.version().unwrap();
+    let previous = table.clone();
+    let ctx = SessionContext::new();
+    ctx.register_table("previous", previous.table_provider().await?)?;
+    let before = ctx
+        .sql("SELECT id, value FROM previous ORDER BY id")
+        .await?
+        .collect()
+        .await?;
+    datafusion::assert_batches_eq!(
+        [
+            "+----+-------+",
+            "| id | value |",
+            "+----+-------+",
+            "| 1  | 10    |",
+            "| 2  | 20    |",
+            "| 3  | 30    |",
+            "+----+-------+",
+        ],
+        &before
+    );
+    let table = if merge {
+        let builder = table
+            .merge(
+                ctx.read_batch(id_value_batch(vec![2], vec![222]))?,
+                col("target.id").eq(col("source.id")),
+            )
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_deletion_vectors(deletion_vectors);
+        let builder = if delete {
+            builder.when_matched_delete(|delete| delete)?
+        } else {
+            builder.when_matched_update(|update| update.update("value", col("source.value")))?
+        };
+        let (table, metrics) = builder.await?;
+        assert_eq!(metrics.num_target_files_removed, 1);
+        assert_eq!(metrics.num_target_rows_updated, usize::from(!delete));
+        assert_eq!(metrics.num_target_rows_deleted, usize::from(delete));
+        table
+    } else if delete {
+        let (table, metrics) = table
+            .delete()
+            .with_predicate(col("id").eq(lit(2i64)))
+            .await?;
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_deleted_rows, Some(1));
+        table
+    } else {
+        let (table, metrics) = table
+            .update()
+            .with_predicate(col("id").eq(lit(2i64)))
+            .with_update("value", lit(222i64))
+            .await?;
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_updated_rows, 1);
+        table
+    };
+    assert_eq!(table.version(), Some(version + 1));
+    let removes = latest_dv_merge_actions(&table)
+        .await
+        .into_iter()
+        .filter_map(|action| match action {
+            Action::Remove(remove) => Some(remove.path),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(removes, vec![snapshot_path]);
+    let reloaded = open_table(root_url).await?;
+    ctx.register_table("current", reloaded.table_provider().await?)?;
+    let current = ctx
+        .sql("SELECT id, value FROM current ORDER BY id")
+        .await?
+        .collect()
+        .await?;
+    if delete {
+        datafusion::assert_batches_eq!(
+            [
+                "+----+-------+",
+                "| id | value |",
+                "+----+-------+",
+                "| 1  | 10    |",
+                "| 3  | 30    |",
+                "+----+-------+",
+            ],
+            &current
+        );
+    } else {
+        datafusion::assert_batches_eq!(
+            [
+                "+----+-------+",
+                "| id | value |",
+                "+----+-------+",
+                "| 1  | 10    |",
+                "| 2  | 222   |",
+                "| 3  | 30    |",
+                "+----+-------+",
+            ],
+            &current
+        );
+    }
+    assert_eq!(
+        before,
+        ctx.sql("SELECT id, value FROM previous ORDER BY id")
+            .await?
+            .collect()
+            .await?
+    );
+    assert_eq!(store.get(&data_path).await?.bytes().await?, bytes);
+    if cdf {
+        let changes = reloaded
+            .scan_cdf()
+            .with_starting_version(version + 1)
+            .with_ending_version(version + 1)
+            .build(&ctx.state(), None)
+            .await?;
+        let batches = datafusion::physical_plan::collect(changes, ctx.task_ctx()).await?;
+        let changes =
+            datafusion::datasource::MemTable::try_new(batches[0].schema(), vec![batches])?;
+        ctx.register_table("changes", Arc::new(changes))?;
+        let batches = ctx
+            .sql("SELECT id, value, _change_type FROM changes ORDER BY value")
+            .await?
+            .collect()
+            .await?;
+        if delete {
+            datafusion::assert_batches_eq!(
+                [
+                    "+----+-------+--------------+",
+                    "| id | value | _change_type |",
+                    "+----+-------+--------------+",
+                    "| 2  | 20    | delete       |",
+                    "+----+-------+--------------+",
+                ],
+                &batches
+            );
+        } else {
+            datafusion::assert_batches_eq!(
+                [
+                    "+----+-------+------------------+",
+                    "| id | value | _change_type     |",
+                    "+----+-------+------------------+",
+                    "| 2  | 20    | update_preimage  |",
+                    "| 2  | 222   | update_postimage |",
+                    "+----+-------+------------------+",
+                ],
+                &batches
+            );
+        }
+    }
+    Ok(())
+}
+
 #[rstest]
 #[case::update(false, true)]
 #[case::delete(true, true)]

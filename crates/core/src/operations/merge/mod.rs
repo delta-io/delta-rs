@@ -2047,8 +2047,7 @@ fn should_remove_rewritten_file(
         return Ok(true);
     }
 
-    // Compare against normalized file IDs built from the raw log path so percent-encoded
-    // partition values map back to the same canonical file ID used by DeltaScanNext.
+    // Match the snapshot URL used by DeltaScanNext, including encoded paths and aliases.
     let full_id = normalize_path_as_file_id(log_path, table_root, "merge remove")?;
     Ok(survivors.contains(full_id.as_str()))
 }

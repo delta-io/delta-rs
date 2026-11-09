@@ -70,6 +70,10 @@ Add/Remove paths, including explicitly kept snapshots. Local file aliases and li
 objects are canonicalized in bounded batches on the blocking pool before containment
 and retention checks. References outside the physical table root are not VACUUM
 deletion candidates, including paths reached through directory symlinks.
+Scan file IDs retain their snapshot URLs, including symlink aliases, so rewrite MERGE
+and predicate-based UPDATE/DELETE remove the original logical Add actions. Physical
+path normalization for file selection, DV preparation and VACUUM is separate from
+this snapshot identity.
 LITE fetches whole retired-DV file sizes with bounded HEAD concurrency. FULL reuses
 storage-listing sizes without issuing a HEAD request for each retired vector. Both
 paths continue to use removal timestamps, rather than blob age, for tracked-DV retention.

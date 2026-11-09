@@ -162,10 +162,16 @@ impl FileSelection {
         self.paths
             .iter()
             .map(|path| {
-                normalize_path_as_file_id_with_table_root(
+                let file_url = normalize_path_as_file_url_with_table_root(
                     path,
                     &table_root_url,
                     "selected file path",
+                )?;
+                validate_selected_file_url_under_table_root(
+                    &file_url,
+                    &table_root_url,
+                    "selected file path",
+                    path,
                 )
             })
             .collect()
@@ -331,11 +337,11 @@ fn strip_unparsed_url_sensitive_parts(urlish: &str) -> String {
     )
 }
 
-fn normalize_path_as_file_id_with_table_root(
+fn normalize_path_as_file_url_with_table_root(
     path: &str,
     table_root_url: &Url,
     context: &'static str,
-) -> crate::DeltaResult<String> {
+) -> crate::DeltaResult<Url> {
     debug_assert!(
         table_root_url.path().ends_with('/'),
         "table_root_url must end with '/' before normalization"
@@ -347,7 +353,7 @@ fn normalize_path_as_file_id_with_table_root(
         )));
     }
 
-    let file_url = Url::parse(path)
+    Url::parse(path)
         .or_else(|_| table_root_url.join(path))
         .map_err(|e| {
             DeltaTableError::InvalidTableLocation(format!(
@@ -355,9 +361,7 @@ fn normalize_path_as_file_id_with_table_root(
                 redact_url_str_for_error(path),
                 redact_url_for_error(table_root_url),
             ))
-        })?;
-
-    validate_selected_file_url_under_table_root(&file_url, table_root_url, context, path)
+        })
 }
 
 fn validate_selected_file_url_under_table_root(
@@ -377,13 +381,17 @@ fn validate_selected_file_url_under_table_root(
         })
 }
 
+/// Builds the snapshot URL used by scan file-id columns, preserving log-path aliases.
+///
+/// Physical identity resolution belongs to file selection, DV preparation and VACUUM.
 pub(crate) fn normalize_path_as_file_id(
     path: &str,
     table_root_url: &Url,
     context: &'static str,
 ) -> crate::DeltaResult<String> {
     let table_root_url = ensure_table_root_url(table_root_url);
-    normalize_path_as_file_id_with_table_root(path, &table_root_url, context)
+    normalize_path_as_file_url_with_table_root(path, &table_root_url, context)
+        .map(|url| url.to_string())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2639,6 +2647,40 @@ mod tests {
             assert_eq!(file_id, expected);
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn snapshot_file_ids_do_not_require_filesystem_resolution() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let parent = directory.path().join("not-a-directory");
+        std::fs::write(&parent, b"data")?;
+        let root = Url::from_directory_path(parent.join("table")).unwrap();
+        let path = "alias/part%20%2520name.parquet";
+        assert_eq!(
+            normalize_path_as_file_id(path, &root, "snapshot file")?,
+            root.join(path)?.to_string()
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_and_selected_file_ids_use_distinct_alias_identities() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let root_path = directory.path().join("table");
+        std::fs::create_dir_all(root_path.join("data"))?;
+        std::os::unix::fs::symlink(root_path.join("data"), root_path.join("alias"))?;
+        let root = Url::from_directory_path(root_path).unwrap();
+        let path = "alias/part%20%2520name.parquet";
+        assert_eq!(
+            normalize_path_as_file_id(path, &root, "snapshot file")?,
+            root.join(path)?.to_string()
+        );
+        assert_eq!(
+            FileSelection::from_file_paths([path]).resolve_input_file_ids(&root)?,
+            HashSet::from([root.join("data/part%20%2520name.parquet")?.to_string()])
+        );
         Ok(())
     }
 
