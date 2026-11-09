@@ -98,6 +98,7 @@ mod expr_adapter;
 mod plan;
 mod replay;
 mod runtime_filter;
+mod variant;
 
 type ScanMetadataStream = Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTableError>> + Send>>;
 type PublicFileIdMap = HashMap<String, String>;
