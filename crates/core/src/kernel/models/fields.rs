@@ -238,11 +238,3 @@ fn deletion_vector_field() -> StructField {
         true,
     )
 }
-
-#[cfg(feature = "datafusion")]
-pub(crate) fn log_schema_ref() -> &'static std::sync::Arc<StructType> {
-    static LOG_SCHEMA_REF: LazyLock<std::sync::Arc<StructType>> =
-        LazyLock::new(|| std::sync::Arc::new(LOG_SCHEMA.clone()));
-
-    &LOG_SCHEMA_REF
-}
