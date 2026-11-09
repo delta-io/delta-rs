@@ -427,7 +427,7 @@ mod tests {
     use crate::datafile::writer::test_utils::{assert_default_created_by, test_props};
     use crate::logstore::tests::flatten_list_stream as list;
     use crate::writer::test_utils::get_record_batch;
-    use arrow::array::{Int32Array, StringArray};
+    use arrow::array::{Int32Array, StringArray, StringViewArray};
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use object_store::ObjectStoreExt as _;
     use parquet::basic::Compression;
@@ -909,7 +909,7 @@ mod tests {
 
         let (num_row_groups, group_sizes, batches) = read_back(&object_store, &adds[0]).await;
         assert!(num_row_groups > 1, "expected byte-bounded groups");
-        assert_eq!(group_sizes.iter().sum::<i64>(), rows as i64);
+        assert_eq!(group_sizes.iter().sum::<i64>(), rows);
         let read = arrow::compute::concat_batches(&batch.schema(), &batches).unwrap();
         assert_eq!(read, batch);
     }
@@ -1039,18 +1039,16 @@ mod tests {
         }
     }
 
-    /// With compression the compressed size is far below the uncompressed one, so
-    /// the bound has to track the latter: measuring the former instead would let
-    /// the uncompressed row groups grow well past the bound.
+    /// The bound is on the estimated encoded size, as in arrow-rs: a finished page counts at
+    /// its compressed size. With data that compresses well, both writers fill a row group to
+    /// about the bound in compressed bytes, which is far over the bound in uncompressed bytes.
     #[rstest::rstest]
     #[case::parallel(true)]
     #[case::serial(false)]
     #[tokio::test]
-    async fn test_row_group_bytes_measures_uncompressed(#[case] parallel: bool) {
-        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-
+    async fn test_row_group_bytes_measures_encoded_size(#[case] parallel: bool) {
         let rows = 100_000;
-        let bound: i64 = 64 * 1024;
+        let bound: i64 = 256 * 1024;
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "s",
             DataType::Utf8,
@@ -1060,7 +1058,7 @@ mod tests {
             schema.clone(),
             vec![Arc::new(StringArray::from(
                 (0..rows)
-                    .map(|i| format!("name-{i:06}"))
+                    .map(|i| format!("{i:08}-{}", "abcdefghij".repeat(10)))
                     .collect::<Vec<_>>(),
             ))],
         )
@@ -1074,6 +1072,10 @@ mod tests {
                 Some(
                     WriterProperties::builder()
                         .set_compression(Compression::SNAPPY)
+                        // Plain pages, and small ones, so that most of a row group is in
+                        // finished pages when its size is read.
+                        .set_dictionary_enabled(false)
+                        .set_data_page_size_limit(16 * 1024)
                         .set_max_row_group_row_count(None)
                         .set_max_row_group_bytes(Some(bound as usize))
                         .build(),
@@ -1098,22 +1100,25 @@ mod tests {
             .bytes()
             .await
             .unwrap();
-        let meta = ParquetRecordBatchReaderBuilder::try_new(bytes)
-            .unwrap()
-            .metadata()
-            .clone();
-        assert!(meta.num_row_groups() > 1);
-        // The data has to actually compress, or this proves nothing.
+        let reader = SerializedFileReader::new(bytes).unwrap();
+        let groups = reader.metadata().row_groups();
         assert!(
-            meta.row_groups()
-                .iter()
-                .any(|rg| rg.compressed_size() < rg.total_byte_size())
+            groups.len() > 2,
+            "expected several groups, got {}",
+            groups.len()
         );
-        for rg in meta.row_groups() {
-            let uncompressed = rg.total_byte_size();
+        // The last row group holds the remainder.
+        for group in &groups[..groups.len() - 1] {
+            let compressed = group.compressed_size();
             assert!(
-                uncompressed <= 2 * bound,
-                "row group of {uncompressed} uncompressed bytes is well over the {bound} byte bound"
+                (bound / 2..=2 * bound).contains(&compressed),
+                "row group of {compressed} compressed bytes for a {bound} byte bound"
+            );
+            let uncompressed = group.total_byte_size();
+            assert!(
+                uncompressed > 2 * bound,
+                "row group of {uncompressed} uncompressed bytes: the data did not compress, \
+                 or the bound was held against the uncompressed size"
             );
         }
     }
@@ -1176,8 +1181,8 @@ mod tests {
         assert_eq!(group_sizes, [10_000]);
     }
 
-    /// A byte bound has to bound a file's *first* row group too: the seed must measure the
-    /// batch slice, not the buffer it was sliced from.
+    /// A byte bound has to bound a file's *first* row group too. It has no row group before it
+    /// to go by, so the writer measures it.
     #[tokio::test]
     async fn test_row_group_bytes_bounds_first_group() {
         let rows = 100_000;
@@ -1287,8 +1292,7 @@ mod tests {
             "expected several groups, got {}",
             groups.len()
         );
-        // The largest group is the bound-limited one; the first is the seed and the last
-        // is the remainder, so neither is asserted on.
+        // The largest group is a bound-limited one; the last is the remainder.
         let biggest = *groups.iter().max().unwrap();
         assert!(
             biggest <= 2 * bound,
@@ -1349,6 +1353,115 @@ mod tests {
             .collect();
         assert_eq!(group_sizes.len(), rows as usize);
         assert_eq!(group_sizes.iter().sum::<i64>(), rows as i64);
+    }
+
+    /// The first row group of a view column is bounded too. The views of a batch do not tell
+    /// how long its strings are, so the writer has to go by what the column encodes to.
+    #[tokio::test]
+    async fn test_row_group_bytes_bounds_first_group_of_view_column() {
+        let rows = 4_000;
+        let bound = 256 * 1024;
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            DataType::Utf8View,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringViewArray::from_iter_values(
+                (0..rows).map(|i| format!("{i:0>1024}")),
+            ))],
+        )
+        .unwrap();
+        let object_store = memory_store();
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(bound))
+            .build();
+        let config = PartitionWriterConfig::try_new(
+            schema,
+            IndexMap::new(),
+            test_props(Some(properties), None, None, Some(1024)),
+            None,
+            None,
+        )
+        .unwrap();
+        let mut writer = PartitionWriter::try_with_config(object_store.clone(), config).unwrap();
+        writer.write(&batch).await.unwrap();
+        let adds = writer.close().await.unwrap();
+
+        let bytes = object_store
+            .get(&Path::from(adds[0].path.clone()))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let reader = SerializedFileReader::new(bytes).unwrap();
+        let first = reader.metadata().row_groups()[0].total_byte_size() as usize;
+        assert!(
+            (bound / 2..=2 * bound).contains(&first),
+            "first row group of {first} bytes for a {bound}-byte bound"
+        );
+    }
+
+    /// A row group assumes the row size of the row group before it. When its rows are much
+    /// larger, it has to close soon after, and not take all the rows it planned to take.
+    #[tokio::test]
+    async fn test_row_group_bytes_closes_when_rows_grow() {
+        let bound = 256 * 1024;
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            DataType::Utf8,
+            false,
+        )]));
+        // About 19_000 of the short rows fit under the bound. The second row group then
+        // starts in the short rows, and would take some 9_000 of the long rows: 9 times
+        // the bound.
+        let values = (0..28_000)
+            .map(|i| format!("{i:08}"))
+            .chain((0..12_000).map(|i| format!("{i:0>256}")));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(values.collect::<Vec<_>>()))],
+        )
+        .unwrap();
+        let object_store = memory_store();
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(bound))
+            .build();
+        let config = PartitionWriterConfig::try_new(
+            schema,
+            IndexMap::new(),
+            test_props(Some(properties), None, None, Some(256)),
+            None,
+            None,
+        )
+        .unwrap();
+        let mut writer = PartitionWriter::try_with_config(object_store.clone(), config).unwrap();
+        writer.write(&batch).await.unwrap();
+        let adds = writer.close().await.unwrap();
+
+        let bytes = object_store
+            .get(&Path::from(adds[0].path.clone()))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let reader = SerializedFileReader::new(bytes).unwrap();
+        // How far a row group gets past the bound depends on how many slices the workers
+        // still had to encode, a few at most.
+        for group in reader.metadata().row_groups() {
+            let size = group.total_byte_size() as usize;
+            assert!(
+                size <= 4 * bound,
+                "row group of {size} bytes for a {bound}-byte bound"
+            );
+        }
     }
 
     /// An unset byte bound leaves the row-count bound governing alone.
