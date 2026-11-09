@@ -184,13 +184,9 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
                 self.byte_bound.start_row_group(batch);
             }
 
-            let length = usize::min(
-                usize::min(
-                    self.max_rows_in_group_row - self.buffered_rows,
-                    self.byte_bound.rows_that_fit,
-                ),
-                batch.num_rows() - offset,
-            );
+            let length = (self.max_rows_in_group_row - self.buffered_rows)
+                .min(self.byte_bound.rows_that_fit)
+                .min(batch.num_rows() - offset);
             if length == batch.num_rows() {
                 self.send_columns(batch).await?;
             } else {
