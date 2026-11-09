@@ -42,7 +42,9 @@ def edge_table(tmp_path: pathlib.Path) -> DeltaTable:
 
 def read(dt: DeltaTable, engine: str, **kwargs) -> dict:
     table = dt.to_pyarrow_table(engine=engine, **kwargs)
-    return table.sort_by("v").to_pydict()
+    # pyarrow has no take kernel for view types, so sort_by fails on the datafusion engine
+    rows = sorted(table.to_pylist(), key=lambda row: row["v"])
+    return {name: [row[name] for row in rows] for name in table.column_names}
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -166,6 +168,16 @@ def test_to_pandas_datafusion(edge_table):
     assert sorted(df["v"].tolist()) == [1, 2]
 
 
+@pytest.mark.pandas
+def test_to_pandas_datafusion_keeps_logical_string_dtype(edge_table):
+    import pandas as pd
+    import pyarrow as pa
+
+    df = edge_table.to_pandas(engine="datafusion", types_mapper=pd.ArrowDtype)
+
+    assert df["s"].dtype == pd.ArrowDtype(pa.string())
+
+
 def test_pyarrow_engine_warns(edge_table):
     with pytest.warns(DeprecationWarning, match="pyarrow engine"):
         edge_table.to_pyarrow_table()
@@ -185,3 +197,21 @@ def test_datafusion_engine_does_not_warn(edge_table):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         edge_table.to_pyarrow_table(engine="datafusion")
+
+
+def test_datafusion_engine_returns_string_views(edge_table):
+    import pyarrow as pa
+
+    table = edge_table.to_pyarrow_table(engine="datafusion")
+
+    assert table.schema.field("s").type == pa.string_view()
+
+
+@pytest.mark.pandas
+def test_datafusion_engine_string_lists_convert_to_pandas(tmp_path):
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, pa.table({"items": [["a"], ["b", None]]}))
+    table = DeltaTable(tmp_path).to_pyarrow_table(engine="datafusion")
+
+    assert len(table.to_pandas()) == 2
