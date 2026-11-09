@@ -4,6 +4,7 @@ use aws_config::{BehaviorVersion, SdkConfig};
 use deltalake_core::data_catalog::{DataCatalog, DataCatalogError};
 
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum GlueError {
     /// Missing metadata in the catalog
     #[error("Missing Metadata {metadata} in the Data Catalog ")]

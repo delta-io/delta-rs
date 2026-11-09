@@ -163,6 +163,7 @@ fn format_schema_mismatch(record_batch_schema: &SchemaRef, expected_schema: &Sch
 
 /// Write mode for the [DeltaWriter]
 #[derive(Copy, Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum WriteMode {
     /// Default write mode which will return an error if schemas do not match correctly
     Default,
