@@ -930,15 +930,6 @@ async fn execute(
         .with_query_planner(merge_planner)
         .build();
 
-    // TODO: Given the join predicate, remove any expression that involve the
-    // source table and keep expressions that only involve the target table.
-    // This would allow us to perform statistics/partition pruning E.G
-    // Expression source.id = id and to_dt = '9999-12-31' -Becomes-> to_dt =
-    // '9999-12-31'
-    //
-    // If the user specified any not_source_match operations then those
-    // predicates also need to be considered when pruning
-
     let source_name = match &source_alias {
         Some(alias) => TableReference::bare(alias.to_string()),
         None => TableReference::bare(UNNAMED_TABLE),
