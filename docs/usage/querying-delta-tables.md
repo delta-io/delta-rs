@@ -63,6 +63,10 @@ for:
 - Duplicate names in `columns=` are an error; the pyarrow engine returns the
   column twice.
 - Row order follows query execution and is not deterministic across calls.
+- `to_pyarrow_table` returns top-level string and binary columns as
+  `string_view` and `binary_view`. Cast them back before pyarrow compute:
+  `filter`, `sort_by` and `join` fail on tables holding them, and `unique` and
+  `value_counts` turn their nulls into `""`.
 - `filesystem=`, `pyarrow.dataset.Expression` filters, and the deprecated
   `partitions` argument are pyarrow-engine concepts and are rejected;
   the datafusion engine prunes files from `filters` on its own.

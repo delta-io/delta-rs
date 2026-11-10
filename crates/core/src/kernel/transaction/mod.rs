@@ -172,6 +172,7 @@ pub struct Metrics {
 
 /// Error raised while commititng transaction
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum TransactionError {
     /// Version already exists
     #[error("Tried committing existing table version: {0}")]
@@ -242,6 +243,7 @@ impl From<TransactionError> for DeltaTableError {
 
 /// Error raised while committing a transaction
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum CommitBuilderError {}
 
 impl From<CommitBuilderError> for DeltaTableError {

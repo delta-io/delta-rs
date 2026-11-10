@@ -537,9 +537,11 @@ async fn scan_memory_table(
     log_store: &dyn LogStore,
     predicate: &Expr,
 ) -> DeltaResult<Vec<Add>> {
+    // Partition pruning needs `partitionValues_parsed`, which only the parsed stats policy
+    // materializes, so the batches must be read with that policy.
     let options = ActiveAddOptions {
         predicate: None,
-        stats: AddStatsPolicy::RawJson,
+        stats: AddStatsPolicy::Parsed,
     };
     let add_action_batches = snapshot.active_add_batches(log_store, options).await?;
     let actions: Vec<Add> = add_action_batches

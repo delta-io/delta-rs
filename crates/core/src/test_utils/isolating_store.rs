@@ -35,6 +35,7 @@ use crate::{DeltaResult, DeltaTableError};
 
 /// What the backend saw, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ScopeEvent {
     /// A scope with this number was opened.
     Begin(usize),

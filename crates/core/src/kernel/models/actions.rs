@@ -747,6 +747,7 @@ impl ProtocolInner {
 /// High level table features
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum TableFeatures {
     /// Mapping of one column to another
     ColumnMapping,
@@ -906,6 +907,7 @@ impl TableFeatures {
 
 ///Storage type of deletion vector
 #[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum StorageType {
     /// Stored at relative path derived from a UUID.
     #[serde(rename = "u")]
@@ -988,7 +990,7 @@ pub struct DeletionVectorDescriptor {
 impl TryFrom<DeletionVectorDescriptor>
     for delta_kernel::actions::deletion_vector::DeletionVectorDescriptor
 {
-    type Error = delta_kernel::Error;
+    type Error = delta_kernel::KernelError;
 
     fn try_from(dv: DeletionVectorDescriptor) -> Result<Self, Self::Error> {
         use delta_kernel::actions::deletion_vector::DeletionVectorStorageType;
@@ -1280,6 +1282,7 @@ pub struct Sidecar {
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
 /// The isolation level applied during transaction
 #[derive(Default)]
+#[non_exhaustive]
 pub enum IsolationLevel {
     /// The strongest isolation level. It ensures that committed write operations
     /// and all reads are Serializable. Operations are allowed as long as there
