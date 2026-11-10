@@ -633,6 +633,11 @@ def test_merge_when_matched_update_all_wo_predicate(
                 [True, True],
                 ArrowField("deleted", type=DataType.bool(), nullable=True),
             ),
+            # The target has no column `weight`: `update_all` leaves it out
+            "weight": Array(
+                [10, 15],
+                ArrowField("weight", type=DataType.int64(), nullable=True),
+            ),
         },
     )
 
@@ -702,6 +707,11 @@ def test_merge_when_matched_update_all_with_exclude(
             "deleted": Array(
                 [True, True],
                 ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+            # The target has no column `weight`: `update_all` leaves it out
+            "weight": Array(
+                [10, 15],
+                ArrowField("weight", type=DataType.int64(), nullable=True),
             ),
         }
     )
