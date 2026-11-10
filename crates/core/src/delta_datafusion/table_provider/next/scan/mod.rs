@@ -27,7 +27,6 @@ use arrow_array::{
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaBuilder, SchemaRef};
 use chrono::{TimeZone as _, Utc};
-use dashmap::DashMap;
 use datafusion::{
     catalog::Session,
     common::{
@@ -80,7 +79,7 @@ pub(crate) use self::plan::{KernelScanPlan, ProjectedScanContract, supports_filt
 use self::replay::{ScanFileContext, ScanFileStream};
 pub(crate) use self::runtime_filter::RuntimeFileFilter;
 use self::runtime_filter::RuntimeScanFilePruner;
-use super::{FileSelection, ResolvedFileSelection};
+use super::{FileSelection, ResolvedFileSelection, SendableDeletionVectorStream};
 use crate::{
     DeltaTableError,
     delta_datafusion::{
@@ -212,53 +211,53 @@ pub(super) async fn execution_plan(
     get_data_scan_plan(session, scan_plan, replayed, limit, file_pruner).await
 }
 
-/// Load deletion-vector keep masks for the selected files.
-///
-/// Drain [`ScanFileStream`] to start the DV loading tasks, then collect their
-/// results through [`ReceiverStreamBuilder::build`]. A successful collection
-/// waits for all DV tasks to finish.
-pub(super) async fn replay_deletion_vectors(
+/// Load one mask per poll, without queuing mask-loading tasks for the full scan.
+pub(super) fn deletion_vector_stream(
     engine: Arc<dyn Engine>,
-    scan_plan: &KernelScanPlan,
-    config: &DeltaScanConfig,
+    scan: Arc<crate::kernel::Scan>,
     stream: ScanMetadataStream,
-    file_selection: Option<&ResolvedFileSelection>,
-) -> Result<Vec<DeletionVectorSelection>> {
-    let mut stream = ScanFileStream::new(
-        engine,
-        &scan_plan.scan,
-        config.clone(),
-        file_selection.map(|selection| &selection.active_file_ids),
-        stream,
-    );
-    while stream.try_next().await?.is_some() {}
+    file_selection: Option<HashSet<String>>,
+) -> SendableDeletionVectorStream {
+    let table_root = scan.table_root().clone();
+    let metadata_root = table_root.clone();
+    let files = stream
+        .and_then(move |metadata| {
+            ready(replay::deletion_vector_files(
+                metadata,
+                &metadata_root,
+                file_selection.as_ref(),
+            ))
+        })
+        .map_ok(|files| futures::stream::iter(files.into_iter().map(Ok)))
+        .try_flatten();
 
-    let dv_stream = stream.dv_stream.build();
-    // A DV task must return a keep mask.
-    let dvs: DashMap<_, _> = dv_stream
-        .and_then(|(url, dv, num_records, cardinality)| {
-            ready(match dv {
-                Some(keep_mask) => validate_dv_mask(&keep_mask, num_records, cardinality, &url)
-                    .and_then(|()| normalize_dv_keep_mask_for_api(keep_mask, num_records, &url))
-                    .map(|mask| (url.to_string(), mask))
-                    .map_err(DeltaTableError::from),
-                None => Err(DeltaTableError::generic(
-                    "Invariant violation: DV task spawned for file without deletion vector",
-                )),
+    Box::pin(files.and_then(move |file| {
+        let engine = engine.clone();
+        let table_root = table_root.clone();
+        async move {
+            tokio::task::spawn_blocking(move || {
+                let mask = file
+                    .dv_info
+                    .get_selection_vector(engine.as_ref(), &table_root)?
+                    .ok_or_else(|| {
+                        DeltaTableError::generic(
+                            "Invariant violation: DV file returned no deletion vector",
+                        )
+                    })?;
+                validate_dv_mask(&mask, file.num_records, file.cardinality, &file.file_url)
+                    .map_err(DeltaTableError::from)?;
+                let keep_mask =
+                    normalize_dv_keep_mask_for_api(mask, file.num_records, &file.file_url)
+                        .map_err(DeltaTableError::from)?;
+                Ok(DeletionVectorSelection {
+                    filepath: file.file_url.to_string(),
+                    keep_mask,
+                })
             })
-        })
-        .try_collect()
-        .await?;
-
-    let mut vectors: Vec<_> = dvs
-        .into_iter()
-        .map(|(filepath, keep_mask)| DeletionVectorSelection {
-            filepath,
-            keep_mask,
-        })
-        .collect();
-    vectors.sort_unstable_by(|left, right| left.filepath.cmp(&right.filepath));
-    Ok(vectors)
+            .await
+            .map_err(|err| DeltaTableError::generic(format!("DV loading task failed: {err}")))?
+        }
+    }))
 }
 
 pub(super) async fn resolve_file_selection(
