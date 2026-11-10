@@ -2525,6 +2525,65 @@ def test_merge_struct_field_key_evolves_schema(
     }
 
 
+@pytest.mark.pyarrow
+def test_merge_struct_field_key_on_source_only_column(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, pa.table({"id": pa.array([1, 2], pa.int64())}))
+    dt = DeltaTable(tmp_path)
+    # The target has no column `new`. The source column `new` has the fields `c` and `d`,
+    # and the key sets only `c`.
+    struct = pa.struct([("c", pa.int64()), ("d", pa.int64())])
+    source = pa.table(
+        {
+            "id": pa.array([1], pa.int64()),
+            "new": pa.array([{"c": 7, "d": 8}], type=struct),
+        }
+    )
+
+    dt.merge(
+        source=source,
+        predicate="t.id = src.id",
+        source_alias="src",
+        target_alias="t",
+        merge_schema=True,
+    ).when_matched_update({"new.c": "src.new.c"}).execute()
+
+    result = dt.to_pyarrow_table().sort_by("id").to_pydict()
+    assert result == {"id": [1, 2], "new": [{"c": 7}, None]}
+
+
+@pytest.mark.pyarrow
+def test_merge_added_column_is_null_for_insert_that_does_not_set_it(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, pa.table({"id": pa.array([1, 2], pa.int64())}))
+    dt = DeltaTable(tmp_path)
+    # The target has no column `new`. The update clause sets it, the insert clause does not.
+    source = pa.table(
+        {
+            "id": pa.array([1, 3], pa.int64()),
+            "new": pa.array([7, 8], pa.int64()),
+        }
+    )
+
+    dt.merge(
+        source=source,
+        predicate="t.id = src.id",
+        source_alias="src",
+        target_alias="t",
+        merge_schema=True,
+    ).when_matched_update({"new": "src.new"}).when_not_matched_insert(
+        {"id": "src.id"}
+    ).execute()
+
+    # The inserted row 3 gets NULL for `new`, as in Delta Spark, not the source value 8
+    result = dt.to_pyarrow_table().sort_by("id").to_pydict()
+    assert result == {"id": [1, 2, 3], "new": [7, None, None]}
+
+
 def test_merge_duplicate_key_error_shows_keys_as_written(
     tmp_path: pathlib.Path, sample_table: Table
 ):
