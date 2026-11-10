@@ -632,6 +632,48 @@ This will result in:
 2  3  6
 ```
 
+## Struct fields
+
+A key in `updates` can name a field of a struct column, for example `s.a` or `target.s.a`.
+The other fields of the struct keep their value. If the struct is null, the merge builds it,
+and the other fields are null.
+
+```python
+struct = pa.struct([("a", pa.int64()), ("b", pa.string())])
+target_data = pa.table(
+    {
+        "x": [1, 2],
+        "s": pa.array([{"a": 1, "b": "one"}, {"a": 2, "b": "two"}], type=struct),
+    }
+)
+write_deltalake("tmp", target_data)
+dt = DeltaTable("tmp")
+source_data = pa.table({"x": [2, 3], "a": [20, 30]})
+
+(
+    dt.merge(
+        source=source_data,
+        predicate="target.x = source.x",
+        source_alias="source",
+        target_alias="target")
+    .when_matched_update(updates={"target.s.a": "source.a"})
+    .when_not_matched_insert(updates={"x": "source.x", "s.a": "source.a"})
+    .execute()
+)
+```
+
+This will result in:
+
+```python
+> dt.to_pyarrow_table().sort_by("x").to_pylist()
+[{'x': 1, 's': {'a': 1, 'b': 'one'}},
+ {'x': 2, 's': {'a': 20, 'b': 'two'}},
+ {'x': 3, 's': {'a': 30, 'b': None}}]
+```
+
+An inserted row has no old value, so the fields that the insert does not set are null.
+[DeltaTable.update][deltalake.table.DeltaTable.update] accepts the same keys.
+
 ## Notes
 
 - Column names with special characters, such as numbers or spaces should be encapsulated in backticks: "target.`123column`" or "target.`my column`"
