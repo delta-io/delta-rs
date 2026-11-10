@@ -415,6 +415,28 @@ def test_update_key_that_needs_backticks(
 
 
 @pytest.mark.pyarrow
+@pytest.mark.parametrize("key", ["x.a", "x.a.b.c", "x.a.b.c.d", "x.a.b.c.d.e"])
+def test_update_unknown_key_with_many_parts(tmp_path: pathlib.Path, key: str):
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, pa.table({"id": [1]}))
+    dt = DeltaTable(tmp_path)
+
+    # The error must name the unknown key for each number of parts
+    with pytest.raises(DeltaError) as error:
+        dt.update({key: "9"})
+
+    # DataFusion puts quotes around a name that it cannot split into a table and a column
+    named = f'"{key}"' if key.count(".") >= 4 else key
+    assert str(error.value) == (
+        f"Generic DeltaTable error: Schema error: No field named {named}.\n"
+        "Valid fields are id."
+    )
+
+    assert dt.version() == 0
+
+
+@pytest.mark.pyarrow
 def test_update_struct_field_of_column_with_dot(tmp_path: pathlib.Path):
     import pyarrow as pa
 
