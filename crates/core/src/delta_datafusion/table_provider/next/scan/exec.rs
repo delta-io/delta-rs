@@ -39,10 +39,10 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use delta_kernel::schema::DataType as KernelDataType;
 use delta_kernel::table_features::TableFeature;
 use delta_kernel::{EvaluationHandler, ExpressionRef};
+use deltalake_kernel_executor::query::scan::expr_adapter::DeltaPhysicalExprAdapterFactory;
 use futures::TryStreamExt as _;
 use futures::stream::{Stream, StreamExt};
 
-use super::expr_adapter::DeltaPhysicalExprAdapterFactory;
 use super::plan::KernelScanPlan;
 use super::runtime_filter::RuntimeScanFilePruner;
 use crate::delta_datafusion::file_id::file_id_field;

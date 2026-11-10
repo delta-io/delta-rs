@@ -11,9 +11,6 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-# `deltalake-core` depends on this crate, so this crate must never depend on
-# `deltalake-core`. It only knows the kernel, DataFusion, and object_store.
-
 [dependencies]
 # `default-engine-base` provides `ArrowEngineData`, the Arrow-backed `EngineData`
 # the executor hands query results back in.
@@ -33,10 +30,15 @@ object_store = { workspace = true }
 
 # datafusion
 datafusion = { workspace = true }
+datafusion-datasource = { workspace = true }
+datafusion-physical-expr-adapter = { workspace = true }
 
 # "stdlib"
+async-trait = { workspace = true }
 bytes = { workspace = true }
+chrono = { workspace = true }
 dashmap = "6"
+indexmap = "2.2.1"
 itertools = "0.15"
 thiserror = { workspace = true }
 url = { workspace = true }
