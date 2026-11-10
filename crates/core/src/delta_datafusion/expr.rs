@@ -32,7 +32,8 @@ use chrono::{DateTime, NaiveDate};
 use datafusion::catalog::Session;
 use datafusion::common::Result as DFResult;
 use datafusion::common::{
-    DFSchema, Result, ScalarValue, TableReference, ToDFSchema, config::ConfigOptions,
+    DFSchema, DataFusionError, Result, ScalarValue, TableReference, ToDFSchema,
+    config::ConfigOptions, unqualified_field_not_found,
 };
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
@@ -345,12 +346,26 @@ pub(crate) fn parse_column_name(
         .into_iter()
         .map(|ident| Ident::with_quote('"', ident.value))
         .collect();
-    let sql = if idents.len() == 1 {
+    let parts = idents.len();
+    let sql = if parts == 1 {
         SqlExpr::Identifier(idents.remove(0))
     } else {
         SqlExpr::CompoundIdentifier(idents)
     };
-    sql_expr_to_df_expr(session, schema, sql).map_err(|err| {
+    let context_provider = DeltaContextProvider::try_new(session)?;
+    let sql_to_rel =
+        SqlToRel::new_with_options(&context_provider, DeltaParserOptions::default().into());
+    let expr = sql_to_rel
+        .sql_to_expr(sql, schema, &mut Default::default())
+        .map_err(|err| match err {
+            // The planner gives this error, not "No field named", for an unknown name with five
+            // or more parts
+            DataFusionError::NotImplemented(_) if parts >= 5 => {
+                unqualified_field_not_found(name, schema)
+            }
+            err => err,
+        });
+    expr.map_err(DeltaTableError::from).map_err(|err| {
         if !is_one_name {
             return err;
         }
