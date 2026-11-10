@@ -114,3 +114,52 @@ def test_query_builder_partition_filter_follows_sql_semantics(
     )
 
     assert sorted(result["id"].to_pylist()) == expected
+
+
+def test_query_builder_nan_float_with_equal_min_max_not_constant_folded(
+    tmp_path: pathlib.Path,
+):
+    # Regression test for #5007: a file holding [NaN, 9.0] in a float column
+    # records min = max = 9.0 in the Delta log, because Parquet statistics
+    # leave NaN out of float min/max. The scan must not constant-fold the
+    # column to 9.0, or the NaN row is returned (and later overwritten or
+    # deleted) as 9.0.
+    import math
+
+    import pyarrow as pa
+
+    def _write_table(name: str) -> pathlib.Path:
+        path = tmp_path / name
+        write_deltalake(path, pa.table({"id": [1, 2], "f": [math.nan, 9.0]}))
+        return path
+
+    def _rows(path: pathlib.Path, where: str | None = None) -> list[tuple[int, float]]:
+        sql = "SELECT id, f FROM t"
+        if where:
+            sql += f" WHERE {where}"
+        result = (
+            QueryBuilder()
+            .register("t", DeltaTable(path))
+            .execute(sql + " ORDER BY id")
+            .read_all()
+        )
+        return list(zip(result["id"].to_pylist(), result["f"].to_pylist()))
+
+    path = _write_table("read")
+    stored = _rows(path)
+    assert [row[0] for row in stored] == [1, 2]
+    assert math.isnan(stored[0][1])
+    assert stored[1][1] == 9.0
+    assert _rows(path, "f = 9.0") == [(2, 9.0)]
+
+    path = _write_table("update")
+    DeltaTable(path).update(predicate="f < 10.0", updates={"id": "100"})
+    updated = _rows(path)
+    assert [row[0] for row in updated] == [1, 100]
+    assert math.isnan(updated[0][1])
+
+    path = _write_table("delete")
+    DeltaTable(path).delete("f = 9.0")
+    remaining = _rows(path)
+    assert [row[0] for row in remaining] == [1]
+    assert math.isnan(remaining[0][1])
