@@ -1348,10 +1348,10 @@ async fn execute(
             .field_with_name(name)
             .map_or_else(|_| cast_type.clone(), |f| f.data_type().clone());
 
-        // Receive the correct column reference given that some columns are only in source table
+        // A column that only the source has is added by the merge
         let mut field_changed = false;
         let column = Column::new(qualifier.clone(), name);
-        let added_column_source = if let Some(field) = snapshot.schema().field(name) {
+        let is_added_column = if let Some(field) = snapshot.schema().field(name) {
             if field != delta_field {
                 // The field changed, e.g. a struct gained a field. Cast every branch, including
                 // the target value kept by rows that don't set it, to the merged type; missing
@@ -1359,33 +1359,29 @@ async fn execute(
                 field_changed = true;
                 cast_type = kernel_arrow_type;
             }
-            None
+            false
         } else {
             null_target_column = Some(cast_expr(
                 lit(ScalarValue::Null).alias(name),
                 cast_type.clone(),
                 safe_cast,
             ));
-            let source_qualifier = source_alias.as_ref().map(|alias| TableReference::Bare {
-                table: alias.to_owned().into(),
-            });
-            Some(Column::new(source_qualifier, name))
+            true
         };
 
         for (idx, (operations, operation_type, _)) in ops.iter().enumerate() {
-            // A column the merge adds has no target value: rows the merge copies unchanged keep it
-            // null, and rows it writes without assigning it take the source value
-            let unassigned = || match (&added_column_source, operation_type) {
-                (None, _) => col(column.clone()),
-                (Some(_), OperationType::Copy) => {
+            // A column the merge adds has no target value: it is null in each row that a clause
+            // does not assign it in
+            let unassigned = || {
+                if is_added_column {
                     cast_expr(lit(ScalarValue::Null), cast_type.clone(), safe_cast)
+                } else {
+                    col(column.clone())
                 }
-                (Some(source_column), _) => col(source_column.clone()),
             };
             // An insert has no target row, and a column that the merge adds has no target value.
             // A struct field that the clause does not set is then NULL.
-            let has_current =
-                added_column_source.is_none() && !matches!(operation_type, OperationType::Insert);
+            let has_current = !is_added_column && !matches!(operation_type, OperationType::Insert);
             let current = has_current.then(|| (col(column.clone()), &target_type));
             // If the merge changes the type of the column, the struct gets the new type. If
             // not, it gets the type that the target scan returns.
@@ -7669,8 +7665,8 @@ mod tests {
             "| id | value | modified   | inserted_by |",
             "+----+-------+------------+-------------+",
             "| A  | 2     | 2021-02-01 |             |",
-            "| B  | 10    | 2021-02-02 | new_value   |",
-            "| C  | 20    | 2023-07-04 | new_value   |",
+            "| B  | 10    | 2021-02-02 |             |",
+            "| C  | 20    | 2023-07-04 |             |",
             "| D  | 100   | 2021-02-02 |             |",
             "| X  | 30    | 2023-07-04 | new_value   |",
             "+----+-------+------------+-------------+",
@@ -7701,7 +7697,7 @@ mod tests {
         let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(6)).collect();
 
         assert_batches_sorted_eq! {[
-        "+----+-------+------------+-------------+------------------+-----------------+", "| id | value | modified   | inserted_by | _change_type     | _commit_version |", "+----+-------+------------+-------------+------------------+-----------------+", "| A  | 1     | 2021-02-01 |             | insert           | 1               |", "| A  | 1     | 2021-02-01 |             | update_preimage  | 2               |", "| A  | 2     | 2021-02-01 |             | update_postimage | 2               |", "| B  | 10    | 2021-02-01 |             | insert           | 1               |", "| B  | 10    | 2021-02-01 |             | update_preimage  | 2               |", "| B  | 10    | 2021-02-02 | new_value   | update_postimage | 2               |", "| C  | 10    | 2021-02-02 |             | insert           | 1               |", "| C  | 10    | 2021-02-02 |             | update_preimage  | 2               |", "| C  | 20    | 2023-07-04 | new_value   | update_postimage | 2               |", "| D  | 100   | 2021-02-02 |             | insert           | 1               |", "| X  | 30    | 2023-07-04 | new_value   | insert           | 2               |", "+----+-------+------------+-------------+------------------+-----------------+", ], &batches }
+        "+----+-------+------------+-------------+------------------+-----------------+", "| id | value | modified   | inserted_by | _change_type     | _commit_version |", "+----+-------+------------+-------------+------------------+-----------------+", "| A  | 1     | 2021-02-01 |             | insert           | 1               |", "| A  | 1     | 2021-02-01 |             | update_preimage  | 2               |", "| A  | 2     | 2021-02-01 |             | update_postimage | 2               |", "| B  | 10    | 2021-02-01 |             | insert           | 1               |", "| B  | 10    | 2021-02-01 |             | update_preimage  | 2               |", "| B  | 10    | 2021-02-02 |             | update_postimage | 2               |", "| C  | 10    | 2021-02-02 |             | insert           | 1               |", "| C  | 10    | 2021-02-02 |             | update_preimage  | 2               |", "| C  | 20    | 2023-07-04 |             | update_postimage | 2               |", "| D  | 100   | 2021-02-02 |             | insert           | 1               |", "| X  | 30    | 2023-07-04 | new_value   | insert           | 2               |", "+----+-------+------------+-------------+------------------+-----------------+", ], &batches }
     }
 
     #[tokio::test]
