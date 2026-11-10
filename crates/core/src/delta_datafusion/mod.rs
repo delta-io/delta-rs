@@ -612,6 +612,14 @@ impl From<String> for DeltaColumn {
     }
 }
 
+/// Reads the name as `[table.]column`. A name that sets a struct field, such as `s.a`, gives
+/// the column `a` of the table `s`.
+impl From<DeltaColumn> for Column {
+    fn from(value: DeltaColumn) -> Self {
+        Column::from_qualified_name_ignore_case(value.name)
+    }
+}
+
 /// Create a column from a datafusion column. The table reference and the name are quoted.
 impl From<Column> for DeltaColumn {
     fn from(c: Column) -> Self {

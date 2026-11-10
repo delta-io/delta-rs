@@ -343,6 +343,28 @@ def existing_sample_table(tmp_path: pathlib.Path, sample_table: Table):
 
 
 @pytest.fixture()
+def struct_table() -> "pa.Table":
+    """A table with the struct column `s`. In row 2 `s.inner` is null, in row 3 `s` is null."""
+    import pyarrow as pa
+
+    inner = pa.struct([("x", pa.int64()), ("y", pa.int64())])
+    struct = pa.struct([("a", pa.int64()), ("b", pa.string()), ("inner", inner)])
+    return pa.table(
+        {
+            "id": pa.array([1, 2, 3], pa.int64()),
+            "s": pa.array(
+                [
+                    {"a": 1, "b": "one", "inner": {"x": 10, "y": 11}},
+                    {"a": 2, "b": "two", "inner": None},
+                    None,
+                ],
+                type=struct,
+            ),
+        }
+    )
+
+
+@pytest.fixture()
 def sample_table_with_spaces_numbers() -> Table:
     nrows = 5
     return Table.from_pydict(

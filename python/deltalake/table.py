@@ -1026,7 +1026,8 @@ class DeltaTable:
         If a datetime object without a timezone is passed in `new_values`, the UTC timezone will be assumed.
 
         Args:
-            updates: a mapping of column name to update SQL expression.
+            updates: a mapping of column name to update SQL expression. A name such as `s.a` sets the
+                field `a` of the struct column `s`. The other fields of `s` keep their value.
             new_values: a mapping of column name to python datatype.
             predicate: a logical expression.
             writer_properties: Pass writer properties to the Rust parquet writer.
@@ -1999,7 +2000,8 @@ class TableMerger:
             in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
-            updates: a mapping of column name to update SQL expression.
+            updates: a mapping of column name to update SQL expression. A name such as `s.a` sets the
+                field `a` of the struct column `s`. The other fields of `s` keep their value.
             predicate:  SQL like predicate on when to update.
 
         Returns:
@@ -2194,7 +2196,8 @@ class TableMerger:
             in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
-            updates (dict):  a mapping of column name to insert SQL expression.
+            updates (dict):  a mapping of column name to insert SQL expression. A name such as `s.a` sets the
+                field `a` of the struct column `s`. The other fields of `s` are null.
             predicate (str | None, Optional): SQL like predicate on when to insert.
 
         Returns:
@@ -2331,7 +2334,8 @@ class TableMerger:
             in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
-            updates: a mapping of column name to update SQL expression.
+            updates: a mapping of column name to update SQL expression. A name such as `s.a` sets the
+                field `a` of the struct column `s`. The other fields of `s` keep their value.
             predicate: SQL like predicate on when to update.
 
         Returns:

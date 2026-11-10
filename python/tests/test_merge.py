@@ -2,6 +2,7 @@ import datetime
 import os
 import pathlib
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 import pytest
 from arro3.core import Array, DataType, Table
@@ -11,6 +12,9 @@ from deltalake import CommitProperties, DeltaTable, Field, Schema, write_deltala
 from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
 from deltalake.schema import PrimitiveType
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 
 @pytest.mark.parametrize("streaming", (True, False))
@@ -2420,6 +2424,123 @@ def test_merge_unknown_column(tmp_path: pathlib.Path, sample_table: Table):
     ).when_not_matched_insert({"id": "s.id", "Price": "s.price"})
 
     with pytest.raises(DeltaError, match="No field named"):
+        merger.execute()
+
+    assert dt.version() == 0
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_struct_field(
+    tmp_path: pathlib.Path, struct_table: "pa.Table", streaming: bool
+):
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, struct_table)
+    dt = DeltaTable(tmp_path)
+    source = pa.table(
+        {"id": pa.array([1, 4], pa.int64()), "x": pa.array([7, 8], pa.int64())}
+    )
+
+    (
+        dt.merge(
+            source=source,
+            predicate="t.id = src.id",
+            source_alias="src",
+            target_alias="t",
+            streamed_exec=streaming,
+        )
+        .when_matched_update({"t.s.a": "src.x", "s.inner.y": "0"})
+        .when_not_matched_insert({"id": "src.id", "s.a": "src.x"})
+        .when_not_matched_by_source_update(
+            {"s.b": "'gone'", "s.inner.x": "5"}, predicate="t.id >= 2"
+        )
+        .execute()
+    )
+
+    result = dt.to_pyarrow_table().sort_by("id").to_pydict()
+    assert result == {
+        "id": [1, 2, 3, 4],
+        "s": [
+            {"a": 7, "b": "one", "inner": {"x": 10, "y": 0}},
+            # A null struct is built: the fields that the update does not set are null
+            {"a": 2, "b": "gone", "inner": {"x": 5, "y": None}},
+            {"a": None, "b": "gone", "inner": {"x": 5, "y": None}},
+            # The insert has no target row: the fields that it does not set are null
+            {"a": 8, "b": None, "inner": None},
+        ],
+    }
+
+
+@pytest.mark.pyarrow
+def test_merge_struct_field_conflict(tmp_path: pathlib.Path, struct_table: "pa.Table"):
+    write_deltalake(tmp_path, struct_table)
+    dt = DeltaTable(tmp_path)
+
+    merger = dt.merge(
+        source=struct_table,
+        predicate="t.id = src.id",
+        source_alias="src",
+        target_alias="t",
+    ).when_matched_update({"s": "src.s", "t.s.a": "0"})
+
+    with pytest.raises(DeltaError, match="set the same field"):
+        merger.execute()
+
+    assert dt.version() == 0
+
+
+@pytest.mark.pyarrow
+def test_merge_struct_field_key_evolves_schema(
+    tmp_path: pathlib.Path, struct_table: "pa.Table"
+):
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, struct_table)
+    dt = DeltaTable(tmp_path)
+    # The source column `s` has the field `c`, which the target column `s` does not have
+    source = pa.table(
+        {
+            "id": pa.array([1], pa.int64()),
+            "s": pa.array([{"c": 7}], type=pa.struct([("c", pa.int64())])),
+        }
+    )
+
+    dt.merge(
+        source=source,
+        predicate="t.id = src.id",
+        source_alias="src",
+        target_alias="t",
+        merge_schema=True,
+    ).when_matched_update({"s.c": "src.s.c"}).execute()
+
+    result = dt.to_pyarrow_table().sort_by("id").to_pydict()
+    assert result == {
+        "id": [1, 2, 3],
+        "s": [
+            {"a": 1, "b": "one", "inner": {"x": 10, "y": 11}, "c": 7},
+            {"a": 2, "b": "two", "inner": None, "c": None},
+            None,
+        ],
+    }
+
+
+def test_merge_duplicate_key_error_shows_keys_as_written(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+    dt = DeltaTable(tmp_path)
+
+    merger = dt.merge(
+        source=sample_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+    ).when_matched_update({"price": "s.price", "t.price": "s.price"})
+
+    with pytest.raises(
+        DeltaError, match=r"'price' and 't\.price'|'t\.price' and 'price'"
+    ):
         merger.execute()
 
     assert dt.version() == 0

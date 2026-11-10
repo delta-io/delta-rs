@@ -33,14 +33,11 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow_schema::{DataType, SchemaBuilder};
+use arrow_schema::{DataType, Field, SchemaBuilder};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{
-    Column, DFSchema, DFSchemaRef, ExprSchema, ScalarValue, TableReference, plan_err,
-    unqualified_field_not_found,
-};
+use datafusion::common::{Column, DFSchema, DFSchemaRef, ScalarValue, TableReference, plan_err};
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::session_state::SessionStateBuilder;
@@ -49,7 +46,7 @@ use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
-    Expr, JoinType, cast, col, conditional_expressions::CaseBuilder, lit, try_cast, when,
+    Expr, JoinType, cast, col, conditional_expressions::CaseBuilder, lit, when,
 };
 use datafusion::logical_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, UserDefinedLogicalNode,
@@ -99,6 +96,8 @@ use crate::kernel::{
 use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::cdc::*;
+use crate::operations::common::assignment::{Assignments, resolve_assignment_key};
+use crate::operations::common::cast_expr;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::write::execution::write_execution_plan_v2;
 use crate::operations::write::generated_columns::{
@@ -143,14 +142,6 @@ const TARGET_FILES_PRUNED_METRIC_LEGACY: &str = "files_pruned";
 const SOURCE_COUNT_ID: &str = "merge_source_count";
 const TARGET_COUNT_ID: &str = "merge_target_count";
 const OUTPUT_COUNT_ID: &str = "merge_output_count";
-
-fn merge_cast(expr: Expr, data_type: DataType, safe_cast: bool) -> Expr {
-    if safe_cast {
-        try_cast(expr, data_type)
-    } else {
-        cast(expr, data_type)
-    }
-}
 
 /// Merge records into a Delta Table.
 pub struct MergeBuilder {
@@ -502,7 +493,7 @@ pub struct UpdateBuilder {
     /// Only update records that match the predicate
     predicate: Option<Expression>,
     /// How to update columns in the target table
-    updates: HashMap<Column, Expression>,
+    updates: HashMap<DeltaColumn, Expression>,
 }
 
 impl UpdateBuilder {
@@ -515,12 +506,15 @@ impl UpdateBuilder {
     /// How a column from the target table should be updated.
     /// In the match case the expression may contain both source and target columns.
     /// In the source not match case the expression may only contain target columns
+    ///
+    /// `column` names a target column, or a field of a struct column such as `s.a`. The other
+    /// fields of the struct keep their value.
     pub fn update<C: Into<DeltaColumn>, E: Into<Expression>>(
         mut self,
         column: C,
         expression: E,
     ) -> Self {
-        self.updates.insert(column.into().into(), expression.into());
+        self.updates.insert(column.into(), expression.into());
         self
     }
 }
@@ -531,7 +525,7 @@ pub struct InsertBuilder {
     /// Only insert records that match the predicate
     predicate: Option<Expression>,
     /// What value each column is inserted with
-    set: HashMap<Column, Expression>,
+    set: HashMap<DeltaColumn, Expression>,
 }
 
 impl InsertBuilder {
@@ -543,12 +537,15 @@ impl InsertBuilder {
 
     /// Which values to insert into the target tables. If a target column is not
     /// specified then null is inserted.
+    ///
+    /// `column` names a target column, or a field of a struct column such as `s.a`. The other
+    /// fields of the struct are null.
     pub fn set<C: Into<DeltaColumn>, E: Into<Expression>>(
         mut self,
         column: C,
         expression: E,
     ) -> Self {
-        self.set.insert(column.into().into(), expression.into());
+        self.set.insert(column.into(), expression.into());
         self
     }
 }
@@ -592,7 +589,7 @@ struct MergeOperationConfig {
     /// Which records to update
     predicate: Option<Expression>,
     /// How to update columns in a record that match the predicate
-    operations: HashMap<Column, Expression>,
+    operations: HashMap<DeltaColumn, Expression>,
     r#type: OperationType,
 }
 
@@ -600,68 +597,34 @@ struct MergeOperation {
     /// Which records to update
     predicate: Option<Expr>,
     /// How to update columns in a record that match the predicate
-    operations: HashMap<Column, Expr>,
+    operations: Assignments,
     r#type: OperationType,
     /// Duplicate-match validation class for this operation.
     match_participation_class: MatchParticipationClass,
 }
 
 impl MergeOperation {
+    /// `schema` is the schema of the joined source and target, which the expressions read.
+    /// `key_schema` holds the columns that an assignment key can name.
     fn try_from(
         config: MergeOperationConfig,
         schema: &DFSchema,
+        key_schema: &DFSchema,
+        table_schema: &StructType,
         state: &dyn Session,
-        target_alias: &Option<String>,
     ) -> DeltaResult<MergeOperation> {
-        let mut ops = HashMap::with_capacity(config.operations.capacity());
-
-        for (column, expression) in config.operations.into_iter() {
-            // Normalize the column name to contain the target alias. If a table reference was provided ensure it's the target.
-            let column = match target_alias {
-                Some(alias) => {
-                    let r = TableReference::bare(alias.to_owned());
-                    match column {
-                        Column {
-                            relation: None,
-                            name,
-                            spans,
-                        } => Column {
-                            relation: Some(r),
-                            name,
-                            spans,
-                        },
-                        Column {
-                            relation: Some(TableReference::Bare { table }),
-                            name,
-                            spans,
-                        } => {
-                            if table.as_ref() == alias {
-                                Column {
-                                    relation: Some(r),
-                                    name,
-                                    spans,
-                                }
-                            } else {
-                                return Err(DeltaTableError::Generic(format!(
-                                    "Table alias '{table}' in column reference '{table}.{name}' unknown. Hint: You must reference the Delta Table with alias '{alias}'."
-                                )));
-                            }
-                        }
-                        _ => {
-                            return Err(DeltaTableError::Generic(
-                                "Column must reference column in Delta table".into(),
-                            ));
-                        }
-                    }
-                }
-                None => column,
-            };
-            ops.insert(column, into_expr(expression, schema, state)?);
-        }
+        let operations = config
+            .operations
+            .into_iter()
+            .map(|(key, expression)| {
+                let key = resolve_assignment_key(&key, key_schema, table_schema, state)?;
+                Ok((key, into_expr(expression, schema, state)?))
+            })
+            .collect::<DeltaResult<Vec<_>>>()?;
 
         Ok(MergeOperation {
             predicate: maybe_into_expr(config.predicate, schema, state)?,
-            operations: ops,
+            operations: Assignments::try_new(operations)?,
             r#type: config.r#type,
             match_participation_class: MatchParticipationClass::Ignore,
         })
@@ -683,7 +646,7 @@ impl MergeOperation {
 impl MergeOperationConfig {
     pub fn new(
         predicate: Option<Expression>,
-        operations: HashMap<Column, Expression>,
+        operations: HashMap<DeltaColumn, Expression>,
         r#type: OperationType,
     ) -> DeltaResult<Self> {
         Ok(MergeOperationConfig {
@@ -861,11 +824,7 @@ const DUPLICATE_MATCH_MARKER_COLUMNS: &[&str] = &[
 fn build_merge_barrier_validation_plan(
     input: LogicalPlan,
     state: &SessionState,
-    ops: &[(
-        HashMap<Column, Expr>,
-        OperationType,
-        MatchParticipationClass,
-    )],
+    ops: &[(Assignments, OperationType, MatchParticipationClass)],
     file_column: Arc<String>,
     needs_duplicate_match_validation: bool,
 ) -> DataFusionResult<LogicalPlan> {
@@ -1138,22 +1097,57 @@ async fn execute(
     let join = source.join(target, JoinType::Full, &[], &[], Some(predicate.clone()))?;
     let join_schema_df = join.schema().to_owned();
 
+    // An assignment key names a target column or a struct field of one. With schema evolution it
+    // can also name a column or a struct field that only the source has. The new table schema
+    // cannot be used here: it is built below from the resolved keys.
+    let (key_schema, key_table_schema) = {
+        let table_schema = snapshot.input_schema();
+        let mut fields = table_schema.fields().to_vec();
+        if merge_schema {
+            for field in &mut fields {
+                // A target column gets the fields that only the source column has. If the two
+                // types do not merge, the schema evolution below gives the error.
+                if let Ok(source_field) = source_schema.field_with_unqualified_name(field.name())
+                    && let Ok(merged) = merge_arrow_field(field, source_field, true)
+                {
+                    *field = Arc::new(merged);
+                }
+            }
+            let source_only = |field: &&Arc<arrow_schema::Field>| {
+                table_schema.field_with_name(field.name()).is_err()
+            };
+            fields.extend(source_schema.fields().iter().filter(source_only).cloned());
+        }
+        let schema = arrow_schema::Schema::new(fields);
+        let key_table_schema = match merge_schema {
+            true => Arc::new((&schema).try_into_kernel()?),
+            false => snapshot.schema(),
+        };
+        let key_schema = match &target_alias {
+            // `bare` keeps the alias as written. A `&str` is parsed: lowercased, split on dots.
+            Some(alias) => {
+                DFSchema::try_from_qualified_schema(TableReference::bare(alias.as_str()), &schema)?
+            }
+            None => DFSchema::try_from(schema)?,
+        };
+        (key_schema, key_table_schema)
+    };
+    let into_operation =
+        |op| MergeOperation::try_from(op, &join_schema_df, &key_schema, &key_table_schema, &state);
+
     let match_operations: Vec<MergeOperation> = match_operations
         .into_iter()
-        .map(|op| {
-            MergeOperation::try_from(op, &join_schema_df, &state, &target_alias)
-                .map(MergeOperation::into_matched)
-        })
+        .map(|op| into_operation(op).map(MergeOperation::into_matched))
         .collect::<Result<Vec<MergeOperation>, DeltaTableError>>()?;
 
     let not_match_target_operations: Vec<MergeOperation> = not_match_target_operations
         .into_iter()
-        .map(|op| MergeOperation::try_from(op, &join_schema_df, &state, &target_alias))
+        .map(into_operation)
         .collect::<Result<Vec<MergeOperation>, DeltaTableError>>()?;
 
     let not_match_source_operations: Vec<MergeOperation> = not_match_source_operations
         .into_iter()
-        .map(|op| MergeOperation::try_from(op, &join_schema_df, &state, &target_alias))
+        .map(into_operation)
         .collect::<Result<Vec<MergeOperation>, DeltaTableError>>()?;
 
     // merge_arrow_schema is used to tell whether the two schema can be merge but we use the operation statement to pick new columns
@@ -1171,25 +1165,15 @@ async fn execute(
 
         let mut schema_builder = SchemaBuilder::from(merge_schema.deref());
 
+        let operations = match_operations
+            .iter()
+            .chain(&not_match_source_operations)
+            .chain(&not_match_target_operations);
         modify_schema(
             &mut schema_builder,
             &logical_target_schema,
             source_schema,
-            &match_operations,
-        )?;
-
-        modify_schema(
-            &mut schema_builder,
-            &logical_target_schema,
-            source_schema,
-            &not_match_source_operations,
-        )?;
-
-        modify_schema(
-            &mut schema_builder,
-            &logical_target_schema,
-            source_schema,
-            &not_match_target_operations,
+            operations,
         )?;
         let schema = Arc::new(schema_builder.finish());
         new_schema = Some(schema.clone());
@@ -1223,19 +1207,12 @@ async fn execute(
 
     let mut when_expr = Vec::with_capacity(operations_size);
     let mut then_expr = Vec::with_capacity(operations_size);
-    let mut ops: Vec<(
-        HashMap<Column, Expr>,
-        OperationType,
-        MatchParticipationClass,
-    )> = Vec::with_capacity(operations_size);
+    let mut ops: Vec<(Assignments, OperationType, MatchParticipationClass)> =
+        Vec::with_capacity(operations_size);
 
     fn update_case(
         operations: Vec<MergeOperation>,
-        ops: &mut Vec<(
-            HashMap<Column, Expr>,
-            OperationType,
-            MatchParticipationClass,
-        )>,
+        ops: &mut Vec<(Assignments, OperationType, MatchParticipationClass)>,
         when_expr: &mut Vec<Expr>,
         then_expr: &mut Vec<Expr>,
         base_expr: &Expr,
@@ -1306,7 +1283,7 @@ async fn execute(
     when_expr.push(matched.clone());
     then_expr.push(lit(ops.len() as i32));
     ops.push((
-        HashMap::new(),
+        Assignments::default(),
         OperationType::Copy,
         MatchParticipationClass::MatchedNoop,
     ));
@@ -1314,7 +1291,7 @@ async fn execute(
     when_expr.push(not_matched_target);
     then_expr.push(lit(ops.len() as i32));
     ops.push((
-        HashMap::new(),
+        Assignments::default(),
         OperationType::SourceDelete,
         MatchParticipationClass::Ignore,
     ));
@@ -1322,7 +1299,7 @@ async fn execute(
     when_expr.push(not_matched_source);
     then_expr.push(lit(ops.len() as i32));
     ops.push((
-        HashMap::new(),
+        Assignments::default(),
         OperationType::Copy,
         MatchParticipationClass::Ignore,
     ));
@@ -1343,16 +1320,6 @@ async fn execute(
     } else {
         snapshot.schema()
     };
-
-    // An assignment to a column the output schema lacks would be dropped
-    if let Some(column) = ops
-        .iter()
-        .flat_map(|(operations, _, _)| operations.keys())
-        .find(|column| schema.field(&column.name).is_none())
-    {
-        let table_schema = DFSchema::try_from(snapshot.input_schema())?;
-        return Err(unqualified_field_not_found(&column.name, &table_schema).into());
-    }
 
     for delta_field in schema.fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
@@ -1375,6 +1342,12 @@ async fn execute(
             .map(|f| f.data_type().clone())
             .unwrap_or_else(|| kernel_arrow_type.clone());
 
+        // The type of the column in the target scan. A clause that sets a field of a struct
+        // takes the other fields from a value of this type.
+        let target_type = target_arrow_schema
+            .field_with_name(name)
+            .map_or_else(|_| cast_type.clone(), |f| f.data_type().clone());
+
         // Receive the correct column reference given that some columns are only in source table
         let mut field_changed = false;
         let column = Column::new(qualifier.clone(), name);
@@ -1388,7 +1361,7 @@ async fn execute(
             }
             None
         } else {
-            null_target_column = Some(merge_cast(
+            null_target_column = Some(cast_expr(
                 lit(ScalarValue::Null).alias(name),
                 cast_type.clone(),
                 safe_cast,
@@ -1405,13 +1378,24 @@ async fn execute(
             let unassigned = || match (&added_column_source, operation_type) {
                 (None, _) => col(column.clone()),
                 (Some(_), OperationType::Copy) => {
-                    merge_cast(lit(ScalarValue::Null), cast_type.clone(), safe_cast)
+                    cast_expr(lit(ScalarValue::Null), cast_type.clone(), safe_cast)
                 }
                 (Some(source_column), _) => col(source_column.clone()),
             };
+            // An insert has no target row, and a column that the merge adds has no target value.
+            // A struct field that the clause does not set is then NULL.
+            let has_current =
+                added_column_source.is_none() && !matches!(operation_type, OperationType::Insert);
+            let current = has_current.then(|| (col(column.clone()), &target_type));
+            // If the merge changes the type of the column, the struct gets the new type. If
+            // not, it gets the type that the target scan returns.
+            let value_type = if field_changed {
+                &cast_type
+            } else {
+                &target_type
+            };
             let op: Expr = operations
-                .get(&column)
-                .map(|expr| expr.to_owned())
+                .column_value(name, value_type, current, safe_cast)?
                 .unwrap_or_else(unassigned);
             // `try_cast` can't plan struct casts that add fields (DataFusion checks them with
             // arrow's `can_cast_types`), and the merged type is a superset of the target and
@@ -1437,7 +1421,7 @@ async fn execute(
         let name = "__delta_rs_c_".to_owned() + delta_field.name();
         merge_value_column_names.push(name.clone());
 
-        write_projection.push(merge_cast(
+        write_projection.push(cast_expr(
             Expr::Column(Column::from_name(name.clone())).alias(delta_field.name()),
             cast_type.clone(),
             safe_cast,
@@ -1445,7 +1429,7 @@ async fn execute(
 
         let cdc_target_preimage_name = "__delta_rs_target_c_".to_owned() + delta_field.name();
         let cdc_target_preimage = null_target_column.clone().unwrap_or_else(|| {
-            merge_cast(
+            cast_expr(
                 Expr::Column(Column::new(qualifier.clone(), delta_field.name())),
                 cast_type.clone(),
                 safe_cast && !field_changed,
@@ -1459,13 +1443,13 @@ async fn execute(
         write_projection_with_cdf.push(
             when(
                 col(CDC_COLUMN_NAME).not_eq(lit("update_preimage")),
-                merge_cast(
+                cast_expr(
                     Expr::Column(Column::from_name(name.clone())),
                     cast_type.clone(),
                     safe_cast,
                 ),
             )
-            .otherwise(merge_cast(
+            .otherwise(cast_expr(
                 Expr::Column(Column::from_name(cdc_target_preimage_name)),
                 cast_type,
                 safe_cast,
@@ -1847,19 +1831,30 @@ async fn execute(
     Ok((commit.snapshot().snapshot, metrics))
 }
 
-fn modify_schema(
+fn modify_schema<'a>(
     ending_schema: &mut SchemaBuilder,
     target_schema: &DFSchema,
     source_schema: &DFSchema,
-    operations: &[MergeOperation],
+    operations: impl Iterator<Item = &'a MergeOperation>,
 ) -> DeltaResult<()> {
-    for columns in operations
-        .iter()
+    for key in operations
         .filter(|ops| matches!(ops.r#type, OperationType::Update | OperationType::Insert))
-        .flat_map(|ops| ops.operations.keys())
+        .flat_map(|ops| ops.operations.paths())
     {
-        // This assume that all the columns in the MERGE operations of UPDATE and INSERT at least exists in the source table
-        let source_field = source_schema.field_with_unqualified_name(columns.name())?;
+        let column = key[0].as_str();
+        let source_field = if key.len() == 1 {
+            // This assume that all the columns in the MERGE operations of UPDATE and INSERT at least exists in the source table
+            source_schema.field_with_unqualified_name(column)?.clone()
+        } else {
+            // A key that names a struct field adds only that field, and only if the source has
+            // it. If not, the field is in the target and the schema does not change.
+            let source_field = source_schema.field_with_unqualified_name(column).ok();
+            match source_field.and_then(|field| field_with_path_only(field, &key[1..])) {
+                Some(field) => Arc::new(field),
+                None => continue,
+            }
+        };
+        let source_field = &source_field;
         if source_field
             .metadata()
             .contains_key(ColumnMetadataKey::GenerationExpression.as_ref())
@@ -1868,7 +1863,7 @@ fn modify_schema(
             return Err(DeltaTableError::Arrow { source: error });
         }
         //Check if the columns in the source schema exist in the target schema
-        match target_schema.field_from_column(columns) {
+        match target_schema.field_with_unqualified_name(column) {
             Ok(target_field) => {
                 // This case is when there is an added column in an nested datatype
                 let new_field = merge_arrow_field(target_field, source_field, true)?;
@@ -1877,13 +1872,28 @@ fn modify_schema(
                 }
             }
             Err(_) => {
-                // This function is called multiple time with different operations so this handle any collisions
+                // More than one clause can add the same column, so this handles collisions
                 ending_schema
                     .try_merge(&Arc::new(source_field.as_ref().clone().with_nullable(true)))?;
             }
         }
     }
     Ok(())
+}
+
+/// A copy of the struct `field` that holds only the nested field at `path`, with each field on
+/// the path nullable. `None` if `field` has no such nested field.
+fn field_with_path_only(field: &Field, path: &[String]) -> Option<Field> {
+    let Some((name, path)) = path.split_first() else {
+        return Some(field.clone().with_nullable(true));
+    };
+    let DataType::Struct(fields) = field.data_type() else {
+        return None;
+    };
+    let (_, nested) = fields.find(name)?;
+    let nested = field_with_path_only(nested, path)?;
+    let data_type = DataType::Struct(vec![nested].into());
+    Some(field.clone().with_data_type(data_type).with_nullable(true))
 }
 
 fn remove_table_alias(expr: Expr, table_alias: &str) -> Expr {
@@ -2059,6 +2069,10 @@ mod tests {
     use crate::DeltaTable;
     use crate::TableProperty;
     use crate::kernel::{Action, DataType, PrimitiveType, StructField};
+    use crate::operations::common::assignment::Assignments;
+    use crate::operations::common::assignment::tests::{
+        batch_from_json, not_null_field_table, struct_table,
+    };
     use crate::operations::merge::filter::generalize_filter;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::{get_data, get_data_sorted};
@@ -3000,17 +3014,17 @@ mod tests {
         let input = duplicate_match_validation_input_plan();
         let ops = vec![
             (
-                HashMap::new(),
+                Assignments::default(),
                 OperationType::Update,
                 MatchParticipationClass::MatchedAction,
             ),
             (
-                HashMap::new(),
+                Assignments::default(),
                 OperationType::Copy,
                 MatchParticipationClass::MatchedNoop,
             ),
             (
-                HashMap::new(),
+                Assignments::default(),
                 OperationType::Copy,
                 MatchParticipationClass::Ignore,
             ),
@@ -3061,17 +3075,17 @@ mod tests {
         let input = duplicate_match_validation_input_plan();
         let ops = vec![
             (
-                HashMap::new(),
+                Assignments::default(),
                 OperationType::Update,
                 MatchParticipationClass::MatchedAction,
             ),
             (
-                HashMap::new(),
+                Assignments::default(),
                 OperationType::Insert,
                 MatchParticipationClass::Ignore,
             ),
             (
-                HashMap::new(),
+                Assignments::default(),
                 OperationType::Copy,
                 MatchParticipationClass::MatchedNoop,
             ),
@@ -5091,6 +5105,367 @@ mod tests {
             .await;
         let err = res.unwrap_err().to_string();
         assert!(err.contains("No field named"), "{err}");
+    }
+
+    /// A source for a merge into [`struct_table`]: row 1 is in the target, row 4 is not
+    fn struct_table_source() -> DataFrame {
+        let schema = ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Int32, true),
+            Field::new("a", ArrowDataType::Int32, true),
+            Field::new("x", ArrowDataType::Int32, true),
+        ]);
+        let batch = batch_from_json(
+            schema,
+            r#"{"id": 1, "a": 70, "x": 7}
+               {"id": 4, "a": 80, "x": 8}"#,
+        );
+        SessionContext::new().read_batch(batch).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_merge_struct_field() {
+        let (table, _) = struct_table()
+            .await
+            .merge(struct_table_source(), "t.id = src.id")
+            .with_source_alias("src")
+            .with_target_alias("t")
+            .when_matched_update(|update| {
+                update.update("t.s.a", "src.x").update("s.inner.y", lit(0))
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update.predicate("t.id = 2").update("s.b", lit("gone"))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", "src.id")
+                    .set("s.a", "src.x")
+                    .set("t.s.inner.x", "src.x + 1")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        // The insert has no target row: the fields that it does not set are NULL
+        let expected = [
+            "+----+-----+--------------------------------------+",
+            "| id | a   | s                                    |",
+            "+----+-----+--------------------------------------+",
+            "| 1  | 100 | {a: 7, b: one, inner: {x: 10, y: 0}} |",
+            "| 2  | 200 | {a: 2, b: gone, inner: }             |",
+            "| 3  | 300 |                                      |",
+            "| 4  |     | {a: 8, b: , inner: {x: 9, y: }}      |",
+            "+----+-----+--------------------------------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_struct_field_builds_null_struct() {
+        // In row 2 `s.inner` is NULL and in row 3 `s` is NULL. The update builds the struct, as
+        // Delta Spark does: the fields that it does not set are NULL.
+        let (table, _) = struct_table()
+            .await
+            .merge(struct_table_source(), "t.id = src.id")
+            .with_source_alias("src")
+            .with_target_alias("t")
+            .when_not_matched_by_source_update(|update| update.update("s.inner.x", lit(5)))
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = [
+            "+----+-----+---------------------------------------+",
+            "| id | a   | s                                     |",
+            "+----+-----+---------------------------------------+",
+            "| 1  | 100 | {a: 1, b: one, inner: {x: 10, y: 11}} |",
+            "| 2  | 200 | {a: 2, b: two, inner: {x: 5, y: }}    |",
+            "| 3  | 300 | {a: , b: , inner: {x: 5, y: }}        |",
+            "+----+-----+---------------------------------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_struct_field_alias_with_column_name() {
+        // The source alias is the name of the target column `s`. A key names the target only,
+        // so `s.a` is the field `a` of the column `s`.
+        let (table, _) = struct_table()
+            .await
+            .merge(struct_table_source(), "t.id = s.id")
+            .with_source_alias("s")
+            .with_target_alias("t")
+            .when_matched_update(|update| update.update("s.a", "s.x"))
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = [
+            "+----+-----+---------------------------------------+",
+            "| id | a   | s                                     |",
+            "+----+-----+---------------------------------------+",
+            "| 1  | 100 | {a: 7, b: one, inner: {x: 10, y: 11}} |",
+            "| 2  | 200 | {a: 2, b: two, inner: }               |",
+            "| 3  | 300 |                                       |",
+            "+----+-----+---------------------------------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        // The target alias is the name of the target column `s`. The alias wins, so `s.a` is
+        // the column `a`.
+        let (table, _) = struct_table()
+            .await
+            .merge(struct_table_source(), "s.id = src.id")
+            .with_source_alias("src")
+            .with_target_alias("s")
+            .when_matched_update(|update| update.update("s.a", "src.x"))
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = [
+            "+----+-----+---------------------------------------+",
+            "| id | a   | s                                     |",
+            "+----+-----+---------------------------------------+",
+            "| 1  | 7   | {a: 1, b: one, inner: {x: 10, y: 11}} |",
+            "| 2  | 200 | {a: 2, b: two, inner: }               |",
+            "| 3  | 300 |                                       |",
+            "+----+-----+---------------------------------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_struct_field_with_schema_evolution() {
+        // The source has no column `s`. The key `x` names a column that only the source has.
+        let (table, _) = struct_table()
+            .await
+            .merge(struct_table_source(), "t.id = src.id")
+            .with_source_alias("src")
+            .with_target_alias("t")
+            .with_merge_schema(true)
+            .when_matched_update(|update| update.update("s.a", "src.x").update("x", "src.x"))
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = [
+            "+----+-----+---------------------------------------+---+",
+            "| id | a   | s                                     | x |",
+            "+----+-----+---------------------------------------+---+",
+            "| 1  | 100 | {a: 7, b: one, inner: {x: 10, y: 11}} | 7 |",
+            "| 2  | 200 | {a: 2, b: two, inner: }               |   |",
+            "| 3  | 300 |                                       |   |",
+            "+----+-----+---------------------------------------+---+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_struct_field_with_not_null_sibling() {
+        let source = || {
+            let schema = ArrowSchema::new(vec![Field::new("id", ArrowDataType::Int32, true)]);
+            let batch = batch_from_json(schema, r#"{"id": 1} {"id": 2} {"id": 3}"#);
+            SessionContext::new().read_batch(batch).unwrap()
+        };
+
+        for safe_cast in [false, true] {
+            let table = not_null_field_table().await;
+            let schema = table.snapshot().unwrap().schema();
+            let (table, _) = table
+                .merge(source(), "t.id = src.id")
+                .with_source_alias("src")
+                .with_target_alias("t")
+                .with_safe_cast(safe_cast)
+                .when_matched_update(|update| {
+                    update.predicate("t.id = 1").update("s.b", lit("new"))
+                })
+                .unwrap()
+                .await
+                .unwrap();
+
+            let expected = [
+                "+----+----------------+",
+                "| id | s              |",
+                "+----+----------------+",
+                "| 1  | {a: 1, b: new} |",
+                "| 2  |                |",
+                "+----+----------------+",
+            ];
+            let actual = get_data(&table).await;
+            assert_batches_sorted_eq!(&expected, &actual);
+            assert_eq!(table.snapshot().unwrap().schema(), schema);
+        }
+
+        // In row 2 `s` is NULL. The update builds the struct, so the NOT NULL field `s.a` needs
+        // a value.
+        let res = not_null_field_table()
+            .await
+            .merge(source(), "t.id = src.id")
+            .with_source_alias("src")
+            .with_target_alias("t")
+            .when_matched_update(|update| update.update("s.b", lit("new")))
+            .unwrap()
+            .await;
+        let err = res.unwrap_err().to_string();
+        assert!(
+            err.contains("NULL value in the NOT NULL field 'a'"),
+            "{err}"
+        );
+
+        // The insert does not set the field `s.a`, which is NOT NULL
+        let res = not_null_field_table()
+            .await
+            .merge(source(), "t.id = src.id")
+            .with_source_alias("src")
+            .with_target_alias("t")
+            .when_not_matched_insert(|insert| insert.set("id", "src.id").set("s.b", lit("new")))
+            .unwrap()
+            .await;
+        let err = res.unwrap_err().to_string();
+        assert!(
+            err.contains("NULL value in the NOT NULL field 'a'"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_struct_field_errors() {
+        for (keys, message) in [
+            (
+                vec!["s", "t.s.a"],
+                "Assignment keys 's' and 't.s.a' set the same field",
+            ),
+            (vec!["s.a", "t.s.a"], "set the same field"),
+            (vec!["s.c"], "field 'c' not found"),
+            (vec!["a.x"], "intermediate field 'a' is not a struct"),
+            (vec!["src.x"], "No field named src.x"),
+            (vec!["target.s.a"], "No field named target.s"),
+        ] {
+            let res = struct_table()
+                .await
+                .merge(struct_table_source(), "t.id = src.id")
+                .with_source_alias("src")
+                .with_target_alias("t")
+                .when_matched_update(|update| {
+                    keys.iter()
+                        .fold(update, |update, key| update.update(*key, lit(0)))
+                })
+                .unwrap()
+                .await;
+            let err = res.unwrap_err().to_string();
+            assert!(err.contains(message), "{keys:?}: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_merge_key_with_uppercase_target_alias() {
+        let (table, source) = setup().await;
+        let (table, metrics) = table
+            .merge(source, r#""T".id = "S".id"#)
+            .with_source_alias("S")
+            .with_target_alias("T")
+            .when_matched_update(|update| update.update("T.value", r#""S".value"#))
+            .unwrap()
+            .await
+            .unwrap();
+        assert_eq!(metrics.num_target_rows_updated, 2);
+
+        let expected = [
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 20    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_struct_field_key_evolves_schema() {
+        // The source column `s` has the field `c`, which the target column `s` does not have.
+        // With schema evolution, the key `s.c` adds the field, as a key for a new column does.
+        let fields = vec![Field::new("c", ArrowDataType::Int32, true)];
+        let schema = ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Int32, true),
+            Field::new("s", ArrowDataType::Struct(fields.into()), true),
+        ]);
+        let batch = batch_from_json(schema, r#"{"id": 1, "s": {"c": 7}}"#);
+        let source = SessionContext::new().read_batch(batch).unwrap();
+
+        let (table, _) = struct_table()
+            .await
+            .merge(source, "t.id = src.id")
+            .with_source_alias("src")
+            .with_target_alias("t")
+            .with_merge_schema(true)
+            .when_matched_update(|update| update.update("s.c", "src.s.c"))
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = [
+            "+----+-----+---------------------------------------------+",
+            "| id | a   | s                                           |",
+            "+----+-----+---------------------------------------------+",
+            "| 1  | 100 | {a: 1, b: one, inner: {x: 10, y: 11}, c: 7} |",
+            "| 2  | 200 | {a: 2, b: two, inner: , c: }                |",
+            "| 3  | 300 |                                             |",
+            "+----+-----+---------------------------------------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_duplicate_key_error_shows_keys_as_written() {
+        let (table, source) = setup().await;
+        let res = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("target.value", col("source.value"))
+            })
+            .unwrap()
+            .await;
+        let err = res.unwrap_err().to_string();
+        assert!(
+            err.contains("'value'") && err.contains("'target.value'"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_qualified_key_without_target_alias() {
+        let (table, source) = setup().await;
+        let source = source
+            .with_column_renamed("id", "source_id")
+            .unwrap()
+            .with_column_renamed("value", "source_value")
+            .unwrap()
+            .with_column_renamed("modified", "source_modified")
+            .unwrap();
+
+        let res = table
+            .merge(source, "id = source_id")
+            .when_matched_update(|update| update.update("target.value", "source_value"))
+            .unwrap()
+            .await;
+        let err = res.unwrap_err().to_string();
+        assert!(err.contains("No field named target.value"), "{err}");
     }
 
     #[tokio::test]

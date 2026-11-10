@@ -1,6 +1,7 @@
 import datetime
 import pathlib
 import time
+from typing import TYPE_CHECKING
 
 import pytest
 from arro3.core import Array, DataType, Table
@@ -9,6 +10,9 @@ from arro3.core import Field as ArrowField
 from deltalake import CommitProperties, DeltaTable, write_deltalake
 from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 
 @pytest.fixture()
@@ -333,6 +337,94 @@ def test_update_unknown_column(tmp_path: pathlib.Path, sample_table: Table):
         dt.update(updates={"Price": "0"}, predicate="id = '1'")
 
     assert dt.version() == 0
+
+
+@pytest.mark.pyarrow
+def test_update_struct_field(tmp_path: pathlib.Path, struct_table: "pa.Table"):
+    write_deltalake(tmp_path, struct_table)
+    dt = DeltaTable(tmp_path)
+
+    dt.update({"s.a": "0"}, predicate="id = 1")
+    dt.update({"s.inner.x": "coalesce(s.inner.x, 0) + 1", "`s`.b": "'new'"})
+
+    result = dt.to_pyarrow_table().sort_by("id").to_pydict()
+    assert result == {
+        "id": [1, 2, 3],
+        "s": [
+            {"a": 0, "b": "new", "inner": {"x": 11, "y": 11}},
+            # A null struct is built: the fields that the update does not set are null
+            {"a": 2, "b": "new", "inner": {"x": 1, "y": None}},
+            {"a": None, "b": "new", "inner": {"x": 1, "y": None}},
+        ],
+    }
+
+
+@pytest.mark.pyarrow
+def test_update_struct_field_conflict(tmp_path: pathlib.Path, struct_table: "pa.Table"):
+    write_deltalake(tmp_path, struct_table)
+    dt = DeltaTable(tmp_path)
+
+    with pytest.raises(DeltaError, match="set the same field"):
+        dt.update({"s.inner": "NULL", "s.inner.x": "0"})
+
+    assert dt.version() == 0
+
+
+@pytest.mark.pyarrow
+def test_update_struct_field_to_struct_with_not_null_field(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    inner = pa.struct([pa.field("x", pa.int64(), nullable=False)])
+    struct = pa.struct([("inner", inner), ("b", pa.string())])
+    data = pa.table(
+        {
+            "id": pa.array([1], pa.int64()),
+            "s": pa.array([{"inner": {"x": 1}, "b": "one"}], type=struct),
+        }
+    )
+    write_deltalake(tmp_path, data)
+    dt = DeltaTable(tmp_path)
+
+    # The key sets the struct `s.inner` as a whole. Its field `x` is NOT NULL.
+    dt.update({"s.inner": "named_struct('x', 5)"})
+
+    result = dt.to_pyarrow_table().to_pydict()
+    assert result == {"id": [1], "s": [{"inner": {"x": 5}, "b": "one"}]}
+
+
+@pytest.mark.pyarrow
+def test_update_key_that_needs_backticks(
+    tmp_path: pathlib.Path, struct_table: "pa.Table"
+):
+    write_deltalake(tmp_path, struct_table)
+    dt = DeltaTable(tmp_path)
+
+    # `my field` is not an identifier without backticks. The error must tell the user that.
+    with pytest.raises(DeltaError) as error:
+        dt.update({"s.my field": "0"})
+
+    assert str(error.value) == (
+        'Generic DeltaTable error: Schema error: No field named "s.my field".\n'
+        "Valid fields are id, s.\n"
+        "'s.my field' is read as one column name, because it is not a list of identifiers. "
+        "Put backticks around each name that has a space or another special character, "
+        "for example `my col`.a"
+    )
+
+    assert dt.version() == 0
+
+
+@pytest.mark.pyarrow
+def test_update_struct_field_of_column_with_dot(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, pa.table({"id": [1], "my.col": [{"a": 1, "b": 2}]}))
+    dt = DeltaTable(tmp_path)
+
+    dt.update({"`my.col`.a": "0"})
+
+    result = dt.to_pyarrow_table().to_pydict()
+    assert result == {"id": [1], "my.col": [{"a": 0, "b": 2}]}
 
 
 def test_update_stats_columns_stats_provided(tmp_path: pathlib.Path):
