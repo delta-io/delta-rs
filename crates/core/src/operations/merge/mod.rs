@@ -39,6 +39,7 @@ use datafusion::catalog::Session;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{
     Column, DFSchema, DFSchemaRef, ExprSchema, ScalarValue, TableReference, plan_err,
+    unqualified_field_not_found,
 };
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
@@ -1351,6 +1352,16 @@ async fn execute(
     } else {
         snapshot.schema()
     };
+
+    // An assignment to a column the output schema lacks would be dropped
+    if let Some(column) = ops
+        .iter()
+        .flat_map(|(operations, _, _)| operations.keys())
+        .find(|column| schema.field(&column.name).is_none())
+    {
+        let table_schema = DFSchema::try_from(snapshot.input_schema())?;
+        return Err(unqualified_field_not_found(&column.name, &table_schema).into());
+    }
 
     for delta_field in schema.fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
@@ -5073,6 +5084,22 @@ mod tests {
             .unwrap()
             .await;
         assert!(res.is_err())
+    }
+
+    #[tokio::test]
+    async fn test_merge_unknown_column() {
+        let (table, source) = setup().await;
+        let res = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_not_matched_insert(|insert| {
+                insert.set("id", "source.id").set("Value", "source.value")
+            })
+            .unwrap()
+            .await;
+        let err = res.unwrap_err().to_string();
+        assert!(err.contains("No field named"), "{err}");
     }
 
     #[tokio::test]

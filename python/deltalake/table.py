@@ -1968,6 +1968,26 @@ class TableMerger:
         self._builder = builder
         self._table = table
 
+    def _all_source_columns(self, except_cols: list[str] | None) -> dict[str, str]:
+        """The assignments that set each target column from the source column with the same name.
+
+        A source column that the target does not have is left out, unless the merge evolves the
+        schema.
+        """
+        source_alias = self._builder.source_alias
+        target_alias = self._builder.target_alias
+        source_prefix = f"{source_alias}." if source_alias is not None else ""
+        target_prefix = f"{target_alias}." if target_alias is not None else ""
+
+        skip = set(except_cols or [])
+        target_columns = {field.name for field in self._table.schema.fields}
+        return {
+            f"{target_prefix}`{col.name}`": f"{source_prefix}`{col.name}`"
+            for col in self._builder.arrow_schema  # type: ignore[attr-defined]
+            if col.name not in skip
+            and (self._builder.merge_schema or col.name in target_columns)
+        }
+
     def when_matched_update(
         self, updates: dict[str, str], predicate: str | None = None
     ) -> TableMerger:
@@ -2092,21 +2112,7 @@ class TableMerger:
             2  3    6
             ```
         """
-        maybe_source_alias = self._builder.source_alias
-        maybe_target_alias = self._builder.target_alias
-
-        src_alias = (maybe_source_alias + ".") if maybe_source_alias is not None else ""
-        trgt_alias = (
-            (maybe_target_alias + ".") if maybe_target_alias is not None else ""
-        )
-
-        except_columns = except_cols or []
-
-        updates = {
-            f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
-            for col in self._builder.arrow_schema  # type: ignore[attr-defined]
-            if col.name not in except_columns
-        }
+        updates = self._all_source_columns(except_cols)
 
         self._builder.when_matched_update(updates, predicate)
         return self
@@ -2309,21 +2315,7 @@ class TableMerger:
             3  4    NaN
             ```
         """
-        maybe_source_alias = self._builder.source_alias
-        maybe_target_alias = self._builder.target_alias
-
-        src_alias = (maybe_source_alias + ".") if maybe_source_alias is not None else ""
-        trgt_alias = (
-            (maybe_target_alias + ".") if maybe_target_alias is not None else ""
-        )
-
-        except_columns = except_cols or []
-
-        updates = {
-            f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
-            for col in self._builder.arrow_schema  # type: ignore[attr-defined]
-            if col.name not in except_columns
-        }
+        updates = self._all_source_columns(except_cols)
 
         self._builder.when_not_matched_insert(updates, predicate)
         return self
