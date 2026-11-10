@@ -280,7 +280,7 @@ const CHANGE_DATA_DIR: &str = "_change_data";
 struct WriteSinkConfig {
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    /// How the files are encoded, with the table's stats config filled in.
+    /// How the files are encoded, with the table's stats config and format options filled in.
     props: DeltaWriterProperties,
     column_mapping: Option<ColumnMappingState>,
     /// Directory under the table root the data files go below.
@@ -288,18 +288,20 @@ struct WriteSinkConfig {
 }
 
 impl WriteSinkConfig {
-    fn new(
+    fn try_new(
         table_config: &TableConfiguration,
         object_store: ObjectStoreRef,
         props: DeltaWriterProperties,
-    ) -> Self {
-        Self {
+    ) -> DeltaResult<Self> {
+        Ok(Self {
             partition_columns: table_config.metadata().partition_columns().to_vec(),
             object_store,
-            props: props.apply_table_stats(table_config),
+            props: props
+                .apply_table_stats(table_config)
+                .apply_table_format(table_config)?,
             column_mapping: ColumnMappingState::from_table_config(table_config),
             path_prefix: None,
-        }
+        })
     }
 
     fn with_path_prefix(mut self, prefix: &str) -> Self {
@@ -391,8 +393,8 @@ pub(crate) async fn write_execution_plan_cdc(
     props: DeltaWriterProperties,
 ) -> DeltaResult<Vec<Action>> {
     let plan = validated_plan(table_config, session, plan, None, false, None)?;
-    let sink_config =
-        WriteSinkConfig::new(table_config, object_store, props).with_path_prefix(CHANGE_DATA_DIR);
+    let sink_config = WriteSinkConfig::try_new(table_config, object_store, props)?
+        .with_path_prefix(CHANGE_DATA_DIR);
     let (actions, _) = write_data_plan(session, plan, sink_config).await?;
     Ok(actions
         .into_iter()
@@ -443,7 +445,7 @@ pub(crate) async fn write_execution_plan_v2(
         contains_cdc,
         insert_marker_column.as_deref(),
     )?;
-    let sink_config = WriteSinkConfig::new(table_config, object_store, props);
+    let sink_config = WriteSinkConfig::try_new(table_config, object_store, props)?;
 
     if !contains_cdc {
         write_data_plan(session, plan, sink_config).await
@@ -483,7 +485,7 @@ pub(crate) async fn write_exec_plan(
     write_as_cdc: bool,
     props: DeltaWriterProperties,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
-    let sink_config = WriteSinkConfig::new(table_config, log_store.object_store(), props);
+    let sink_config = WriteSinkConfig::try_new(table_config, log_store.object_store(), props)?;
 
     if write_as_cdc {
         write_cdc_plan(session, exec, sink_config).await

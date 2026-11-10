@@ -101,6 +101,9 @@ def write_deltalake(
         description: User-provided description for this table.
         configuration: A map containing table properties for the metadata action.
             Use [TableProperty][deltalake.TableProperty] for table property keys.
+        format_options: A map of Parquet format options stored on the metadata action, only used
+            when the table is created, e.g. `contentDefinedChunking.enabled` to write data files
+            with content-defined chunking.
         schema_mode: If set to "overwrite", allows replacing the schema of the table. Set to "merge" to merge with existing schema.
         storage_options: Options passed to the native delta filesystem.
         predicate: When using `Overwrite` mode, replace data that matches a predicate.'

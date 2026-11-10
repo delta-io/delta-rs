@@ -3129,10 +3129,10 @@ fn write_to_deltalake(
     name=None,
     description=None,
     configuration=None,
-    format_options=None,
     storage_options=None,
     commit_properties=None,
     post_commithook_properties=None,
+    format_options=None,
 ))]
 fn create_deltalake(
     py: Python,
@@ -3144,10 +3144,10 @@ fn create_deltalake(
     name: Option<String>,
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
-    format_options: Option<HashMap<String, String>>,
     storage_options: Option<HashMap<String, String>>,
     commit_properties: Option<PyCommitProperties>,
     post_commithook_properties: Option<PyPostCommitHookProperties>,
+    format_options: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
     let schema = schema.as_ref().inner_type.clone();
     py.detach(|| {
