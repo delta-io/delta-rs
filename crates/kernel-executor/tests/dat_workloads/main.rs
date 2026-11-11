@@ -6,7 +6,6 @@
 //! Spark, both engines diverge the same way.
 
 mod run;
-mod spec;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,12 +16,12 @@ use delta_kernel::object_store::DynObjectStore;
 use delta_kernel::object_store::local::LocalFileSystem;
 use delta_kernel_default_engine::DefaultEngineBuilder;
 use delta_kernel_default_engine::executor::tokio::TokioMultiThreadExecutor;
+use deltalake_dat::{Spec, Workload};
 use deltalake_kernel_executor::DataFusionEngine;
 use rstest::rstest;
 use tokio::runtime::Handle;
 
 use crate::run::run;
-use crate::spec::{Spec, Workload};
 
 /// Workloads where the default engine is wrong and the executor is right. For these the executor
 /// must succeed and the engines must still disagree, so an entry goes once kernel is fixed.
@@ -43,7 +42,7 @@ async fn matches_the_default_engine(
     #[files("../../dat/v0.0.8/*/specs/*.json")] spec_path: PathBuf,
 ) {
     let workload = Workload::load(&spec_path);
-    if let Spec::Write = workload.spec {
+    if let Spec::Other = workload.spec {
         println!("skipped: the workload writes");
         return;
     }

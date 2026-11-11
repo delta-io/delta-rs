@@ -12,9 +12,8 @@ deltalake-core = { version = "2.0", path = "../core", features = [
 bytes = { workspace = true }
 chrono = { workspace = true, default-features = false, features = ["clock"] }
 delta_kernel = { workspace = true }
+deltalake-dat = { path = "../dat" }
 object_store = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
 tempfile = { workspace = true }
 url = { workspace = true }
 

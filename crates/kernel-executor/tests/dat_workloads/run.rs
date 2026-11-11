@@ -28,10 +28,9 @@ use delta_kernel::table_changes::TableChanges;
 use delta_kernel::{
     Engine, EngineData, KernelError, KernelResult as DeltaResult, SnapshotRef, Version,
 };
+use deltalake_dat::{CdfSpec, ReadSpec, Spec, TimeTravel, Workload};
 use deltalake_kernel_executor::expressions::to_delta_predicate;
 use url::Url;
-
-use crate::spec::{CdfSpec, ReadSpec, Spec, TimeTravel, Workload};
 
 /// What a workload produced.
 #[derive(Debug, PartialEq)]
@@ -53,9 +52,9 @@ pub fn run(workload: &Workload, engine: Arc<dyn Engine>) -> DeltaResult<Outcome>
     let root = &workload.table_root;
     match &workload.spec {
         Spec::Read(spec) => read(root, spec, engine),
-        Spec::Snapshot(at) => snapshot(root, at, engine.as_ref()),
+        Spec::Snapshot(spec) => snapshot(root, &spec.at, engine.as_ref()),
         Spec::Cdf(spec) => cdf(root, spec, engine),
-        Spec::Write => unreachable!("the test skips workloads that write"),
+        _ => unreachable!("the test skips workloads that write"),
     }
 }
 

@@ -1,25 +1,24 @@
-//! The workload specs of the DAT corpus: one JSON file per workload, in `<table>/specs/`.
-//!
-//! Only the fields that say what to run are read. The expected results are not: the test
-//! compares the executor with kernel's default engine instead.
+//! The workload specs of the DAT corpus (`make setup-dat`): one JSON spec per workload in
+//! `<table>/specs/`, run against the table in `<table>/delta`.
 
 use std::path::Path;
 
 use delta_kernel::Version;
+use delta_kernel::actions::{Metadata, Protocol};
 use serde::Deserialize;
 use url::Url;
 
 /// One workload of a DAT table.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum Spec {
     Read(ReadSpec),
-    /// The protocol and metadata of a snapshot.
-    Snapshot(TimeTravel),
+    Snapshot(SnapshotSpec),
     Cdf(CdfSpec),
-    /// `write`, `checkpoint` and `crc`: these write to the table, which the test does not do.
+    /// `write`, `checkpoint` and `crc`: these write to the table.
     #[serde(other)]
-    Write,
+    Other,
 }
 
 /// A table scan, optionally at a version, filtered, and projected.
@@ -27,8 +26,32 @@ pub enum Spec {
 pub struct ReadSpec {
     #[serde(flatten)]
     pub at: TimeTravel,
+    /// A Spark SQL predicate.
     pub predicate: Option<String>,
     pub columns: Option<Vec<String>>,
+    /// `None` when the read is expected to fail.
+    pub expected: Option<ReadExpected>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadExpected {
+    pub row_count: usize,
+}
+
+/// The protocol and metadata of a snapshot.
+#[derive(Debug, Deserialize)]
+pub struct SnapshotSpec {
+    #[serde(flatten)]
+    pub at: TimeTravel,
+    /// `None` when loading the snapshot is expected to fail.
+    pub expected: Option<Box<SnapshotExpected>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SnapshotExpected {
+    pub protocol: Protocol,
+    pub metadata: Metadata,
 }
 
 /// A change data feed scan between two versions.
@@ -37,6 +60,7 @@ pub struct ReadSpec {
 pub struct CdfSpec {
     pub start_version: Version,
     pub end_version: Option<Version>,
+    /// A Spark SQL predicate.
     pub predicate: Option<String>,
 }
 
@@ -59,14 +83,14 @@ pub struct Workload {
 }
 
 impl Workload {
-    /// Loads `<table>/specs/<workload>.json`; the table is `<table>/delta`.
+    /// Loads `<table>/specs/<workload>.json`.
     pub fn load(spec_path: &Path) -> Self {
         let name = spec_path.file_stem().unwrap().to_str().unwrap().to_string();
         let spec = std::fs::read_to_string(spec_path).unwrap();
         let spec = serde_json::from_str(&spec)
             .unwrap_or_else(|err| panic!("{}: {err}", spec_path.display()));
         let table_dir = spec_path.parent().unwrap().parent().unwrap().join("delta");
-        let table_root = Url::from_directory_path(table_dir).unwrap();
+        let table_root = Url::from_directory_path(std::path::absolute(table_dir).unwrap()).unwrap();
         Self {
             name,
             spec,

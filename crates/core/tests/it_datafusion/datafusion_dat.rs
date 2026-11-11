@@ -9,7 +9,7 @@ use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::DataType as SqlDataType;
 use deltalake_core::delta_datafusion::create_session;
 use deltalake_test::acceptance::{
-    Cause, KnownFailure, KnownFailures, ReadSpec, Spec, Workload, check_workload,
+    Cause, KnownFailure, KnownFailures, ReadSpec, Spec, Workload, check_workload, load_table,
 };
 use rstest::rstest;
 use url::Url;
@@ -200,7 +200,7 @@ async fn check(spec: ReadSpec, table_root: Url) -> Result<(), String> {
 
 /// The number of rows `spec` reads, with its predicate and projection as SQL.
 async fn read(table_root: &Url, spec: &ReadSpec) -> datafusion::error::Result<usize> {
-    let table = spec.at.load(table_root).await?;
+    let table = load_table(table_root, &spec.at).await?;
     let ctx: SessionContext = create_session().into_inner();
     let state = SessionStateBuilder::new_from_existing(ctx.state())
         .with_type_planner(Arc::new(SparkTypePlanner))

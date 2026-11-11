@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use delta_kernel::table_features::TableFeature;
 use deltalake_core::kernel::Protocol;
 use deltalake_test::acceptance::{
-    Cause, KnownFailure, KnownFailures, SnapshotSpec, Spec, Workload, check_workload,
+    Cause, KnownFailure, KnownFailures, SnapshotSpec, Spec, Workload, check_workload, load_table,
 };
 use rstest::rstest;
 use url::Url;
@@ -99,7 +99,7 @@ async fn test_snapshot_workload(
 }
 
 async fn check(spec: SnapshotSpec, table_root: Url) -> Result<(), String> {
-    let table = spec.at.load(&table_root).await;
+    let table = load_table(&table_root, &spec.at).await;
     match (table, &spec.expected) {
         (Ok(table), Some(expected)) => {
             let snapshot = table.snapshot().map_err(|err| err.to_string())?;
