@@ -1,7 +1,7 @@
 //! The workload specs of the DAT corpus: one JSON file per workload, in `<table>/specs/`.
 //!
 //! Only the fields that say what to run are read. The expected results are not: the test
-//! compares the executor with the kernel's default engine instead.
+//! compares the executor with kernel's default engine instead.
 
 use std::path::Path;
 

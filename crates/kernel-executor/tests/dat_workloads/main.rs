@@ -1,8 +1,8 @@
-//! Runs the DAT workloads (`make setup-dat`) on the kernel's default engine and on
+//! Runs the DAT workloads (`make setup-dat`) on kernel's default engine and on
 //! [`DataFusionEngine`], and checks that both give the same result: the same rows, the same
 //! snapshot, or both an error.
 //!
-//! The expected results in the corpus are not checked: where the kernel itself diverges from
+//! The expected results in the corpus are not checked: where kernel itself diverges from
 //! Spark, both engines diverge the same way.
 
 mod run;
@@ -25,7 +25,7 @@ use crate::run::run;
 use crate::spec::{Spec, Workload};
 
 /// Workloads where the default engine is wrong and the executor is right. For these the executor
-/// must succeed and the engines must still disagree, so an entry goes once the kernel is fixed.
+/// must succeed and the engines must still disagree, so an entry goes once kernel is fixed.
 const DEFAULT_ENGINE_BUGS: &[(&str, &[&str])] = &[(
     "reads INT96 timestamps as nanoseconds, which overflow outside 1677-2262",
     &[

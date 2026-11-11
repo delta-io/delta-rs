@@ -5,12 +5,17 @@ use std::sync::Arc;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef};
+use datafusion::arrow::datatypes::{
+    DataType, Field, FieldRef, Schema as ArrowSchema, SchemaRef, TimeUnit,
+};
 use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
 use datafusion::common::{DFSchema, Result as DFResult};
+use datafusion::execution::SessionStateBuilder;
+use datafusion::logical_expr::planner::TypePlanner;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::sql::sqlparser::ast::DataType as SqlDataType;
 use delta_kernel::actions::{Metadata, Protocol};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::engine::arrow_data::EngineDataArrowExt as _;
@@ -128,8 +133,12 @@ fn parse_sql(sql: &str, schema: &Schema) -> DFResult<Predicate> {
     // Spark resolves column names case-insensitively; keep the names as written.
     let config =
         SessionConfig::new().set_bool("datafusion.sql_parser.enable_ident_normalization", false);
-    let expr = SessionContext::new_with_config(config)
-        .parse_sql_expr(&spark_types_to_datafusion(sql), &schema)?;
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_default_features()
+        .with_type_planner(Arc::new(SparkTypePlanner))
+        .build();
+    let expr = SessionContext::new_with_state(state).parse_sql_expr(sql, &schema)?;
     let simplifier = ExprSimplifier::new(
         SimplifyContext::builder()
             .with_schema(schema.clone())
@@ -139,11 +148,25 @@ fn parse_sql(sql: &str, schema: &Schema) -> DFResult<Predicate> {
     to_delta_predicate(&expr)
 }
 
-/// `sql` with the Spark type names DataFusion's SQL does not know replaced.
-fn spark_types_to_datafusion(sql: &str) -> String {
-    sql.replace("TIMESTAMP_NTZ", "TIMESTAMP")
-        .replace("AS BYTE", "AS TINYINT")
-        .replace("AS SHORT", "AS SMALLINT")
+/// Plans the Spark type names that DataFusion's SQL does not know.
+#[derive(Debug)]
+struct SparkTypePlanner;
+
+impl TypePlanner for SparkTypePlanner {
+    fn plan_type_field(&self, sql_type: &SqlDataType) -> DFResult<Option<FieldRef>> {
+        let data_type = match sql_type {
+            SqlDataType::TimestampNtz(_) => DataType::Timestamp(TimeUnit::Microsecond, None),
+            SqlDataType::Custom(name, modifiers) if modifiers.is_empty() => {
+                match name.to_string().to_ascii_uppercase().as_str() {
+                    "BYTE" => DataType::Int8,
+                    "SHORT" => DataType::Int16,
+                    _ => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(Arc::new(Field::new("", data_type, true))))
+    }
 }
 
 /// The rows of `batches` that `predicate` keeps. A scan only skips files, and the default engine

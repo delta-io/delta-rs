@@ -625,7 +625,7 @@ fn primitive_partition_values_to_array(
             )?)
             .with_precision_and_scale(decimal.precision(), decimal.scale() as i8)?,
         ) as ArrayRef,
-        // The kernel reads intervals as arrow integers: months, and microseconds.
+        // Kernel reads intervals as arrow integers: months, and microseconds.
         PrimitiveType::IntervalYearMonth => Arc::new(Int32Array::from_iter(typed_partition_values(
             field_name,
             expected_data_type,
@@ -920,7 +920,7 @@ mod tests {
         );
     }
 
-    /// Interval partition values become the integers the kernel reads intervals as.
+    /// Interval partition values become the integers kernel reads intervals as.
     #[test]
     fn primitive_partition_values_to_array_reads_intervals() -> DeltaResult<()> {
         use arrow::datatypes::{Int32Type, Int64Type};

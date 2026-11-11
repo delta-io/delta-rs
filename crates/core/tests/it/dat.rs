@@ -8,10 +8,10 @@ use url::Url;
 
 /// Snapshot workloads where deltalake-core does not do what the spec expects, grouped by the
 /// component at fault. A workload that expects an error is listed only when the load succeeds.
-/// None is the executor's: on every workload, its `DataFusionEngine` gives the same result as the
+/// None is the executor's: on every workload, its `DataFusionEngine` gives the same result as
 /// kernel's default engine (the executor's DAT test checks this).
 const KNOWN_FAILURES: KnownFailures = &[
-    // delta-kernel: the kernel alone, on its default engine, gives the same result.
+    // delta-kernel: kernel alone, on its default engine, gives the same result.
     (
         "loads tables that Spark rejects: invalid protocols and corrupt logs",
         &[
@@ -57,14 +57,14 @@ const KNOWN_FAILURES: KnownFailures = &[
         "a protocol downgrade fails with unmasked nulls in metaData",
         &["protocol_versions_protocol_downgrade_snapshot"],
     ),
-    // deltalake-core: the kernel alone does what the spec expects.
+    // deltalake-core: kernel alone does what the spec expects.
     // These are behavior differences and acceptable.
     (
         "time travel to a timestamp before the first commit does not fail",
         &["time_travel_timestamp_before_retention_error_snapshot_ts_2026-09-29_19-03-05.796"],
     ),
     (
-        "a truncated last line in a commit fails the load; the kernel and Spark skip it",
+        "a truncated last line in a commit fails the load; kernel and Spark skip it",
         &["corruption_truncated_commit_snapshot"],
     ),
 ];

@@ -1,6 +1,12 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+use datafusion::common::Result as DFResult;
+use datafusion::execution::SessionStateBuilder;
+use datafusion::logical_expr::planner::TypePlanner;
 use datafusion::prelude::SessionContext;
+use datafusion::sql::sqlparser::ast::DataType as SqlDataType;
 use deltalake_core::delta_datafusion::create_session;
 use deltalake_test::acceptance::{KnownFailures, ReadSpec, Spec, Workload, check_workload};
 use rstest::rstest;
@@ -8,10 +14,10 @@ use url::Url;
 
 /// Read workloads where deltalake-core does not do what the spec expects, grouped by the component
 /// at fault. A workload that expects an error is listed only when the read succeeds. None is the
-/// executor's: on every workload, its `DataFusionEngine` gives the same result as the kernel's
+/// executor's: on every workload, its `DataFusionEngine` gives the same result as kernel's
 /// default engine (the executor's DAT test checks this).
 const KNOWN_FAILURES: KnownFailures = &[
-    // delta-kernel: the kernel alone, on its default engine, gives the same result.
+    // delta-kernel: kernel alone, on its default engine, gives the same result.
     (
         "reads tables that Spark rejects: invalid protocols and corrupt logs",
         &[
@@ -50,13 +56,13 @@ const KNOWN_FAILURES: KnownFailures = &[
          Spark reads 0",
         &["corruption_err_add_and_remove_same_path_dv_read_all"],
     ),
-    // deltalake-core: the kernel alone does what the spec expects.
+    // deltalake-core: kernel alone does what the spec expects.
     (
         "time travel to a timestamp before the first commit does not fail",
         &["time_travel_timestamps_read_ts_epoch"],
     ),
     (
-        "the typeWidening reader feature is rejected; the kernel reads these tables through the \
+        "the typeWidening reader feature is rejected; kernel reads these tables through the \
          executor",
         &[
             "checkpoints_v2_with_type_widening_read_all",
@@ -189,6 +195,10 @@ async fn check(spec: ReadSpec, table_root: Url) -> Result<(), String> {
 async fn read(table_root: &Url, spec: &ReadSpec) -> datafusion::error::Result<usize> {
     let table = spec.at.load(table_root).await?;
     let ctx: SessionContext = create_session().into_inner();
+    let state = SessionStateBuilder::new_from_existing(ctx.state())
+        .with_type_planner(Arc::new(SparkTypePlanner))
+        .build();
+    let ctx = SessionContext::new_with_state(state);
     // Spark resolves column names case-insensitively; keep the names as written.
     ctx.sql("SET datafusion.sql_parser.enable_ident_normalization = false")
         .await?;
@@ -203,7 +213,7 @@ async fn read(table_root: &Url, spec: &ReadSpec) -> datafusion::error::Result<us
         None => "*".to_string(),
     };
     let filter = match &spec.predicate {
-        Some(predicate) => format!(" WHERE {}", spark_types_to_datafusion(predicate)),
+        Some(predicate) => format!(" WHERE {predicate}"),
         None => String::new(),
     };
     let batches = ctx
@@ -214,10 +224,23 @@ async fn read(table_root: &Url, spec: &ReadSpec) -> datafusion::error::Result<us
     Ok(batches.iter().map(|batch| batch.num_rows()).sum())
 }
 
-/// `predicate` with the Spark type names DataFusion's SQL does not know replaced.
-fn spark_types_to_datafusion(predicate: &str) -> String {
-    predicate
-        .replace("TIMESTAMP_NTZ", "TIMESTAMP")
-        .replace("AS BYTE", "AS TINYINT")
-        .replace("AS SHORT", "AS SMALLINT")
+/// Plans the Spark type names that DataFusion's SQL does not know.
+#[derive(Debug)]
+struct SparkTypePlanner;
+
+impl TypePlanner for SparkTypePlanner {
+    fn plan_type_field(&self, sql_type: &SqlDataType) -> DFResult<Option<FieldRef>> {
+        let data_type = match sql_type {
+            SqlDataType::TimestampNtz(_) => DataType::Timestamp(TimeUnit::Microsecond, None),
+            SqlDataType::Custom(name, modifiers) if modifiers.is_empty() => {
+                match name.to_string().to_ascii_uppercase().as_str() {
+                    "BYTE" => DataType::Int8,
+                    "SHORT" => DataType::Int16,
+                    _ => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(Arc::new(Field::new("", data_type, true))))
+    }
 }
