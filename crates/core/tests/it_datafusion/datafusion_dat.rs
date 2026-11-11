@@ -8,19 +8,21 @@ use datafusion::logical_expr::planner::TypePlanner;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::DataType as SqlDataType;
 use deltalake_core::delta_datafusion::create_session;
-use deltalake_test::acceptance::{KnownFailures, ReadSpec, Spec, Workload, check_workload};
+use deltalake_test::acceptance::{
+    Cause, KnownFailure, KnownFailures, ReadSpec, Spec, Workload, check_workload,
+};
 use rstest::rstest;
 use url::Url;
 
-/// Read workloads where deltalake-core does not do what the spec expects, grouped by the component
+/// Read workloads where deltalake-core does not do what the spec expects, each with the [`Cause`]
 /// at fault. A workload that expects an error is listed only when the read succeeds. None is the
 /// executor's: on every workload, its `DataFusionEngine` gives the same result as kernel's
 /// default engine (the executor's DAT test checks this).
 const KNOWN_FAILURES: KnownFailures = &[
-    // delta-kernel: kernel alone, on its default engine, gives the same result.
-    (
-        "reads tables that Spark rejects: invalid protocols and corrupt logs",
-        &[
+    KnownFailure {
+        cause: Cause::Kernel,
+        reason: "kernel reads tables that Spark rejects: invalid protocols and corrupt logs",
+        workloads: &[
             "checkpoints_checkpoint_only_table_read_all",
             "column_mapping_cm_err_003_invalid_mode_read_all",
             "corruption_err_duplicate_add_same_version_read_all",
@@ -30,41 +32,46 @@ const KNOWN_FAILURES: KnownFailures = &[
             "log_replay_log_err_missing_metadata_read_all",
             "log_replay_log_err_missing_protocol_read_all",
         ],
-    ),
-    (
-        "time travel to a timestamp after the last commit does not fail",
-        &[
+    },
+    KnownFailure {
+        cause: Cause::Kernel,
+        reason: "kernel allows time travel to a timestamp after the last commit",
+        workloads: &[
             "time_travel_future_timestamp_error_read_ts_2099-12-31_23-59-59.999",
             "time_travel_timestamps_read_ts_future",
         ],
-    ),
-    (
-        "no fallback to log replay when the checkpoint is missing or incomplete",
-        &[
+    },
+    KnownFailure {
+        cause: Cause::Kernel,
+        reason: "kernel has no fallback to log replay when a checkpoint is missing or incomplete",
+        workloads: &[
             "checkpoints_incomplete_multipart_read_all",
             "checkpoints_missing_checkpoint_file_read_all",
             "corruption_wrong_last_checkpoint_read_all",
             "corruption_wrong_last_checkpoint_read_id_lt_5",
         ],
-    ),
-    (
-        "a truncated last line in a commit fails the read; Spark skips it",
-        &["corruption_truncated_commit_read_all"],
-    ),
-    (
-        "an add and a remove of the same path with a deletion vector in one commit: 2 rows, \
-         Spark reads 0",
-        &["corruption_err_add_and_remove_same_path_dv_read_all"],
-    ),
-    // deltalake-core: kernel alone does what the spec expects.
-    (
-        "time travel to a timestamp before the first commit does not fail",
-        &["time_travel_timestamps_read_ts_epoch"],
-    ),
-    (
-        "the typeWidening reader feature is rejected; kernel reads these tables through the \
-         executor",
-        &[
+    },
+    KnownFailure {
+        cause: Cause::Kernel,
+        reason: "kernel fails the read on a truncated last line in a commit; Spark skips it",
+        workloads: &["corruption_truncated_commit_read_all"],
+    },
+    KnownFailure {
+        cause: Cause::Kernel,
+        reason: "kernel reads 2 rows when one commit adds and removes the same path with a \
+                 deletion vector; Spark reads 0",
+        workloads: &["corruption_err_add_and_remove_same_path_dv_read_all"],
+    },
+    KnownFailure {
+        cause: Cause::Core,
+        reason: "deltalake-core allows time travel to a timestamp before the first commit",
+        workloads: &["time_travel_timestamps_read_ts_epoch"],
+    },
+    KnownFailure {
+        cause: Cause::Core,
+        reason: "deltalake-core rejects the typeWidening reader feature; kernel reads these tables \
+         through the executor",
+        workloads: &[
             "checkpoints_v2_with_type_widening_read_all",
             "checkpoints_v2_with_type_widening_read_v0",
             "merge_mergeSchemaEvoWidenType_readAll",
@@ -132,13 +139,13 @@ const KNOWN_FAILURES: KnownFailures = &[
             "write_features_type_widening_inserts_read_all",
             "write_features_type_widening_inserts_read_ge_20",
         ],
-    ),
-    // This test: DataFusion's SQL cannot run the workload's Spark SQL predicate.
+    },
     // Some could be resolved using datafusion-spark extension planner
-    (
-        "the predicate uses Spark SQL that DataFusion lacks: size, year, month, date_add, \
-         date_sub, datediff, trunc, or LIKE on a number",
-        &[
+    KnownFailure {
+        cause: Cause::DataFusionSql,
+        reason: "DataFusion's SQL lacks a Spark SQL function in the predicate: size, year, month, \
+         date_add, date_sub, datediff, trunc, or LIKE on a number",
+        workloads: &[
             "check_constraints_array_constraint_read_sizetags_gt_2",
             "data_skipping_date_add_sub_read_d_gte_date_adddate20240101_1",
             "data_skipping_date_add_sub_read_miss_date_sub",
@@ -156,7 +163,7 @@ const KNOWN_FAILURES: KnownFailures = &[
             "data_skipping_year_function_read_yeard_eq_2025",
             "variant_array_variant_filter_array_size",
         ],
-    ),
+    },
 ];
 
 /// A read workload scans the table through DataFusion and checks the row count, or expects the

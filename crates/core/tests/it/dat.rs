@@ -2,19 +2,21 @@ use std::path::PathBuf;
 
 use delta_kernel::table_features::TableFeature;
 use deltalake_core::kernel::Protocol;
-use deltalake_test::acceptance::{KnownFailures, SnapshotSpec, Spec, Workload, check_workload};
+use deltalake_test::acceptance::{
+    Cause, KnownFailure, KnownFailures, SnapshotSpec, Spec, Workload, check_workload,
+};
 use rstest::rstest;
 use url::Url;
 
-/// Snapshot workloads where deltalake-core does not do what the spec expects, grouped by the
-/// component at fault. A workload that expects an error is listed only when the load succeeds.
+/// Snapshot workloads where deltalake-core does not do what the spec expects, each with the
+/// [`Cause`] at fault. A workload that expects an error is listed only when the load succeeds.
 /// None is the executor's: on every workload, its `DataFusionEngine` gives the same result as
 /// kernel's default engine (the executor's DAT test checks this).
 const KNOWN_FAILURES: KnownFailures = &[
-    // delta-kernel: kernel alone, on its default engine, gives the same result.
-    (
-        "loads tables that Spark rejects: invalid protocols and corrupt logs",
-        &[
+    KnownFailure {
+        cause: Cause::Kernel,
+        reason: "kernel loads tables that Spark rejects: invalid protocols and corrupt logs",
+        workloads: &[
             "checkpoints_checkpoint_only_table_snapshot",
             "column_mapping_cm_err_003_invalid_mode_snapshot",
             "corruption_err_duplicate_add_same_version_snapshot",
@@ -34,39 +36,48 @@ const KNOWN_FAILURES: KnownFailures = &[
             "protocol_versions_unknown_reader_feature_snapshot",
             "protocol_versions_unknown_writer_feature_ok_snapshot",
         ],
-    ),
-    (
-        "time travel to a deleted version does not fail",
-        &[
+    },
+    KnownFailure {
+        cause: Cause::Kernel,
+        reason: "kernel allows time travel to a deleted version",
+        workloads: &[
             "time_travel_deleted_version_retention_error_snapshot",
             "time_travel_deleted_version_snapshot",
         ],
-    ),
-    (
-        "no fallback to log replay when the checkpoint is missing or incomplete",
-        &[
+    },
+    KnownFailure {
+        cause: Cause::Kernel,
+        reason: "kernel has no fallback to log replay when a checkpoint is missing or incomplete",
+        workloads: &[
             "checkpoints_incomplete_multipart_snapshot",
             "checkpoints_missing_checkpoint_file_snapshot",
         ],
-    ),
-    (
-        "the metadata comes from the version 0 CRC file, which disagrees with the commit",
-        &["evolvability_fc_extra_metadata_keys_snapshot"],
-    ),
-    (
-        "a protocol downgrade fails with unmasked nulls in metaData",
-        &["protocol_versions_protocol_downgrade_snapshot"],
-    ),
-    // deltalake-core: kernel alone does what the spec expects.
+    },
+    KnownFailure {
+        cause: Cause::Kernel,
+        reason: "kernel takes the metadata from the version 0 CRC file, which disagrees with the \
+                 commit",
+        workloads: &["evolvability_fc_extra_metadata_keys_snapshot"],
+    },
+    KnownFailure {
+        cause: Cause::Kernel,
+        reason: "kernel fails a protocol downgrade with unmasked nulls in metaData",
+        workloads: &["protocol_versions_protocol_downgrade_snapshot"],
+    },
     // These are behavior differences and acceptable.
-    (
-        "time travel to a timestamp before the first commit does not fail",
-        &["time_travel_timestamp_before_retention_error_snapshot_ts_2026-09-29_19-03-05.796"],
-    ),
-    (
-        "a truncated last line in a commit fails the load; kernel and Spark skip it",
-        &["corruption_truncated_commit_snapshot"],
-    ),
+    KnownFailure {
+        cause: Cause::Core,
+        reason: "deltalake-core allows time travel to a timestamp before the first commit",
+        workloads: &[
+            "time_travel_timestamp_before_retention_error_snapshot_ts_2026-09-29_19-03-05.796",
+        ],
+    },
+    KnownFailure {
+        cause: Cause::Core,
+        reason: "deltalake-core fails the load on a truncated last line in a commit; kernel and \
+                 Spark skip it",
+        workloads: &["corruption_truncated_commit_snapshot"],
+    },
 ];
 
 /// A snapshot workload loads the table and checks its protocol and metadata, or expects the

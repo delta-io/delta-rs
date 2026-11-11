@@ -108,8 +108,38 @@ impl Workload {
     }
 }
 
-/// Workloads that are known to fail, by reason.
-pub type KnownFailures = &'static [(&'static str, &'static [&'static str])];
+/// The component whose behavior makes a workload fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Cause {
+    /// delta-kernel: kernel alone, on its default engine, fails the workload the same way.
+    Kernel,
+    /// deltalake-core: kernel alone does what the spec expects.
+    Core,
+    /// The test: DataFusion's SQL cannot run the workload's Spark SQL predicate.
+    DataFusionSql,
+}
+
+impl std::fmt::Display for Cause {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Cause::Kernel => "delta-kernel",
+            Cause::Core => "deltalake-core",
+            Cause::DataFusionSql => "DataFusion SQL",
+        })
+    }
+}
+
+/// Workloads that fail for one reason.
+pub struct KnownFailure {
+    pub cause: Cause,
+    /// What `cause` does that the spec does not expect.
+    pub reason: &'static str,
+    pub workloads: &'static [&'static str],
+}
+
+/// The workloads a test expects to fail.
+pub type KnownFailures = &'static [KnownFailure];
 
 /// Runs `check` for the workload `name`, which fails with an error or a panic.
 ///
@@ -120,16 +150,15 @@ where
 {
     let known_failure = known_failures
         .iter()
-        .find(|(_, workloads)| workloads.contains(&name))
-        .map(|(reason, _)| *reason);
+        .find(|failure| failure.workloads.contains(&name));
     let outcome = tokio::spawn(check).await;
     match (known_failure, outcome) {
         (None, Ok(Ok(()))) => {}
         (None, Ok(Err(err))) => panic!("{name}: {err}"),
         (None, Err(panic)) => std::panic::resume_unwind(panic.into_panic()),
         (Some(_), Ok(Err(_)) | Err(_)) => {}
-        (Some(reason), Ok(Ok(()))) => {
-            panic!("{name} passes now ({reason}): remove it from the known failures")
+        (Some(KnownFailure { cause, reason, .. }), Ok(Ok(()))) => {
+            panic!("{name} passes now (cause {cause}: {reason}): remove it from the known failures")
         }
     }
 }

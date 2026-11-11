@@ -27,7 +27,7 @@ use crate::spec::{Spec, Workload};
 /// Workloads where the default engine is wrong and the executor is right. For these the executor
 /// must succeed and the engines must still disagree, so an entry goes once kernel is fixed.
 const DEFAULT_ENGINE_BUGS: &[(&str, &[&str])] = &[(
-    "reads INT96 timestamps as nanoseconds, which overflow outside 1677-2262",
+    "the default engine reads INT96 timestamps as nanoseconds, which overflow outside 1677-2262",
     &[
         "write_boundary_date_and_timestamp_range_ends_latest",
         "write_boundary_date_and_timestamp_range_ends_read_all",
