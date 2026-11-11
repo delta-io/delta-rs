@@ -53,7 +53,7 @@ use crate::delta_datafusion::engine::DataFusionEngine;
 use crate::delta_datafusion::table_provider::TableProviderBuilder;
 use crate::kernel::transaction::{PROTOCOL, TransactionError};
 use crate::kernel::{Add, EagerSnapshot, SendableScanMetadataStream, Snapshot};
-use crate::logstore::LogStoreRef;
+use crate::logstore::{LogStoreRef, strip_url_sensitive_parts};
 use crate::protocol::SaveMode;
 use crate::table::normalize_table_url;
 
@@ -94,7 +94,8 @@ pub enum MissingSelectedFilePolicy {
 ///
 /// Absolute URLs must be under the table root. Paths outside the table root are rejected during
 /// scan planning with redacted error output.
-/// Username, password, query, and fragment are stripped from URLs before storage.
+/// Authentication userinfo, query, and fragment are stripped from URLs before storage
+/// and containment checks. ABFS container usernames remain part of the storage identity.
 ///
 /// Selections with paths are resolved against snapshot metadata before the data scan. Each scan
 /// with a file selection requires that metadata pass.
@@ -303,15 +304,6 @@ fn canonical_local_table_root_url(root: &url::Url) -> Option<url::Url> {
     let canonical_root = Url::from_directory_path(canonical_path).ok()?;
 
     Some(ensure_table_root_url(&normalize_table_url(&canonical_root)))
-}
-
-fn strip_url_sensitive_parts(url: &mut Url) {
-    if !matches!(url.scheme(), "abfs" | "abfss") {
-        let _ = url.set_username("");
-    }
-    let _ = url.set_password(None);
-    url.set_query(None);
-    url.set_fragment(None);
 }
 
 pub(crate) fn redact_url_for_error(url: &Url) -> String {
@@ -2810,6 +2802,43 @@ mod tests {
             let selection = FileSelection::from_adds([add]);
             let ids = selection.resolve_input_file_ids(&Url::parse("file:///table/")?)?;
             assert_eq!(ids, HashSet::from([expected.to_string()]));
+        }
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::https("https://reader:rootpass@example.com/table/")]
+    #[case::ipv6("https://reader:rootpass@[2001:db8::1]:8443/table/")]
+    #[case::abfs("abfs://left:rootpass@account.dfs.core.windows.net/table/")]
+    #[case::abfss("abfss://left:rootpass@account.dfs.core.windows.net/table/")]
+    #[test]
+    fn file_selection_accepts_authenticated_table_roots(#[case] root: &str) -> TestResult {
+        let root = Url::parse(root)?;
+        let encoded_path = "part%20%2520.parquet";
+        let absolute = root.join(encoded_path)?.to_string();
+        let decoded = percent_encoding::percent_decode_str(&absolute)
+            .decode_utf8()?
+            .into_owned();
+        for selection in [
+            FileSelection::from_file_paths([absolute]),
+            FileSelection::from_file_paths([encoded_path]),
+            FileSelection::from_adds([make_test_add(decoded, &[], 0)]),
+            FileSelection::from_adds([make_test_add("part %20.parquet", &[], 0)]),
+        ] {
+            let serialized = serde_json::to_string(&selection)?;
+            assert!(!serialized.contains("rootpass"));
+            if matches!(root.scheme(), "abfs" | "abfss") {
+                assert!(
+                    !selection.paths[0].starts_with(root.scheme()) || serialized.contains("left@")
+                );
+            } else {
+                assert!(!serialized.contains("reader"));
+            }
+            let restored: FileSelection = serde_json::from_str(&serialized)?;
+            assert_eq!(
+                restored.resolve_input_file_ids(&root)?,
+                HashSet::from([root.join(encoded_path)?.to_string()])
+            );
         }
         Ok(())
     }

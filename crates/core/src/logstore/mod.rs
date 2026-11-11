@@ -659,6 +659,15 @@ pub(crate) fn object_store_path(table_root: &Url) -> DeltaResult<Path> {
     })
 }
 
+pub(crate) fn strip_url_sensitive_parts(url: &mut Url) {
+    if !matches!(url.scheme(), "abfs" | "abfss") {
+        let _ = url.set_username("");
+    }
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+}
+
 /// Resolves file references into the physical namespace of a table.
 ///
 /// Local resolution performs filesystem I/O and must run on the blocking pool.
@@ -676,7 +685,7 @@ impl TablePathResolver {
         if !root.path().ends_with('/') {
             root.set_path(&format!("{}/", root.path()));
         }
-        let (physical_root, native_local) = if root.scheme() == "file" {
+        let (mut physical_root, native_local) = if root.scheme() == "file" {
             match root.to_file_path() {
                 Ok(path) => (
                     Url::from_directory_path(canonicalize_with_missing_suffix(&path)?).map_err(
@@ -698,6 +707,7 @@ impl TablePathResolver {
         } else {
             (root.clone(), false)
         };
+        strip_url_sensitive_parts(&mut physical_root);
         Ok(Self {
             root,
             physical_root,
@@ -720,8 +730,7 @@ impl TablePathResolver {
                 "Failed to resolve table file URI: {error}"
             ))
         })?;
-        file.set_query(None);
-        file.set_fragment(None);
+        strip_url_sensitive_parts(&mut file);
         if self.is_local() && file.scheme() == "file" {
             let path = file.to_file_path().map_err(|_| {
                 DeltaTableError::InvalidTableLocation("Invalid local file URL".into())
@@ -1081,6 +1090,69 @@ pub(crate) mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[rstest::rstest]
+    #[case::root_credentials("reader:rootpass@", "")]
+    #[case::file_credentials("", "writer:filepass@")]
+    #[case::different_credentials("reader:rootpass@", "writer:filepass@")]
+    #[test]
+    fn table_paths_ignore_authentication_userinfo(
+        #[case] root_userinfo: &str,
+        #[case] file_userinfo: &str,
+    ) -> DeltaResult<()> {
+        let root = Url::parse(&format!(
+            "https://{root_userinfo}example.com:8443/table/?token=root#fragment"
+        ))
+        .unwrap();
+        let resolver = TablePathResolver::new(root)?;
+        let file = format!(
+            "https://{file_userinfo}example.com:8443/table/part%20%2520.parquet?token=file#fragment"
+        );
+        assert_eq!(
+            resolver.resolve(&file)?,
+            Some(Path::parse("part %20.parquet")?)
+        );
+        assert_eq!(
+            resolver.file_id(&file)?,
+            resolver.file_id("part%20%2520.parquet")?
+        );
+        for outside in [
+            "https://example.net:8443/table/part.parquet",
+            "https://example.com:8444/table/part.parquet",
+            "http://example.com:8443/table/part.parquet",
+            "https://example.com:8443/other/part.parquet",
+            "https://example.com:8443/table-suffix/part.parquet",
+        ] {
+            assert_eq!(resolver.resolve(outside)?, None);
+        }
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[test]
+    fn table_paths_preserve_abfs_container_identity(
+        #[values("abfs", "abfss")] scheme: &str,
+    ) -> DeltaResult<()> {
+        let resolver = TablePathResolver::new(
+            Url::parse(&format!(
+                "{scheme}://left:rootpass@account.dfs.core.windows.net/table/"
+            ))
+            .unwrap(),
+        )?;
+        assert_eq!(
+            resolver.resolve(&format!(
+                "{scheme}://left:filepass@account.dfs.core.windows.net/table/part.parquet"
+            ))?,
+            Some(Path::from("part.parquet"))
+        );
+        assert_eq!(
+            resolver.resolve(&format!(
+                "{scheme}://right@account.dfs.core.windows.net/table/part.parquet"
+            ))?,
+            None
+        );
+        Ok(())
+    }
 
     #[test]
     fn local_table_paths_preserve_encoding_and_missing_suffixes() -> DeltaResult<()> {
