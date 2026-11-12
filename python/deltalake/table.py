@@ -797,7 +797,10 @@ class DeltaTable:
 
         Notes:
             Only files that have deletion vectors are returned.
-            Deletion vectors are materialized in memory before being exposed as record batches.
+            Masks are loaded lazily, one file per record batch, in unspecified order.
+            Reading a batch materializes that file's full keep mask. Errors loading
+            deletion vectors are raised while consuming the reader. Collecting the
+            entire reader retains all returned Arrow masks in memory.
         """
         return self._table.deletion_vectors()
 

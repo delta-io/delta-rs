@@ -103,6 +103,60 @@ impl<'a, S> ScanFileStream<'a, S> {
     }
 }
 
+/// DV descriptors for one metadata batch. No keep masks are loaded here.
+pub(super) struct DeletionVectorFile {
+    pub file_url: Url,
+    pub dv_info: DvInfo,
+    pub num_records: Option<u64>,
+    pub cardinality: i64,
+}
+
+pub(super) fn deletion_vector_files(
+    scan_data: ScanMetadata,
+    table_root: &Url,
+    file_selection: Option<&HashSet<String>>,
+) -> DeltaResult<Vec<DeletionVectorFile>> {
+    let scan_data = match file_selection {
+        Some(selection) => apply_file_selection(scan_data, table_root, selection)?,
+        None => scan_data,
+    };
+    let ctx = scan_data
+        .visit_scan_files(ScanContext::new(table_root.clone()), visit_scan_file)?
+        .error_or()?;
+    let scan_files: RecordBatch =
+        ArrowEngineData::try_from_engine_data(scan_data.scan_files.apply_selection_vector()?)?
+            .into();
+    if scan_files.num_rows() != ctx.files.len() {
+        return Err(DeltaTableError::generic(format!(
+            "Invariant violation: scan metadata has {} selected rows but {} file contexts",
+            scan_files.num_rows(),
+            ctx.files.len()
+        )));
+    }
+    ctx.files
+        .into_iter()
+        .enumerate()
+        .filter(|(_, file)| file.dv_info.has_vector())
+        .map(|(index, file)| {
+            let view = LogicalFileView::new(scan_files.clone(), index);
+            let descriptor = view.deletion_vector_descriptor().ok_or_else(|| {
+                DeltaTableError::generic(format!(
+                    "DV file {} has no descriptor in scan metadata",
+                    super::super::redact_url_for_error(&file.meta.location)
+                ))
+            })?;
+            Ok(DeletionVectorFile {
+                file_url: file.meta.location,
+                dv_info: file.dv_info,
+                num_records: file
+                    .num_records
+                    .or_else(|| view.num_records().map(|n| n as u64)),
+                cardinality: descriptor.cardinality,
+            })
+        })
+        .collect()
+}
+
 impl<'a, S> Stream for ScanFileStream<'a, S>
 where
     S: Stream<Item = DeltaResult<ScanMetadata>>,
@@ -528,6 +582,78 @@ mod tests {
     };
     use crate::kernel::Snapshot;
     use crate::test_utils::{TestResult, open_fs_path};
+
+    struct DvReadCountingEngine {
+        inner: Arc<dyn Engine>,
+        reads: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Engine for DvReadCountingEngine {
+        fn evaluation_handler(&self) -> Arc<dyn delta_kernel::EvaluationHandler> {
+            self.inner.evaluation_handler()
+        }
+
+        fn storage_handler(&self) -> Arc<dyn delta_kernel::StorageHandler> {
+            self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.storage_handler()
+        }
+
+        fn json_handler(&self) -> Arc<dyn delta_kernel::JsonHandler> {
+            self.inner.json_handler()
+        }
+
+        fn parquet_handler(&self) -> Arc<dyn delta_kernel::ParquetHandler> {
+            self.inner.parquet_handler()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vector_stream_loads_one_mask_at_a_time() -> TestResult {
+        use delta_kernel::engine::arrow_data::ArrowEngineData;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let log_store = open_fs_path("../test/tests/data/table-with-dv-small").log_store();
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
+        let plan =
+            KernelScanPlan::try_new(&snapshot, None, &[], &DeltaScanConfig::default(), None)?;
+        let session = create_session().into_inner();
+        let engine: Arc<dyn Engine> = DataFusionEngine::new_from_session(&session.state());
+        let mut metadata = plan
+            .scan
+            .scan_metadata(engine.clone())
+            .try_next()
+            .await?
+            .unwrap();
+        let batch: arrow::record_batch::RecordBatch =
+            ArrowEngineData::try_from_engine_data(metadata.scan_files.apply_selection_vector()?)?
+                .into();
+        // Repeat a valid DV descriptor in one metadata batch: neither metadata batching
+        // nor a buffered loader should cause the next mask to be loaded ahead of demand.
+        let repeated = arrow::compute::concat_batches(&batch.schema(), [&batch, &batch])?;
+        metadata.scan_files =
+            FilteredEngineData::with_all_rows_selected(Box::new(ArrowEngineData::new(repeated)));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let engine: Arc<dyn Engine> = Arc::new(DvReadCountingEngine {
+            inner: engine,
+            reads: reads.clone(),
+        });
+        let mut stream = super::super::deletion_vector_stream(
+            engine,
+            plan.scan,
+            Box::pin(stream::iter([Ok(metadata)])),
+            None,
+        );
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        let first = stream.try_next().await?.unwrap();
+        assert_eq!(first.keep_mask.len(), 10);
+        assert_eq!(first.keep_mask.iter().filter(|keep| !**keep).count(), 2);
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        let second = stream.try_next().await?.unwrap();
+        assert_eq!(first, second);
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+        assert!(stream.try_next().await?.is_none());
+        Ok(())
+    }
 
     fn scan_file(path: impl Into<String>) -> ScanFile {
         ScanFile {

@@ -26,7 +26,7 @@
 //! - applying Delta features by transforming the physical data into the table's logical schema
 //!
 use std::collections::HashSet;
-use std::{borrow::Cow, fmt, sync::Arc};
+use std::{borrow::Cow, fmt, pin::Pin, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::{DataFusionError, Result};
@@ -39,6 +39,7 @@ use datafusion::{
     physical_plan::ExecutionPlan,
 };
 use delta_kernel::{Engine, table_configuration::TableConfiguration, table_features::TableFeature};
+use futures::{Stream, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -511,6 +512,10 @@ pub struct DeletionVectorSelection {
     pub keep_mask: Vec<bool>,
 }
 
+/// A stream of file-level deletion vector keep masks.
+pub type SendableDeletionVectorStream =
+    Pin<Box<dyn Stream<Item = crate::DeltaResult<DeletionVectorSelection>> + Send>>;
+
 impl DeltaScan {
     /// Create a new scan over the given `snapshot` using `config`.
     ///
@@ -638,11 +643,30 @@ impl DeltaScan {
     /// The result is sorted lexicographically by filepath for deterministic ordering and includes
     /// only files that have deletion vectors.
     ///
-    /// This API materializes all deletion vectors in memory.
+    /// This API materializes all deletion vectors in memory. Use
+    /// [`Self::deletion_vectors_stream`] to consume masks incrementally.
     pub async fn deletion_vectors(
         &self,
         session: &dyn Session,
     ) -> Result<Vec<DeletionVectorSelection>> {
+        let mut vectors: Vec<_> = self
+            .deletion_vectors_stream(session)
+            .await?
+            .try_collect()
+            .await?;
+        vectors.sort_unstable_by(|left, right| left.filepath.cmp(&right.filepath));
+        Ok(vectors)
+    }
+
+    /// Stream keep masks for files that have deletion vectors, in unspecified order.
+    ///
+    /// Masks are loaded and padded one file at a time as the stream is consumed. Dropping
+    /// the stream stops loading subsequent masks. An in-flight blocking read may finish.
+    /// The existing file selection and file-skipping predicate apply to this stream.
+    pub async fn deletion_vectors_stream(
+        &self,
+        session: &dyn Session,
+    ) -> Result<SendableDeletionVectorStream> {
         self.ensure_read_ready(session)?;
         let engine = DataFusionEngine::new_from_session(session);
 
@@ -661,18 +685,16 @@ impl DeltaScan {
             .as_ref()
             .is_some_and(|selection| selection.active_file_ids.is_empty())
         {
-            return Ok(Vec::new());
+            return Ok(Box::pin(futures::stream::empty()));
         }
 
         let stream = self.scan_metadata_stream(&scan_plan, engine.clone());
-        scan::replay_deletion_vectors(
+        Ok(scan::deletion_vector_stream(
             engine,
-            &scan_plan,
-            &self.config,
+            scan_plan.scan,
             stream,
-            resolved_file_selection.as_ref(),
-        )
-        .await
+            resolved_file_selection.map(|selection| selection.active_file_ids),
+        ))
     }
 
     fn scan_metadata_stream(
