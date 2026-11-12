@@ -1,7 +1,7 @@
 use arrow_schema::Schema;
 use datafusion::catalog::Session;
 use datafusion::common::{Result, ScalarValue};
-use datafusion::logical_expr::{ExprSchemable, LogicalPlan, LogicalPlanBuilder, col, when};
+use datafusion::logical_expr::{ExprSchemable, LogicalPlan, LogicalPlanBuilder, ident, when};
 use datafusion::prelude::DataFrame;
 use datafusion::prelude::{cast, lit};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
@@ -51,7 +51,7 @@ pub fn with_generated_columns(
         .schema()
         .fields()
         .iter()
-        .map(|f| col(f.name()))
+        .map(|f| ident(f.name()))
         .collect();
 
     for generated_col in generated_cols {
@@ -140,8 +140,8 @@ pub fn add_generated_columns(
 
         df = df.clone().with_column(
             generated_col.get_name(),
-            when(col(col_name).is_null(), generation_expr)
-                .otherwise(col(col_name))?
+            when(ident(col_name).is_null(), generation_expr)
+                .otherwise(ident(col_name))?
                 .cast_to(&((&generated_col.data_type).try_into_arrow()?), df.schema())?,
         )?
     }
@@ -164,6 +164,55 @@ mod tests {
 
     fn create_test_session() -> SessionState {
         SessionContext::new().state()
+    }
+
+    #[tokio::test]
+    async fn test_generated_columns_preserve_identifiers() -> DeltaResult<()> {
+        for (source_name, generated_name) in [
+            ("InputValue", "ComputedValue"),
+            ("input.value", "computed.value"),
+        ] {
+            let ctx = SessionContext::new();
+            let schema = Arc::new(Schema::new(vec![ArrowField::new(
+                source_name,
+                ArrowDataType::Int32,
+                false,
+            )]));
+            let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2]))])?;
+            let df = ctx.read_batch(batch)?;
+            let generated_cols = vec![GeneratedColumn::new(
+                generated_name,
+                &format!("\"{source_name}\" + 1"),
+                &KernelDataType::INTEGER,
+            )];
+            let table_schema = Schema::new(vec![
+                ArrowField::new(source_name, ArrowDataType::Int32, false),
+                ArrowField::new(generated_name, ArrowDataType::Int32, true),
+            ]);
+
+            let plan = with_generated_columns(
+                &ctx.state(),
+                df.clone().into_unoptimized_plan(),
+                &table_schema,
+                &generated_cols,
+            )?;
+            let batches = ctx.execute_logical_plan(plan).await?.collect().await?;
+            assert_eq!(batches[0].schema().field(0).name(), source_name);
+            assert_eq!(
+                batches[0].column_by_name(generated_name).unwrap().as_ref(),
+                &Int32Array::from(vec![2, 3])
+            );
+
+            let (df, missing) = add_missing_generated_columns(df, &generated_cols)?;
+            let batches = add_generated_columns(df, &generated_cols, &missing, &ctx.state())?
+                .collect()
+                .await?;
+            assert_eq!(
+                batches[0].column_by_name(generated_name).unwrap().as_ref(),
+                &Int32Array::from(vec![2, 3])
+            );
+        }
+        Ok(())
     }
 
     fn create_test_plan() -> LogicalPlan {
