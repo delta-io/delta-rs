@@ -659,6 +659,154 @@ pub(crate) fn object_store_path(table_root: &Url) -> DeltaResult<Path> {
     })
 }
 
+pub(crate) fn strip_url_sensitive_parts(url: &mut Url) {
+    if !matches!(url.scheme(), "abfs" | "abfss") {
+        let _ = url.set_username("");
+    }
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+}
+
+/// Resolves file references into the physical namespace of a table.
+///
+/// Local resolution performs filesystem I/O and must run on the blocking pool.
+#[derive(Clone, Debug)]
+pub(crate) struct TablePathResolver {
+    root: Url,
+    physical_root: Url,
+    native_local: bool,
+}
+
+impl TablePathResolver {
+    pub(crate) fn new(mut root: Url) -> DeltaResult<Self> {
+        root.set_query(None);
+        root.set_fragment(None);
+        if !root.path().ends_with('/') {
+            root.set_path(&format!("{}/", root.path()));
+        }
+        let (mut physical_root, native_local) = if root.scheme() == "file" {
+            match root.to_file_path() {
+                Ok(path) => (
+                    Url::from_directory_path(canonicalize_with_missing_suffix(&path)?).map_err(
+                        |_| {
+                            DeltaTableError::InvalidTableLocation(
+                                "Invalid canonical local table root".into(),
+                            )
+                        },
+                    )?,
+                    true,
+                ),
+                Err(()) => {
+                    debug!(
+                        "Preserving URI identity for a file URL without a native filesystem representation"
+                    );
+                    (root.clone(), false)
+                }
+            }
+        } else {
+            (root.clone(), false)
+        };
+        strip_url_sensitive_parts(&mut physical_root);
+        Ok(Self {
+            root,
+            physical_root,
+            native_local,
+        })
+    }
+
+    pub(crate) fn is_local(&self) -> bool {
+        self.native_local
+    }
+
+    pub(crate) fn resolve(&self, path: &str) -> DeltaResult<Option<Path>> {
+        if path.is_empty() {
+            return Err(DeltaTableError::InvalidTableLocation(
+                "Table file path is empty".into(),
+            ));
+        }
+        let mut file = self.root.join(path).map_err(|error| {
+            DeltaTableError::InvalidTableLocation(format!(
+                "Failed to resolve table file URI: {error}"
+            ))
+        })?;
+        strip_url_sensitive_parts(&mut file);
+        if self.is_local() && file.scheme() == "file" {
+            let path = file.to_file_path().map_err(|_| {
+                DeltaTableError::InvalidTableLocation("Invalid local file URL".into())
+            })?;
+            file = Url::from_file_path(canonicalize_with_missing_suffix(&path)?).map_err(|_| {
+                DeltaTableError::InvalidTableLocation("Invalid canonical local file URL".into())
+            })?;
+        }
+        let same_store = file.scheme() == self.physical_root.scheme()
+            && file.host_str() == self.physical_root.host_str()
+            && file.port_or_known_default() == self.physical_root.port_or_known_default()
+            && file.username() == self.physical_root.username();
+        match same_store
+            .then(|| self.physical_root.make_relative(&file))
+            .flatten()
+        {
+            Some(relative) if !relative.is_empty() && !relative.starts_with("../") => {
+                Ok(Some(Path::from_url_path(relative)?))
+            }
+            _ => {
+                debug!("Skipping a file reference outside the physical table root");
+                Ok(None)
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "datafusion"))]
+    pub(crate) fn file_id(&self, path: &str) -> DeltaResult<Option<String>> {
+        self.resolve(path)?
+            .map(|path| {
+                let encoded =
+                    crate::kernel::models::actions::serde_path::encode_path(path.as_ref());
+                self.root
+                    .join(&encoded)
+                    .map(|url| url.to_string())
+                    .map_err(|error| {
+                        DeltaTableError::InvalidTableLocation(format!(
+                            "Invalid table file identity: {error}"
+                        ))
+                    })
+            })
+            .transpose()
+    }
+}
+
+fn canonicalize_with_missing_suffix(path: &std::path::Path) -> DeltaResult<std::path::PathBuf> {
+    let mut current = path.to_path_buf();
+    let mut suffix = Vec::new();
+    loop {
+        match std::fs::canonicalize(&current) {
+            Ok(mut canonical) => {
+                if !suffix.is_empty() && !std::fs::metadata(&canonical)?.is_dir() {
+                    return Err(DeltaTableError::InvalidTableLocation(
+                        "Local file path has a non-directory ancestor".into(),
+                    ));
+                }
+                for component in suffix.into_iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok(canonical);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(component) = current.file_name().map(ToOwned::to_owned) else {
+                    return Err(error.into());
+                };
+                suffix.push(component);
+                if !current.pop() {
+                    return Err(error.into());
+                }
+                debug!("Resolving a missing local file through its existing ancestor");
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
 /// Join the given `root` [Url] with the [Path] to produce a URI (String) of the two together.
 ///
 /// This is largely a convenience function to help with the nuances of empty [Path] and file [Url]s
@@ -942,6 +1090,132 @@ pub(crate) mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[rstest::rstest]
+    #[case::root_credentials("reader:rootpass@", "")]
+    #[case::file_credentials("", "writer:filepass@")]
+    #[case::different_credentials("reader:rootpass@", "writer:filepass@")]
+    #[test]
+    fn table_paths_ignore_authentication_userinfo(
+        #[case] root_userinfo: &str,
+        #[case] file_userinfo: &str,
+    ) -> DeltaResult<()> {
+        let root = Url::parse(&format!(
+            "https://{root_userinfo}example.com:8443/table/?token=root#fragment"
+        ))
+        .unwrap();
+        let resolver = TablePathResolver::new(root)?;
+        let file = format!(
+            "https://{file_userinfo}example.com:8443/table/part%20%2520.parquet?token=file#fragment"
+        );
+        assert_eq!(
+            resolver.resolve(&file)?,
+            Some(Path::parse("part %20.parquet")?)
+        );
+        assert_eq!(
+            resolver.file_id(&file)?,
+            resolver.file_id("part%20%2520.parquet")?
+        );
+        for outside in [
+            "https://example.net:8443/table/part.parquet",
+            "https://example.com:8444/table/part.parquet",
+            "http://example.com:8443/table/part.parquet",
+            "https://example.com:8443/other/part.parquet",
+            "https://example.com:8443/table-suffix/part.parquet",
+        ] {
+            assert_eq!(resolver.resolve(outside)?, None);
+        }
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[test]
+    fn table_paths_preserve_abfs_container_identity(
+        #[values("abfs", "abfss")] scheme: &str,
+    ) -> DeltaResult<()> {
+        let resolver = TablePathResolver::new(
+            Url::parse(&format!(
+                "{scheme}://left:rootpass@account.dfs.core.windows.net/table/"
+            ))
+            .unwrap(),
+        )?;
+        assert_eq!(
+            resolver.resolve(&format!(
+                "{scheme}://left:filepass@account.dfs.core.windows.net/table/part.parquet"
+            ))?,
+            Some(Path::from("part.parquet"))
+        );
+        assert_eq!(
+            resolver.resolve(&format!(
+                "{scheme}://right@account.dfs.core.windows.net/table/part.parquet"
+            ))?,
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn local_table_paths_preserve_encoding_and_missing_suffixes() -> DeltaResult<()> {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("table dir");
+        std::fs::create_dir_all(&root)?;
+        let file = root.join("literal %20 # name.parquet");
+        std::fs::write(&file, b"data")?;
+        let resolver = TablePathResolver::new(Url::from_directory_path(&root).unwrap())?;
+        let encoded =
+            crate::kernel::models::actions::serde_path::encode_path("literal %20 # name.parquet");
+        assert_eq!(
+            resolver.resolve(&encoded)?,
+            Some(Path::parse("literal %20 # name.parquet")?)
+        );
+        assert_eq!(
+            resolver.resolve("new%20dir/missing%2520.parquet")?,
+            Some(Path::parse("new dir/missing%20.parquet")?),
+        );
+        let external = directory.path().join("external.parquet");
+        std::fs::write(&external, b"external")?;
+        assert_eq!(
+            resolver.resolve(Url::from_file_path(external).unwrap().as_str())?,
+            None
+        );
+        assert!(
+            resolver
+                .resolve(&format!("{encoded}/child.parquet"))
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_table_paths_resolve_aliases_before_containment() -> DeltaResult<()> {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("table");
+        std::fs::create_dir_all(&root)?;
+        std::fs::write(root.join("part.parquet"), b"data")?;
+        let alias = directory.path().join("alias");
+        std::os::unix::fs::symlink(&root, &alias)?;
+        let alias_url = Url::from_directory_path(&alias).unwrap();
+        let resolver = TablePathResolver::new(Url::from_directory_path(&root).unwrap())?;
+        assert_eq!(
+            resolver.resolve(alias_url.join("part.parquet").unwrap().as_str())?,
+            Some(Path::from("part.parquet"))
+        );
+        assert_eq!(
+            resolver.file_id(alias_url.join("part.parquet").unwrap().as_str())?,
+            resolver.file_id("part.parquet")?,
+        );
+        assert_eq!(
+            resolver.resolve(alias_url.join("missing/part.parquet").unwrap().as_str())?,
+            Some(Path::from("missing/part.parquet")),
+        );
+        let alias_root = TablePathResolver::new(alias_url)?;
+        assert_eq!(
+            alias_root.resolve("part.parquet")?,
+            Some(Path::from("part.parquet"))
+        );
+        Ok(())
+    }
 
     #[test]
     fn to_uri_local_paths() {

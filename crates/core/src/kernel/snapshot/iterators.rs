@@ -127,7 +127,6 @@ impl LogicalFileView {
     }
 
     /// Returns the raw file path as stored in the log, without URL decoding.
-    #[cfg(any(test, feature = "datafusion"))]
     pub(crate) fn path_raw(&self) -> &str {
         get_string_value(
             self.files
@@ -332,22 +331,7 @@ impl LogicalFileView {
             .files
             .column_by_name(FIELD_NAME_DELETION_VECTOR)
             .and_then(|col| col.as_struct_opt())?;
-        if dv_col.null_count() == dv_col.len() {
-            return None;
-        }
-        dv_col
-            .is_valid(self.index)
-            .then(|| {
-                let storage_col =
-                    dv_col.column(*DV_FIELD_INDICES.get(DV_FIELD_STORAGE_TYPE).unwrap());
-                storage_col
-                    .is_valid(self.index)
-                    .then_some(DeletionVectorView {
-                        data: dv_col,
-                        index: self.index,
-                    })
-            })
-            .flatten()
+        DeletionVectorView::new(dv_col, self.index)
     }
 
     /// Internal API
@@ -503,7 +487,12 @@ struct DeletionVectorView<'a> {
     index: usize,
 }
 
-impl DeletionVectorView<'_> {
+impl<'a> DeletionVectorView<'a> {
+    fn new(data: &'a StructArray, index: usize) -> Option<Self> {
+        let storage = data.column_by_name(DV_FIELD_STORAGE_TYPE)?;
+        (data.is_valid(index) && storage.is_valid(index)).then_some(Self { data, index })
+    }
+
     /// Converts this view into a DeletionVectorDescriptor.
     fn descriptor(&self) -> DeletionVectorDescriptor {
         DeletionVectorDescriptor {

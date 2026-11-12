@@ -53,7 +53,7 @@ use crate::delta_datafusion::engine::DataFusionEngine;
 use crate::delta_datafusion::table_provider::TableProviderBuilder;
 use crate::kernel::transaction::{PROTOCOL, TransactionError};
 use crate::kernel::{Add, EagerSnapshot, SendableScanMetadataStream, Snapshot};
-use crate::logstore::LogStoreRef;
+use crate::logstore::{LogStoreRef, strip_url_sensitive_parts};
 use crate::protocol::SaveMode;
 use crate::table::normalize_table_url;
 
@@ -94,7 +94,8 @@ pub enum MissingSelectedFilePolicy {
 ///
 /// Absolute URLs must be under the table root. Paths outside the table root are rejected during
 /// scan planning with redacted error output.
-/// Username, password, query, and fragment are stripped from URLs before storage.
+/// Authentication userinfo, query, and fragment are stripped from URLs before storage
+/// and containment checks. ABFS container usernames remain part of the storage identity.
 ///
 /// Selections with paths are resolved against snapshot metadata before the data scan. Each scan
 /// with a file selection requires that metadata pass.
@@ -110,10 +111,10 @@ pub struct FileSelection {
 /// that input has been normalized and compared with active files from Delta Kernel scan metadata.
 #[derive(Clone, Debug)]
 struct ResolvedFileSelection {
-    /// Canonical file IDs for selected files that are active in the scan snapshot.
+    /// Snapshot URL identities for selected files that are active in the scan snapshot.
     ///
-    /// These values are full file URLs produced from snapshot metadata. They are used to filter
-    /// Delta Kernel scan metadata before building the DataFusion scan.
+    /// Requests are matched by canonical physical identity, but these values retain the
+    /// snapshot URLs used to filter Delta Kernel scan metadata before building the scan.
     active_file_ids: HashSet<String>,
     /// Canonical file IDs requested by the user but not active in the scan snapshot.
     ///
@@ -128,6 +129,7 @@ impl FileSelection {
     /// Select files from Add actions.
     ///
     /// Only the path is used. File metadata is loaded from the scan snapshot.
+    /// Absolute URL authorities are preserved; credentials, query and fragment are stripped.
     pub fn from_adds(adds: impl IntoIterator<Item = Add>) -> Self {
         Self {
             paths: adds.into_iter().map(add_path_for_selection).collect(),
@@ -138,7 +140,8 @@ impl FileSelection {
     /// Select files by path.
     ///
     /// Paths may be relative to the table root or absolute URLs under the same table root.
-    /// Username, password, query, and fragment are stripped from URLs.
+    /// Credentials, query, and fragment are stripped from URLs. ABFS container names
+    /// in the username position are retained because they identify the storage namespace.
     /// Path validation happens when a scan is planned against a concrete table root.
     pub fn from_file_paths(paths: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
@@ -162,10 +165,16 @@ impl FileSelection {
         self.paths
             .iter()
             .map(|path| {
-                normalize_path_as_file_id_with_table_root(
+                let file_url = normalize_path_as_file_url_with_table_root(
                     path,
                     &table_root_url,
                     "selected file path",
+                )?;
+                validate_selected_file_url_under_table_root(
+                    &file_url,
+                    &table_root_url,
+                    "selected file path",
+                    path,
                 )
             })
             .collect()
@@ -228,12 +237,34 @@ impl ResolvedFileSelection {
 }
 
 fn add_path_for_selection(add: Add) -> String {
-    let path = add.path;
-    if let Ok(mut url) = Url::parse(&path) {
-        strip_url_sensitive_parts(&mut url);
-        url.to_string()
-    } else {
-        crate::kernel::models::actions::serde_path::encode_path(&path)
+    match Url::parse(&add.path) {
+        Ok(mut url) => {
+            let (_, after_scheme) = add
+                .path
+                .split_once(':')
+                .expect("A parsed URL has a scheme delimiter");
+            let raw_path = if let Some(authority) = after_scheme.strip_prefix("//") {
+                let path_start = authority
+                    .find(['/', '\\', '?', '#'])
+                    .unwrap_or(authority.len());
+                &authority[path_start..]
+            } else {
+                after_scheme
+            };
+            let raw_path = raw_path.split(['?', '#']).next().unwrap_or("");
+            // Add paths are decoded, so encode the original path without interpreting literal '%'.
+            url.set_path(&crate::kernel::models::actions::serde_path::encode_path(
+                raw_path,
+            ));
+            strip_url_sensitive_parts(&mut url);
+            url.to_string()
+        }
+        Err(_) if add.path.contains("://") => {
+            crate::kernel::models::actions::serde_path::encode_path(
+                &strip_unparsed_url_sensitive_parts(&add.path),
+            )
+        }
+        Err(_) => crate::kernel::models::actions::serde_path::encode_path(&add.path),
     }
 }
 
@@ -273,22 +304,6 @@ fn canonical_local_table_root_url(root: &url::Url) -> Option<url::Url> {
     let canonical_root = Url::from_directory_path(canonical_path).ok()?;
 
     Some(ensure_table_root_url(&normalize_table_url(&canonical_root)))
-}
-
-fn canonical_local_file_url(url: &url::Url) -> Option<url::Url> {
-    if url.scheme() != "file" {
-        return None;
-    }
-    let path = url.to_file_path().ok()?;
-    let canonical_path = std::fs::canonicalize(path).ok()?;
-    Url::from_file_path(canonical_path).ok()
-}
-
-fn strip_url_sensitive_parts(url: &mut Url) {
-    let _ = url.set_username("");
-    let _ = url.set_password(None);
-    url.set_query(None);
-    url.set_fragment(None);
 }
 
 pub(crate) fn redact_url_for_error(url: &Url) -> String {
@@ -333,11 +348,11 @@ fn strip_unparsed_url_sensitive_parts(urlish: &str) -> String {
     )
 }
 
-fn normalize_path_as_file_id_with_table_root(
+fn normalize_path_as_file_url_with_table_root(
     path: &str,
     table_root_url: &Url,
     context: &'static str,
-) -> crate::DeltaResult<String> {
+) -> crate::DeltaResult<Url> {
     debug_assert!(
         table_root_url.path().ends_with('/'),
         "table_root_url must end with '/' before normalization"
@@ -349,7 +364,7 @@ fn normalize_path_as_file_id_with_table_root(
         )));
     }
 
-    let file_url = Url::parse(path)
+    Url::parse(path)
         .or_else(|_| table_root_url.join(path))
         .map_err(|e| {
             DeltaTableError::InvalidTableLocation(format!(
@@ -357,9 +372,7 @@ fn normalize_path_as_file_id_with_table_root(
                 redact_url_str_for_error(path),
                 redact_url_for_error(table_root_url),
             ))
-        })?;
-
-    validate_selected_file_url_under_table_root(&file_url, table_root_url, context, path)
+        })
 }
 
 fn validate_selected_file_url_under_table_root(
@@ -368,68 +381,28 @@ fn validate_selected_file_url_under_table_root(
     context: &'static str,
     original: &str,
 ) -> crate::DeltaResult<String> {
-    let mut original_root_identity = ensure_table_root_url(&normalize_table_url(table_root_url));
-    strip_url_sensitive_parts(&mut original_root_identity);
-    let canonical_root_identity = canonical_table_root_identity(table_root_url);
-    let root_identities = if canonical_root_identity == original_root_identity {
-        vec![original_root_identity]
-    } else {
-        vec![original_root_identity, canonical_root_identity]
-    };
-
-    let mut file_identity = file_url.clone();
-    strip_url_sensitive_parts(&mut file_identity);
-    let mut file_identities = vec![file_identity.clone()];
-    if let Some(canonical_file_identity) = canonical_local_file_url(&file_identity)
-        && canonical_file_identity != file_identity
-    {
-        file_identities.push(canonical_file_identity);
-    }
-
-    let relative_path = file_identities
-        .iter()
-        .flat_map(|file_identity| {
-            root_identities
-                .iter()
-                .map(move |root_identity| (file_identity, root_identity))
-        })
-        .find_map(|(file_identity, root_identity)| {
-            let same_store = file_identity.scheme() == root_identity.scheme()
-                && file_identity.host_str() == root_identity.host_str()
-                && file_identity.port_or_known_default() == root_identity.port_or_known_default();
-            same_store
-                .then(|| file_identity.path().strip_prefix(root_identity.path()))
-                .flatten()
-        })
+    crate::logstore::TablePathResolver::new(table_root_url.clone())?
+        .file_id(file_url.as_str())?
         .ok_or_else(|| {
             DeltaTableError::InvalidTableLocation(format!(
                 "{context} '{}' is outside table root '{}'",
                 redact_url_str_for_error(original),
                 redact_url_for_error(&canonical_table_root_identity(table_root_url))
             ))
-        })?;
-
-    let mut normalized = table_root_url.join(relative_path).map_err(|err| {
-        DeltaTableError::InvalidTableLocation(format!(
-            "Failed to normalize {context} '{}' against '{}': {err}",
-            redact_url_str_for_error(original),
-            redact_url_for_error(table_root_url),
-        ))
-    })?;
-
-    // File IDs do not carry query or fragment parts from the input table root.
-    normalized.set_query(None);
-    normalized.set_fragment(None);
-    Ok(normalized.to_string())
+        })
 }
 
+/// Builds the snapshot URL used by scan file-id columns, preserving log-path aliases.
+///
+/// Physical identity resolution belongs to file selection, DV preparation and VACUUM.
 pub(crate) fn normalize_path_as_file_id(
     path: &str,
     table_root_url: &Url,
     context: &'static str,
 ) -> crate::DeltaResult<String> {
     let table_root_url = ensure_table_root_url(table_root_url);
-    normalize_path_as_file_id_with_table_root(path, &table_root_url, context)
+    normalize_path_as_file_url_with_table_root(path, &table_root_url, context)
+        .map(|url| url.to_string())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -493,6 +466,8 @@ pub struct DeltaScan {
     /// Provider/public schema, including configured file id capability when enabled.
     full_schema: SchemaRef,
     row_index_column: Option<String>,
+    #[serde(default)]
+    pub(super) physical_row_index: bool,
     #[serde(skip)]
     file_skipping_predicate: Option<Vec<Expr>>,
     #[serde(skip)]
@@ -538,6 +513,7 @@ impl DeltaScan {
             scan_schema,
             full_schema,
             row_index_column: None,
+            physical_row_index: false,
             file_skipping_predicate: None,
             log_store: None,
             file_selection: None,
@@ -736,7 +712,7 @@ impl TableProvider for DeltaScan {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.ensure_read_ready(session)?;
         let engine = DataFusionEngine::new_from_session(session);
-        let contract = ProjectedScanContract::try_new(
+        let mut contract = ProjectedScanContract::try_new(
             self.scan_schema.clone(),
             self.full_schema.clone(),
             &self.config,
@@ -744,6 +720,7 @@ impl TableProvider for DeltaScan {
             projection,
             filters,
         )?;
+        contract.physical_row_index = self.physical_row_index && contract.retain_row_index;
         let scan_plan = KernelScanPlan::try_new_with_contract(
             self.snapshot.snapshot(),
             contract,
@@ -2682,6 +2659,201 @@ mod tests {
             assert_eq!(file_id, expected);
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn snapshot_file_ids_do_not_require_filesystem_resolution() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let parent = directory.path().join("not-a-directory");
+        std::fs::write(&parent, b"data")?;
+        let root = Url::from_directory_path(parent.join("table")).unwrap();
+        let path = "alias/part%20%2520name.parquet";
+        assert_eq!(
+            normalize_path_as_file_id(path, &root, "snapshot file")?,
+            root.join(path)?.to_string()
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_and_selected_file_ids_use_distinct_alias_identities() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let root_path = directory.path().join("table");
+        std::fs::create_dir_all(root_path.join("data"))?;
+        std::os::unix::fs::symlink(root_path.join("data"), root_path.join("alias"))?;
+        let root = Url::from_directory_path(root_path).unwrap();
+        let path = "alias/part%20%2520name.parquet";
+        assert_eq!(
+            normalize_path_as_file_id(path, &root, "snapshot file")?,
+            root.join(path)?.to_string()
+        );
+        assert_eq!(
+            FileSelection::from_file_paths([path]).resolve_input_file_ids(&root)?,
+            HashSet::from([root.join("data/part%20%2520name.parquet")?.to_string()])
+        );
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::http("http", 8080)]
+    #[case::https("https", 8443)]
+    #[test]
+    fn add_selection_preserves_ipv6_authorities_and_redacts_credentials(
+        #[case] scheme: &str,
+        #[case] port: u16,
+        #[values(false, true)] credentials: bool,
+    ) -> TestResult {
+        let userinfo = if credentials {
+            "urluser:urlpassword@"
+        } else {
+            ""
+        };
+        let add = make_test_add(
+            format!(
+                "{scheme}://{userinfo}[2001:db8::1]:{port}/table dir%/part %20[raw].parquet?token=urltoken#frag"
+            ),
+            &[],
+            0,
+        );
+        let selection = FileSelection::from_adds([add]);
+        let serialized = serde_json::to_string(&selection)?;
+        for text in [&serialized, &format!("{selection:?}")] {
+            for forbidden in ["urluser", "urlpassword", "urltoken", "frag"] {
+                assert!(!text.contains(forbidden), "selection contains {forbidden}");
+            }
+        }
+        let root = Url::parse(&format!("{scheme}://[2001:db8::1]:{port}/table%20dir%25/"))?;
+        let expected = root.join("part%20%2520%5Braw%5D.parquet")?.to_string();
+        assert_eq!(selection.paths, vec![expected.clone()]);
+        let restored: FileSelection = serde_json::from_str(&serialized)?;
+        assert_eq!(
+            restored.resolve_input_file_ids(&root)?,
+            HashSet::from([expected])
+        );
+        let other = Url::parse(&format!("{scheme}://[2001:db8::2]:{port}/table%20dir%25/"))?;
+        assert!(restored.resolve_input_file_ids(&other).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn add_selection_redacts_malformed_url_authorities() -> TestResult {
+        let add = make_test_add(
+            "https://urluser:urlpassword@[invalid]/table/file.parquet?token=urltoken#frag",
+            &[],
+            0,
+        );
+        let selection = FileSelection::from_adds([add]);
+        let serialized = serde_json::to_string(&selection)?;
+        for text in [&serialized, &format!("{selection:?}")] {
+            for forbidden in ["urluser", "urlpassword", "urltoken", "frag"] {
+                assert!(!text.contains(forbidden), "selection contains {forbidden}");
+            }
+        }
+        assert!(
+            selection
+                .resolve_input_file_ids(&Url::parse("https://example.com/table/")?)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::abfs("abfs")]
+    #[case::abfss("abfss")]
+    #[test]
+    fn add_selection_preserves_abfs_container_authorities(#[case] scheme: &str) -> TestResult {
+        let add = make_test_add(
+            format!(
+                "{scheme}://left:urlpassword@account.dfs.core.windows.net/table/part%20 name.parquet?token=urltoken#frag"
+            ),
+            &[],
+            0,
+        );
+        let selection = FileSelection::from_adds([add]);
+        let root = Url::parse(&format!(
+            "{scheme}://left@account.dfs.core.windows.net/table/"
+        ))?;
+        assert_eq!(
+            selection.resolve_input_file_ids(&root)?,
+            HashSet::from([root.join("part%2520%20name.parquet")?.to_string()])
+        );
+        let serialized = serde_json::to_string(&selection)?;
+        for forbidden in ["urlpassword", "urltoken", "frag"] {
+            assert!(!serialized.contains(forbidden));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn add_selection_preserves_literal_percent_escapes() -> TestResult {
+        for (path, expected) in [
+            (
+                "file:///table/literal%20 name.parquet",
+                "file:///table/literal%2520%20name.parquet",
+            ),
+            (
+                "literal%20 name?#.parquet",
+                "file:///table/literal%2520%20name%3F%23.parquet",
+            ),
+        ] {
+            let add = crate::test_utils::make_test_add(path, &[], 0);
+            let selection = FileSelection::from_adds([add]);
+            let ids = selection.resolve_input_file_ids(&Url::parse("file:///table/")?)?;
+            assert_eq!(ids, HashSet::from([expected.to_string()]));
+        }
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::https("https://reader:rootpass@example.com/table/")]
+    #[case::ipv6("https://reader:rootpass@[2001:db8::1]:8443/table/")]
+    #[case::abfs("abfs://left:rootpass@account.dfs.core.windows.net/table/")]
+    #[case::abfss("abfss://left:rootpass@account.dfs.core.windows.net/table/")]
+    #[test]
+    fn file_selection_accepts_authenticated_table_roots(#[case] root: &str) -> TestResult {
+        let root = Url::parse(root)?;
+        let encoded_path = "part%20%2520.parquet";
+        let absolute = root.join(encoded_path)?.to_string();
+        let decoded = percent_encoding::percent_decode_str(&absolute)
+            .decode_utf8()?
+            .into_owned();
+        for selection in [
+            FileSelection::from_file_paths([absolute]),
+            FileSelection::from_file_paths([encoded_path]),
+            FileSelection::from_adds([make_test_add(decoded, &[], 0)]),
+            FileSelection::from_adds([make_test_add("part %20.parquet", &[], 0)]),
+        ] {
+            let serialized = serde_json::to_string(&selection)?;
+            assert!(!serialized.contains("rootpass"));
+            if matches!(root.scheme(), "abfs" | "abfss") {
+                assert!(
+                    !selection.paths[0].starts_with(root.scheme()) || serialized.contains("left@")
+                );
+            } else {
+                assert!(!serialized.contains("reader"));
+            }
+            let restored: FileSelection = serde_json::from_str(&serialized)?;
+            assert_eq!(
+                restored.resolve_input_file_ids(&root)?,
+                HashSet::from([root.join(encoded_path)?.to_string()])
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn abfs_selection_preserves_container_identity() -> TestResult {
+        let root = Url::parse("abfss://left@account.dfs.core.windows.net/table/")?;
+        let own = FileSelection::from_file_paths([
+            "abfss://left@account.dfs.core.windows.net/table/file.parquet",
+        ]);
+        assert_eq!(own.resolve_input_file_ids(&root)?.len(), 1);
+        let other = FileSelection::from_file_paths([
+            "abfss://right@account.dfs.core.windows.net/table/file.parquet",
+        ]);
+        assert!(other.resolve_input_file_ids(&root).is_err());
         Ok(())
     }
 

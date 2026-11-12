@@ -8,6 +8,9 @@
 //!
 //! Bookkeeping is maintained to determine which files have modifications, so
 //! they can be removed from the delta log.
+//!
+//! DV mode collects changed row positions and forwards batches without per-file buffering.
+//! Downstream duplicate validation and filtering decide which rows are written.
 
 use std::{
     collections::HashMap,
@@ -16,9 +19,9 @@ use std::{
     task::{Context, Poll},
 };
 
-use arrow::array::{Array, ArrayRef, RecordBatch, builder::UInt64Builder};
+use arrow::array::{Array, ArrayRef, RecordBatch, UInt64Array, builder::UInt64Builder};
 use arrow::datatypes::SchemaRef;
-use dashmap::DashSet;
+use dashmap::{DashMap, DashSet};
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{DataFusionError, Result as DataFusionResult};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
@@ -29,14 +32,19 @@ use datafusion::physical_plan::{
     SendableRecordBatchStream, apply_expression_roots,
 };
 use futures::{Stream, StreamExt};
+use roaring::RoaringTreemap;
 
 use crate::{
     DeltaTableError,
     delta_datafusion::get_path_column,
-    operations::merge::{TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_UPDATE_COLUMN},
+    operations::merge::{
+        TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_PHYSICAL_ROW_INDEX_COLUMN,
+        TARGET_UPDATE_COLUMN,
+    },
 };
 
 pub(crate) type BarrierSurvivorSet = Arc<DashSet<String>>;
+pub(crate) type DeletedRows = Arc<DashMap<String, RoaringTreemap>>;
 
 #[derive(Debug)]
 /// Physical Node for the MergeBarrier
@@ -47,6 +55,7 @@ pub struct MergeBarrierExec {
     file_column: Arc<String>,
     survivors: BarrierSurvivorSet,
     expr: Arc<dyn PhysicalExpr>,
+    deleted_rows: Option<DeletedRows>,
 }
 
 impl MergeBarrierExec {
@@ -61,7 +70,17 @@ impl MergeBarrierExec {
             file_column,
             survivors: Arc::new(DashSet::new()),
             expr,
+            deleted_rows: None,
         }
+    }
+
+    pub(super) fn with_deletion_vectors(mut self, enabled: bool) -> Self {
+        self.deleted_rows = enabled.then(|| Arc::new(DashMap::new()));
+        self
+    }
+
+    pub(super) fn deleted_rows(&self) -> Option<DeletedRows> {
+        self.deleted_rows.clone()
     }
 
     /// Files that have modifications to them and need to removed from the delta log
@@ -107,11 +126,13 @@ impl ExecutionPlan for MergeBarrierExec {
                 "MergeBarrierExec wrong number of children".to_string(),
             ));
         }
-        Ok(Arc::new(MergeBarrierExec::new(
+        let mut replacement = MergeBarrierExec::new(
             children[0].clone(),
             self.file_column.clone(),
             self.expr.clone(),
-        )))
+        );
+        replacement.deleted_rows = self.deleted_rows.clone();
+        Ok(Arc::new(replacement))
     }
 
     fn with_new_children(
@@ -135,6 +156,7 @@ impl ExecutionPlan for MergeBarrierExec {
             self.schema(),
             self.survivors.clone(),
             self.file_column.clone(),
+            self.deleted_rows.clone(),
         )))
     }
 
@@ -227,6 +249,7 @@ struct MergeBarrierStream {
     survivors: BarrierSurvivorSet,
     map: HashMap<String, usize>,
     file_partitions: Vec<MergeBarrierPartition>,
+    deleted_rows: Option<DeletedRows>,
 }
 
 impl MergeBarrierStream {
@@ -235,6 +258,7 @@ impl MergeBarrierStream {
         schema: SchemaRef,
         survivors: BarrierSurvivorSet,
         file_column: Arc<String>,
+        deleted_rows: Option<DeletedRows>,
     ) -> Self {
         // Always allocate for a null bucket at index 0;
         let file_partitions = vec![MergeBarrierPartition::new(None)];
@@ -247,8 +271,57 @@ impl MergeBarrierStream {
             survivors,
             file_partitions,
             map: HashMap::new(),
+            deleted_rows,
         }
     }
+}
+
+fn collect_deleted_rows(
+    batch: &RecordBatch,
+    file_column: &str,
+    deleted_rows: &DeletedRows,
+) -> DataFusionResult<()> {
+    let files = get_path_column(batch, file_column)?;
+    let ordinals = batch
+        .column_by_name(TARGET_PHYSICAL_ROW_INDEX_COLUMN)
+        .and_then(|column| column.as_any().downcast_ref::<UInt64Array>())
+        .ok_or_else(|| {
+            DataFusionError::Execution("DV MERGE requires physical UInt64 row indexes".into())
+        })?;
+    let updates = batch.column_by_name(TARGET_UPDATE_COLUMN).ok_or_else(|| {
+        DataFusionError::Execution("DV MERGE requires the target update marker".into())
+    })?;
+    let deletes = batch.column_by_name(TARGET_DELETE_COLUMN).ok_or_else(|| {
+        DataFusionError::Execution("DV MERGE requires the target delete marker".into())
+    })?;
+    let mut batch_deletions: HashMap<&str, RoaringTreemap> = HashMap::new();
+    for (row, key) in files.keys().iter().enumerate() {
+        if !updates.is_null(row) && !deletes.is_null(row) {
+            continue;
+        }
+        let key = key.ok_or_else(|| {
+            DataFusionError::Execution("Changed target row has no physical file".into())
+        })? as usize;
+        if files.values().is_null(key) || ordinals.is_null(row) {
+            return Err(DataFusionError::Execution(
+                "Changed target row has no physical file or row index".into(),
+            ));
+        }
+        let ordinal = ordinals.value(row);
+        if ordinal > i64::MAX as u64 {
+            return Err(DataFusionError::Execution(format!(
+                "DV row index {ordinal} exceeds i64::MAX"
+            )));
+        }
+        batch_deletions
+            .entry(files.values().value(key))
+            .or_default()
+            .insert(ordinal);
+    }
+    for (path, rows) in batch_deletions {
+        *deleted_rows.entry(path.to_owned()).or_default() |= rows;
+    }
+    Ok(())
 }
 
 fn get_count(batch: &RecordBatch, column: &str) -> DataFusionResult<usize> {
@@ -271,6 +344,15 @@ impl Stream for MergeBarrierStream {
                 State::Feed => {
                     match self.input.poll_next_unpin(cx) {
                         Poll::Ready(Some(Ok(batch))) => {
+                            if let Some(deleted_rows) = &self.deleted_rows {
+                                if let Err(error) =
+                                    collect_deleted_rows(&batch, &self.file_column, deleted_rows)
+                                {
+                                    self.state = State::Abort;
+                                    return Poll::Ready(Some(Err(error)));
+                                }
+                                return Poll::Ready(Some(Ok(batch)));
+                            }
                             let file_dictionary = get_path_column(&batch, &self.file_column)?;
 
                             // For each record batch, the key for a file path is not stable.
@@ -424,6 +506,7 @@ pub(crate) struct MergeBarrier {
     pub input: LogicalPlan,
     pub expr: Expr,
     pub file_column: Arc<String>,
+    pub deletion_vectors: bool,
 }
 
 impl UserDefinedLogicalNodeCore for MergeBarrier {
@@ -456,6 +539,7 @@ impl UserDefinedLogicalNodeCore for MergeBarrier {
             input: inputs[0].clone(),
             file_column: self.file_column.clone(),
             expr: exprs[0].clone(),
+            deletion_vectors: self.deletion_vectors,
         })
     }
 }
@@ -480,17 +564,19 @@ pub(crate) fn find_node<T: ExecutionPlan>(
 
 #[cfg(test)]
 mod tests {
-    use super::BarrierSurvivorSet;
+    use super::{BarrierSurvivorSet, MergeBarrierStream, collect_deleted_rows};
     use crate::operations::merge::MergeBarrierExec;
+    use crate::operations::merge::TARGET_PHYSICAL_ROW_INDEX_COLUMN;
     use crate::operations::merge::{
         TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_UPDATE_COLUMN,
     };
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow_array::RecordBatch;
     use arrow_array::StringArray;
-    use arrow_array::{DictionaryArray, UInt16Array};
+    use arrow_array::{BooleanArray, DictionaryArray, UInt16Array, UInt64Array};
     use arrow_schema::DataType as ArrowDataType;
     use arrow_schema::Field;
+    use dashmap::DashMap;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::execution::TaskContext;
@@ -498,8 +584,197 @@ mod tests {
     use datafusion::physical_plan::ExecutionPlan;
     #[allow(deprecated)]
     use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
-    use futures::StreamExt;
+    use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+    use futures::{Stream, StreamExt};
+    use std::pin::Pin;
     use std::sync::Arc;
+    use std::task::{Context, Poll};
+
+    fn deletion_batch(
+        paths: Vec<Option<&str>>,
+        ordinals: Vec<Option<u64>>,
+        updates: Vec<Option<bool>>,
+    ) -> RecordBatch {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new(
+                "__delta_rs_path",
+                ArrowDataType::Dictionary(ArrowDataType::UInt16.into(), ArrowDataType::Utf8.into()),
+                true,
+            ),
+            Field::new(
+                TARGET_PHYSICAL_ROW_INDEX_COLUMN,
+                ArrowDataType::UInt64,
+                true,
+            ),
+            Field::new(TARGET_UPDATE_COLUMN, ArrowDataType::Boolean, true),
+            Field::new(TARGET_DELETE_COLUMN, ArrowDataType::Boolean, true),
+            Field::new(TARGET_INSERT_COLUMN, ArrowDataType::Boolean, true),
+        ]));
+        let mut dictionary =
+            arrow_array::builder::StringDictionaryBuilder::<arrow::datatypes::UInt16Type>::new();
+        for path in paths {
+            match path {
+                Some(path) => {
+                    dictionary.append(path).unwrap();
+                }
+                None => dictionary.append_null(),
+            }
+        }
+        let count = ordinals.len();
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(dictionary.finish()),
+                Arc::new(UInt64Array::from(ordinals)),
+                Arc::new(BooleanArray::from(updates)),
+                Arc::new(BooleanArray::from(vec![false; count])),
+                Arc::new(BooleanArray::from(vec![false; count])),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn deleted_rows_preserve_physical_indexes_and_dictionary_identity() {
+        let deleted = Arc::new(DashMap::new());
+        collect_deleted_rows(
+            &deletion_batch(
+                vec![Some("a"), Some("b"), Some("a"), None],
+                vec![Some(0), Some(7), Some(0), None],
+                vec![None, None, None, Some(false)],
+            ),
+            "__delta_rs_path",
+            &deleted,
+        )
+        .unwrap();
+        collect_deleted_rows(
+            &deletion_batch(
+                vec![Some("b"), Some("a")],
+                vec![Some(9), Some(3)],
+                vec![None, None],
+            ),
+            "__delta_rs_path",
+            &deleted,
+        )
+        .unwrap();
+        assert_eq!(
+            deleted.get("a").unwrap().iter().collect::<Vec<_>>(),
+            vec![0, 3]
+        );
+        assert_eq!(
+            deleted.get("b").unwrap().iter().collect::<Vec<_>>(),
+            vec![7, 9]
+        );
+    }
+
+    #[rstest::rstest]
+    #[case(None, Some(1), "has no physical file")]
+    #[case(Some("a"), None, "no physical file or row index")]
+    #[case(Some("a"), Some(i64::MAX as u64 + 1), "exceeds i64::MAX")]
+    fn invalid_changed_row_does_not_partially_update_deleted_rows(
+        #[case] file: Option<&str>,
+        #[case] position: Option<u64>,
+        #[case] message: &str,
+    ) {
+        let deleted = Arc::new(DashMap::new());
+        let batch = deletion_batch(
+            vec![Some("a"), file],
+            vec![Some(1), position],
+            vec![None, None],
+        );
+        let error = collect_deleted_rows(&batch, "__delta_rs_path", &deleted).unwrap_err();
+        assert!(error.to_string().contains(message));
+        assert!(deleted.is_empty());
+    }
+
+    #[test]
+    fn dv_stream_returns_batches_without_buffering_untouched_files() {
+        let paths: Vec<_> = (0..64)
+            .map(|index| format!("file-{index}.parquet"))
+            .collect();
+        let batches: Vec<_> = paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                deletion_batch(
+                    vec![Some(path)],
+                    vec![Some(7)],
+                    vec![if index == paths.len() - 1 {
+                        None
+                    } else {
+                        Some(false)
+                    }],
+                )
+            })
+            .collect();
+        let schema = batches[0].schema();
+        let input = futures::stream::iter(batches.clone().into_iter().map(Ok))
+            .chain(futures::stream::pending());
+        let input = Box::pin(RecordBatchStreamAdapter::new(schema.clone(), input));
+        let deleted_rows = Arc::new(DashMap::new());
+        let mut stream = MergeBarrierStream::new(
+            input,
+            schema,
+            BarrierSurvivorSet::default(),
+            Arc::new("__delta_rs_path".into()),
+            Some(deleted_rows.clone()),
+        );
+        let mut context = Context::from_waker(futures::task::noop_waker_ref());
+        for expected in &batches {
+            let actual = match Pin::new(&mut stream).poll_next(&mut context) {
+                Poll::Ready(Some(Ok(batch))) => batch,
+                result => {
+                    panic!("Expected one batch without waiting for the input to finish: {result:?}")
+                }
+            };
+            assert_eq!(&actual, expected);
+            assert!(stream.map.is_empty());
+            assert!(
+                stream
+                    .file_partitions
+                    .iter()
+                    .all(|file| file.buffer.is_empty())
+            );
+        }
+        assert!(Pin::new(&mut stream).poll_next(&mut context).is_pending());
+        assert_eq!(deleted_rows.len(), 1);
+        assert_eq!(
+            deleted_rows
+                .get(paths.last().unwrap())
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![7]
+        );
+    }
+
+    #[test]
+    fn dv_stream_rejects_invalid_positions_before_forwarding() {
+        let batch = deletion_batch(vec![Some("file.parquet")], vec![None], vec![None]);
+        let schema = batch.schema();
+        let input = Box::pin(RecordBatchStreamAdapter::new(
+            schema.clone(),
+            futures::stream::iter([Ok(batch)]),
+        ));
+        let deleted_rows = Arc::new(DashMap::new());
+        let mut stream = MergeBarrierStream::new(
+            input,
+            schema,
+            BarrierSurvivorSet::default(),
+            Arc::new("__delta_rs_path".into()),
+            Some(deleted_rows.clone()),
+        );
+        let mut context = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(matches!(
+            Pin::new(&mut stream).poll_next(&mut context),
+            Poll::Ready(Some(Err(_)))
+        ));
+        assert!(matches!(
+            Pin::new(&mut stream).poll_next(&mut context),
+            Poll::Ready(None)
+        ));
+        assert!(deleted_rows.is_empty());
+    }
 
     #[tokio::test]
     async fn test_barrier() {
