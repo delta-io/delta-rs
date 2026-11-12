@@ -513,7 +513,7 @@ impl TryFrom<OptimizeInput> for DeltaOperation {
 }
 
 /// Generate an appropriate remove action for the optimization task
-fn create_remove(add: &Add) -> Action {
+fn create_remove(add: &Add, log_path: &str) -> Action {
     // NOTE unwrap is safe since UNIX_EPOCH will always be earlier then now.
     let deletion_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     let deletion_time = deletion_time.as_millis() as i64;
@@ -529,6 +529,7 @@ fn create_remove(add: &Add) -> Action {
         tags: add.tags.clone(),
         base_row_id: add.base_row_id,
         default_row_commit_version: add.default_row_commit_version,
+        log_path: Some(log_path.to_string()),
     })
 }
 
@@ -664,7 +665,7 @@ impl MergePlan {
     {
         debug!("Rewriting files in partition: {partition_values:?}");
         // First, initialize metrics
-        let mut partial_actions = files.iter().map(create_remove).collect::<Vec<_>>();
+        let mut partial_actions = files.removes();
 
         let files_removed = files
             .iter()
@@ -1086,6 +1087,7 @@ pub async fn create_merge_plan(
 #[derive(Debug, Clone)]
 struct MergeBin {
     files: Vec<Add>,
+    log_paths: Vec<String>,
     size_bytes: u64,
 }
 
@@ -1093,6 +1095,7 @@ impl MergeBin {
     pub fn new() -> Self {
         MergeBin {
             files: Vec::new(),
+            log_paths: Vec::new(),
             size_bytes: 0,
         }
     }
@@ -1109,19 +1112,29 @@ impl MergeBin {
         self.files.len()
     }
 
-    fn from_file(add: Add) -> Self {
+    fn from_file(add: Add, log_path: String) -> Self {
         let mut bin = Self::new();
-        bin.add(add);
+        bin.add(add, log_path);
         bin
     }
 
-    fn add(&mut self, add: Add) {
+    fn add(&mut self, add: Add, log_path: String) {
         self.size_bytes += add.size as u64;
         self.files.push(add);
+        self.log_paths.push(log_path);
     }
 
     fn iter(&self) -> impl Iterator<Item = &Add> {
         self.files.iter()
+    }
+
+    /// Returns a remove for every file in the bin, each carrying the file's path as logged.
+    fn removes(&self) -> Vec<Action> {
+        let mut removes = Vec::with_capacity(self.files.len());
+        for (add, log_path) in self.files.iter().zip(&self.log_paths) {
+            removes.push(create_remove(add, log_path));
+        }
+        removes
     }
 }
 
@@ -1137,6 +1150,7 @@ impl IntoIterator for MergeBin {
 #[derive(Debug, Clone)]
 struct OrderedFileCandidate {
     add: Add,
+    log_path: String,
     stable_ordinal: usize,
     size_bytes: u64,
 }
@@ -1153,7 +1167,7 @@ fn plan_compaction_bins_in_stable_order(
 
     for file in files {
         if current.is_empty() {
-            current = MergeBin::from_file(file.add);
+            current = MergeBin::from_file(file.add, file.log_path);
             current_first_ordinal = Some(file.stable_ordinal);
             current_last_ordinal = Some(file.stable_ordinal);
             continue;
@@ -1169,14 +1183,14 @@ fn plan_compaction_bins_in_stable_order(
             }
 
             bins.push(current);
-            current = MergeBin::from_file(file.add);
+            current = MergeBin::from_file(file.add, file.log_path);
             current_first_ordinal = Some(file.stable_ordinal);
             current_last_ordinal = Some(file.stable_ordinal);
             continue;
         }
 
         if current.total_file_size() + file.size_bytes <= target_size {
-            current.add(file.add);
+            current.add(file.add, file.log_path);
             current_last_ordinal = Some(file.stable_ordinal);
             continue;
         }
@@ -1187,7 +1201,7 @@ fn plan_compaction_bins_in_stable_order(
         }
 
         bins.push(current);
-        current = MergeBin::from_file(file.add);
+        current = MergeBin::from_file(file.add, file.log_path);
         current_first_ordinal = Some(file.stable_ordinal);
         current_last_ordinal = Some(file.stable_ordinal);
     }
@@ -1249,6 +1263,7 @@ async fn build_compaction_plan(
 
         entry.2.push(OrderedFileCandidate {
             add: file.to_add(),
+            log_path: file.path_raw().to_string(),
             stable_ordinal,
             size_bytes: object_meta.size,
         });
@@ -1366,7 +1381,7 @@ async fn build_zorder_plan(
             .entry(partition_values.hive_partition_path())
             .or_insert_with(|| (partition_values, MergeBin::new()))
             .1
-            .add(file.to_add());
+            .add(file.to_add(), file.path_raw().to_string());
         debug!(
             num_partitions = partition_files.len(),
             "built zorder partition plan"
@@ -1407,6 +1422,7 @@ mod compact_planner_tests {
                 default_row_commit_version: None,
                 clustering_provider: None,
             },
+            log_path: format!("part-{stable_ordinal}.parquet"),
             stable_ordinal,
             size_bytes,
         }

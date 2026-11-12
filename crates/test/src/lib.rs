@@ -177,6 +177,7 @@ pub async fn remove_file(
         default_row_commit_version: None,
         base_row_id: None,
         tags: None,
+        log_path: None,
     };
     let operation = DeltaOperation::Delete { predicate: None };
     let actions = vec![Action::Remove(remove)];
