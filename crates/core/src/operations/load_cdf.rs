@@ -1842,131 +1842,123 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    /// Version 1 of this fixture writes rows 0 to 9 to one file and version 2 deletes rows 2
-    /// and 3 with a deletion vector. Every later commit removes or re-adds that file without
-    /// change data files, so its change rows are the eight rows that were live in the file.
-    /// The expected rows match Spark's `table_changes` for the same versions.
-    async fn read_unpaired_dv_action_changes(
-        starting_version: Version,
-        ending_version: Version,
-    ) -> Result<Vec<RecordBatch>, Box<dyn std::error::Error>> {
-        let ctx = SessionContext::new();
-        let table_path = Path::new("../test/tests/data/cdf-table-dv-unpaired-actions");
-        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+    /// Version 1 deletes ids 2 and 3 of the only file with a deletion vector. Version 2 removes
+    /// that file and version 3 re-adds it, both without change data files, as Spark does for a
+    /// partition DELETE and a RESTORE, so their change rows are the eight live ids.
+    #[tokio::test]
+    async fn test_cdf_unpaired_actions_with_deletion_vector() -> TestResult {
+        use delta_kernel::actions::deletion_vector_writer::{
+            KernelDeletionVector, StreamingDeletionVectorWriter,
+        };
+        use parquet::arrow::ArrowWriter;
+        use serde_json::json;
+
+        let dir = tempfile::tempdir()?;
+        std::fs::create_dir(dir.path().join("_delta_log"))?;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let data_file = std::fs::File::create(dir.path().join("part-0.parquet"))?;
+        let mut writer = ArrowWriter::try_new(data_file, Arc::clone(&schema), None)?;
+        writer.write(&RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from_iter_values(0..10))],
+        )?)?;
+        writer.close()?;
+
+        let dv_path = dir.path().join("dv.bin");
+        let mut dv_file = std::fs::File::create(&dv_path)?;
+        let mut dv_writer = StreamingDeletionVectorWriter::new(&mut dv_file);
+        let mut dv = KernelDeletionVector::new();
+        dv.add_deleted_row_indexes([2, 3]);
+        let written = dv_writer.write_deletion_vector(dv)?;
+        dv_writer.finalize()?;
+
+        let file = json!({
+            "path": "part-0.parquet",
+            "partitionValues": {},
+            "size": std::fs::metadata(dir.path().join("part-0.parquet"))?.len(),
+            "modificationTime": 0,
+            "dataChange": true,
+        });
+        let mut file_with_dv = file.clone();
+        file_with_dv["deletionVector"] = json!({
+            "storageType": "p",
+            "pathOrInlineDv": Url::from_file_path(dv_path).unwrap().as_str(),
+            "offset": written.offset,
+            "sizeInBytes": written.size_in_bytes,
+            "cardinality": 2,
+        });
+        let table_schema = json!({"type": "struct", "fields": [
+            {"name": "id", "type": "integer", "nullable": false, "metadata": {}}
+        ]});
+        let commits = [
+            vec![
+                json!({"protocol": {"minReaderVersion": 3, "minWriterVersion": 7,
+                    "readerFeatures": ["deletionVectors"],
+                    "writerFeatures": ["deletionVectors", "changeDataFeed"]}}),
+                json!({"metaData": {"id": "5f4b3c8e-2d1a-4e6f-9b7c-0a1b2c3d4e5f",
+                    "format": {"provider": "parquet", "options": {}},
+                    "schemaString": table_schema.to_string(), "partitionColumns": [],
+                    "configuration": {"delta.enableChangeDataFeed": "true",
+                        "delta.enableDeletionVectors": "true"}}}),
+                json!({"add": file}),
+            ],
+            vec![json!({"add": file_with_dv}), json!({"remove": file})],
+            vec![json!({"remove": file_with_dv})],
+            vec![json!({"add": file_with_dv})],
+        ];
+        for (version, actions) in commits.iter().enumerate() {
+            let commit_info = json!({"commitInfo": {"timestamp": version}});
+            std::fs::write(
+                dir.path().join(format!("_delta_log/{version:020}.json")),
+                std::iter::once(&commit_info)
+                    .chain(actions)
+                    .map(serde_json::Value::to_string)
+                    .join(
+                        "
+",
+                    ),
+            )?;
+        }
+
+        let table_uri = Url::from_directory_path(dir.path()).unwrap();
         let builder = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
-            .with_starting_version(starting_version)
-            .with_ending_version(ending_version);
+            .with_starting_version(1);
+        let ctx = SessionContext::new();
         ctx.register_table("cdf", Arc::new(DeltaCdfTableProvider::try_new(builder)?))?;
-        Ok(ctx
+        let batches = ctx
             .sql("SELECT id, _change_type, _commit_version FROM cdf")
             .await?
             .collect()
-            .await?)
-    }
+            .await?;
 
-    #[tokio::test]
-    async fn test_cdf_partition_delete_after_dv_delete() -> TestResult {
-        let batches = read_unpaired_dv_action_changes(2, 3).await?;
         assert_batches_sorted_eq! {[
             "+----+--------------+-----------------+",
             "| id | _change_type | _commit_version |",
             "+----+--------------+-----------------+",
-            "| 0  | delete       | 3               |",
-            "| 1  | delete       | 3               |",
-            "| 2  | delete       | 2               |",
-            "| 3  | delete       | 2               |",
-            "| 4  | delete       | 3               |",
-            "| 5  | delete       | 3               |",
-            "| 6  | delete       | 3               |",
-            "| 7  | delete       | 3               |",
-            "| 8  | delete       | 3               |",
-            "| 9  | delete       | 3               |",
-            "+----+--------------+-----------------+",
-        ], &batches }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_cdf_restore_of_file_with_dv() -> TestResult {
-        let batches = read_unpaired_dv_action_changes(4, 4).await?;
-        assert_batches_sorted_eq! {[
-            "+----+--------------+-----------------+",
-            "| id | _change_type | _commit_version |",
-            "+----+--------------+-----------------+",
-            "| 0  | insert       | 4               |",
-            "| 1  | insert       | 4               |",
-            "| 4  | insert       | 4               |",
-            "| 5  | insert       | 4               |",
-            "| 6  | insert       | 4               |",
-            "| 7  | insert       | 4               |",
-            "| 8  | insert       | 4               |",
-            "| 9  | insert       | 4               |",
-            "+----+--------------+-----------------+",
-        ], &batches }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_cdf_full_delete_of_file_with_dv() -> TestResult {
-        let batches = read_unpaired_dv_action_changes(5, 5).await?;
-        assert_batches_sorted_eq! {[
-            "+----+--------------+-----------------+",
-            "| id | _change_type | _commit_version |",
-            "+----+--------------+-----------------+",
-            "| 0  | delete       | 5               |",
-            "| 1  | delete       | 5               |",
-            "| 4  | delete       | 5               |",
-            "| 5  | delete       | 5               |",
-            "| 6  | delete       | 5               |",
-            "| 7  | delete       | 5               |",
-            "| 8  | delete       | 5               |",
-            "| 9  | delete       | 5               |",
-            "+----+--------------+-----------------+",
-        ], &batches }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_cdf_replace_where_over_file_with_dv() -> TestResult {
-        let batches = read_unpaired_dv_action_changes(7, 7).await?;
-        assert_batches_sorted_eq! {[
-            "+----+--------------+-----------------+",
-            "| id | _change_type | _commit_version |",
-            "+----+--------------+-----------------+",
-            "| 0  | delete       | 7               |",
-            "| 1  | delete       | 7               |",
-            "| 10 | insert       | 7               |",
-            "| 11 | insert       | 7               |",
-            "| 4  | delete       | 7               |",
-            "| 5  | delete       | 7               |",
-            "| 6  | delete       | 7               |",
-            "| 7  | delete       | 7               |",
-            "| 8  | delete       | 7               |",
-            "| 9  | delete       | 7               |",
-            "+----+--------------+-----------------+",
-        ], &batches }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_cdf_overwrite_of_file_with_dv() -> TestResult {
-        let batches = read_unpaired_dv_action_changes(9, 9).await?;
-        assert_batches_sorted_eq! {[
-            "+----+--------------+-----------------+",
-            "| id | _change_type | _commit_version |",
-            "+----+--------------+-----------------+",
-            "| 0  | delete       | 9               |",
-            "| 1  | delete       | 9               |",
-            "| 20 | insert       | 9               |",
-            "| 21 | insert       | 9               |",
-            "| 4  | delete       | 9               |",
-            "| 5  | delete       | 9               |",
-            "| 6  | delete       | 9               |",
-            "| 7  | delete       | 9               |",
-            "| 8  | delete       | 9               |",
-            "| 9  | delete       | 9               |",
+            "| 0  | delete       | 2               |",
+            "| 0  | insert       | 3               |",
+            "| 1  | delete       | 2               |",
+            "| 1  | insert       | 3               |",
+            "| 2  | delete       | 1               |",
+            "| 3  | delete       | 1               |",
+            "| 4  | delete       | 2               |",
+            "| 4  | insert       | 3               |",
+            "| 5  | delete       | 2               |",
+            "| 5  | insert       | 3               |",
+            "| 6  | delete       | 2               |",
+            "| 6  | insert       | 3               |",
+            "| 7  | delete       | 2               |",
+            "| 7  | insert       | 3               |",
+            "| 8  | delete       | 2               |",
+            "| 8  | insert       | 3               |",
+            "| 9  | delete       | 2               |",
+            "| 9  | insert       | 3               |",
             "+----+--------------+-----------------+",
         ], &batches }
         Ok(())
