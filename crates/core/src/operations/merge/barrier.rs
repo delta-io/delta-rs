@@ -300,8 +300,9 @@ impl Stream for MergeBarrierStream {
 
                             let mut indices: Vec<_> =
                                 Vec::with_capacity(self.file_partitions.len());
+                            // `new()` reserves 1024 indices per file, even when unused.
                             for _ in 0..self.file_partitions.len() {
-                                indices.push(UInt64Builder::with_capacity(batch.num_rows()));
+                                indices.push(UInt64Builder::with_capacity(0));
                             }
 
                             for (idx, key) in file_dictionary.keys().iter().enumerate() {
