@@ -35,7 +35,7 @@ use datafusion::physical_plan::{
     PlanProperties, ReplaceChildrenOptions, apply_expression_roots,
 };
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion::prelude::{Expr, binary_expr, col, ident};
+use datafusion::prelude::{Expr, binary_expr, ident};
 use datafusion::scalar::ScalarValue;
 use delta_kernel::Expression;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
@@ -504,7 +504,7 @@ pub(crate) fn generated_columns_to_exprs<'a>(
         .into_iter()
         .map(|gen_col| {
             let expr = parse_generated_column_expression(df_schema, gen_col, session)?;
-            let col_expr = col(&gen_col.name);
+            let col_expr = ident(&gen_col.name);
             let validation_expr = binary_expr(col_expr, Operator::IsNotDistinctFrom, expr);
             Ok::<_, DataFusionError>(ValidationCheck::new(
                 validation_expr,
@@ -1399,6 +1399,52 @@ mod tests {
         let result = collect(validated_exec, ctx.task_ctx()).await;
         assert!(result.is_err());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_validation_generated_column_preserves_identifiers() -> Result<()> {
+        for name in ["ComputedValue", "computed.value"] {
+            for (value, valid) in [(2, true), (3, false)] {
+                let schema = Arc::new(Schema::new(vec![
+                    Field::new("id", DataType::Int32, false),
+                    Field::new(name, DataType::Int32, false),
+                ]));
+                let batch = RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(Int32Array::from(vec![1])),
+                        Arc::new(Int32Array::from(vec![value])),
+                    ],
+                )?;
+                let generated = [GeneratedColumn::new(
+                    name,
+                    "id * 2",
+                    &crate::kernel::DataType::INTEGER,
+                )];
+                let ctx = SessionContext::new();
+                let checks = generated_columns_to_exprs(
+                    &ctx.state(),
+                    &DFSchema::try_from(schema.as_ref().clone())?,
+                    &generated,
+                )?;
+                let memory_exec = get_memory_exec(&ctx.state(), schema, vec![batch]).await;
+                let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
+                    &ctx.state(),
+                    memory_exec,
+                    checks,
+                )?;
+                let result = collect(validated_exec, ctx.task_ctx()).await;
+                if valid {
+                    assert_eq!(result?.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+                } else {
+                    assert!(
+                        result.unwrap_err().to_string().contains("generated column"),
+                        "invalid generated values must be rejected"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
