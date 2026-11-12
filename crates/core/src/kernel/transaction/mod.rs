@@ -94,12 +94,14 @@ use serde::{Deserialize, Serialize};
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::errors::DeltaTableError;
 use crate::kernel::{
-    Action, Add, CommitInfo, EagerSnapshot, IsolationLevel, Metadata, Protocol, Transaction,
-    Version,
+    Action, Add, CommitInfo, EagerSnapshot, IsolationLevel, Metadata, Protocol, ProtocolExt,
+    Transaction, Version,
 };
 use crate::logstore::ObjectStoreRef;
 use crate::logstore::with_operation;
-use crate::logstore::{CommitOrBytes, CommitResponse, Committer, LogStoreRef, PayloadKind};
+use crate::logstore::{
+    CommitOrBytes, CommitResponse, Committer, LogStore, LogStoreRef, PayloadKind,
+};
 use crate::protocol::{DeltaOperation, operation_parameter_value};
 use crate::protocol::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::table::config::TablePropertiesExt as _;
@@ -132,6 +134,7 @@ const RESERVED_COMMIT_INFO_KEYS: &[&str] = &[
     "isBlindAppend",
     "engineInfo",
     "userMetadata",
+    "txnId",
 ];
 
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -238,7 +241,7 @@ impl From<TransactionError> for DeltaTableError {
     }
 }
 
-/// Error raised while commititng transaction
+/// Error raised while committing a transaction
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum CommitBuilderError {}
@@ -384,6 +387,8 @@ fn normalize_reserved_commit_metadata(
         }
     }
 
+    promote_string_reserved_metadata(app_metadata, "txnId", &mut commit_info.txn_id);
+
     for key in RESERVED_COMMIT_INFO_KEYS {
         app_metadata.remove(*key);
     }
@@ -449,6 +454,26 @@ fn assign_commit_info_metadata(
     commit_info.info = app_metadata.clone();
 }
 
+/// Populate `commitInfo.inCommitTimestamp` when the table has the `InCommitTimestamp` writer
+/// feature enabled. delta-rs otherwise leaves the field unset, which is invalid for such tables
+/// (readers derive commit timestamps from it).
+fn maybe_set_in_commit_timestamp(data: &mut CommitData, table_data: Option<&dyn TableReference>) {
+    let has_ict = table_data
+        .and_then(|t| t.protocol().writer_features_set())
+        .map(|features| features.contains(&TableFeature::InCommitTimestamp))
+        .unwrap_or(false);
+    if !has_ict {
+        return;
+    }
+    if let Some(Action::CommitInfo(commit_info)) = data
+        .actions
+        .iter_mut()
+        .find(|action| matches!(action, Action::CommitInfo(_)))
+    {
+        commit_info.in_commit_timestamp = Some(Utc::now().timestamp_millis());
+    }
+}
+
 impl CommitData {
     /// Create new data to be committed
     pub fn new(
@@ -473,9 +498,18 @@ impl CommitData {
             app_metadata
                 .entry("clientVersion".to_string())
                 .or_insert(Value::String(format!("delta-rs.{}", crate_version())));
+
             assign_commit_info_metadata(&mut commit_info, &mut app_metadata);
             // commit info should be the first action to support in-commit timestamps.
             actions.insert(0, Action::CommitInfo(commit_info));
+        }
+
+        if let Some(Action::CommitInfo(commit_info)) = actions
+            .iter_mut()
+            .find(|action| matches!(action, Action::CommitInfo(..)))
+            && commit_info.txn_id.is_none()
+        {
+            commit_info.txn_id = Some(uuid::Uuid::new_v4().to_string());
         }
 
         for txn in &app_transactions {
@@ -501,39 +535,41 @@ impl CommitData {
         Ok(bytes::Bytes::from(jsons.join("\n")))
     }
 
-    /// Update num_retries in operationMetrics within serialized bytes.
-    /// This allows updating the retry count without re-serializing all actions.
-    pub fn update_retry_count_in_bytes(
-        bytes: &Bytes,
-        num_retries: u64,
-    ) -> Result<Bytes, TransactionError> {
-        let bytes_str = std::str::from_utf8(bytes.as_ref())
-            .expect("Delta log bytes should always be valid UTF-8");
+    fn commit_info(&self) -> Option<&CommitInfo> {
+        self.actions.iter().find_map(|action| match action {
+            Action::CommitInfo(info) => Some(info),
+            _ => None,
+        })
+    }
 
-        let lines: Vec<&str> = bytes_str.split('\n').collect();
-        let mut updated_lines = Vec::with_capacity(lines.len());
+    fn commit_info_mut(&mut self) -> Option<&mut CommitInfo> {
+        self.actions.iter_mut().find_map(|action| match action {
+            Action::CommitInfo(info) => Some(info),
+            _ => None,
+        })
+    }
 
-        for line in lines {
-            if line.contains("\"commitInfo\"") {
-                let mut action: Value = serde_json::from_str(line)
-                    .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
-
-                if let Some(commit_info) = action.get_mut("commitInfo")
-                    && let Some(Value::Object(metrics)) = commit_info.get_mut("operationMetrics")
-                {
-                    metrics.insert("num_retries".to_string(), Value::Number(num_retries.into()));
-                }
-                // Serialize just this updated line
-                let updated_line = serde_json::to_string(&action)
-                    .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
-                updated_lines.push(updated_line);
-            } else {
-                // Keep other action lines unchanged (Add, Remove, etc.)
-                updated_lines.push(line.to_string());
-            }
+    fn update_commit_info(&mut self, num_retries: u64, prev_ict: Option<i64>) -> bool {
+        let Some(info) = self.commit_info_mut() else {
+            return false;
+        };
+        let mut changed = false;
+        if num_retries > 0
+            && let Some(Value::Object(metrics)) = info.info.get_mut("operationMetrics")
+        {
+            metrics.insert("num_retries".to_string(), num_retries.into());
+            changed = true;
         }
 
-        Ok(Bytes::from(updated_lines.join("\n")))
+        if info.in_commit_timestamp.is_some() || prev_ict.is_some() {
+            let now = Utc::now().timestamp_millis();
+            let ict = prev_ict.map_or(now, |prev| now.max(prev + 1));
+            if info.in_commit_timestamp != Some(ict) {
+                info.in_commit_timestamp = Some(ict);
+                changed = true;
+            }
+        }
+        changed
     }
 }
 
@@ -693,12 +729,13 @@ impl<'a> CommitBuilder {
         log_store: LogStoreRef,
         operation: DeltaOperation,
     ) -> PreCommit<'a> {
-        let data = CommitData::new(
+        let mut data = CommitData::new(
             self.actions,
             operation,
             self.app_metadata,
             self.app_transaction,
         );
+        maybe_set_in_commit_timestamp(&mut data, table_data);
         PreCommit {
             log_store,
             table_data,
@@ -750,6 +787,7 @@ impl<'a> PreCommit<'a> {
             if let Some(table_reference) = this.table_data {
                 PROTOCOL.can_commit(table_reference, &this.data.actions, &this.data.operation)?;
             }
+
             let log_entry = this.data.get_bytes()?;
 
             // The committer decides how the payload is prepared: conditional-put stores take the
@@ -806,7 +844,7 @@ impl<'a> IntoFuture for PreparedCommit<'a> {
             let commit_or_bytes = this.commit_or_bytes;
             let committer = this.committer;
             let log_store = this.log_store;
-            let data = this.data;
+            let mut data = this.data;
             let post_commit = this.post_commit;
             let max_retries = this.max_retries;
             let read_files = this.read_files;
@@ -823,7 +861,10 @@ impl<'a> IntoFuture for PreparedCommit<'a> {
                     table_data.eager_snapshot().clone()
                 } else {
                     debug!("committing initial table version 0");
-                    match committer.commit(0, commit_or_bytes.clone()).await {
+                    match committer
+                        .commit(0, commit_or_bytes.clone(), data.commit_info())
+                        .await
+                    {
                         Ok(CommitResponse::Committed) => {
                             return Ok(PostCommit {
                                 version: 0,
@@ -947,24 +988,32 @@ impl<'a> IntoFuture for PreparedCommit<'a> {
                         // Calculate current retry count (attempt 1 = 0 retries, attempt 2 = 1 retry, etc.)
                         let current_retries = (attempt_number - 1) as u64;
 
-                        // Update operationMetrics.numRetries in the serialized bytes
-                        let updated_commit_or_bytes = match &commit_or_bytes {
+                        let prev_ict = read_snapshot
+                            .snapshot()
+                            .in_commit_timestamp(log_store.as_ref())
+                            .await?;
+                        let changed = data.update_commit_info(current_retries, prev_ict);
+
+                        let payload = match &commit_or_bytes {
                             CommitOrBytes::LogBytes(bytes) => {
-                                let updated_bytes = if current_retries > 0 {
-                                    CommitData::update_retry_count_in_bytes(bytes, current_retries)?
+                                if changed {
+                                    CommitOrBytes::LogBytes(data.get_bytes()?)
                                 } else {
-                                    bytes.clone()
-                                };
-                                CommitOrBytes::LogBytes(updated_bytes)
+                                    CommitOrBytes::LogBytes(bytes.clone())
+                                }
                             }
-                            CommitOrBytes::TmpCommit(_path) => {
-                                // For TmpCommit stores, keep original behavior for now
-                                // (these stores write to tmp file first, then rename)
+                            CommitOrBytes::TmpCommit(path) => {
+                                if changed {
+                                    log_store
+                                        .object_store()
+                                        .put(path, data.get_bytes()?.into())
+                                        .await?;
+                                }
                                 commit_or_bytes.clone()
                             }
                         };
 
-                        match committer.commit(version, updated_commit_or_bytes).await {
+                        match committer.commit(version, payload, data.commit_info()).await {
                             Ok(CommitResponse::Committed) => {
                                 info!(
                                     version = version,
@@ -1054,12 +1103,26 @@ impl PostCommit {
         if let Some(table) = &self.table_data {
             let mut snapshot = table.eager_snapshot().clone();
             if self.version != snapshot.version() {
-                snapshot.update(&self.log_store, Some(self.version)).await?;
+                snapshot
+                    .update(&self.log_store, Some(self.version))
+                    .await
+                    .map_err(|e| {
+                        if !self.log_store.is_catalog_managed() {
+                            return e;
+                        }
+                        DeltaTableError::Generic(format!(
+                            "version {} was committed, but refreshing the table state failed: \
+                             {e}. Reload the table instead of retrying the write",
+                            self.version
+                        ))
+                    })?;
             }
 
             let mut state = DeltaTableState { snapshot };
 
-            let cleanup_logs = if let Some(cleanup_logs) = self.cleanup_expired_logs {
+            let cleanup_logs = if self.log_store.is_catalog_managed() {
+                false
+            } else if let Some(cleanup_logs) = self.cleanup_expired_logs {
                 cleanup_logs
             } else {
                 state.table_config().enable_expired_log_cleanup()
@@ -1078,26 +1141,31 @@ impl PostCommit {
                 // File-only work runs in a sibling scope. The operation-scoped store forwards
                 // `begin_operation` to its parent, so on an isolating backend this is a second
                 // isolated write set that is published on success and discarded on error.
-                let (checkpoint_created, files_cleaned_up) =
-                    with_operation(&self.log_store, |log_store| async move {
-                        let mut checkpoint_created = false;
-                        if create_checkpoint {
-                            checkpoint_created =
-                                maybe_create_checkpoint(checkpoint_interval, version, &log_store)
-                                    .await?;
-                        }
-                        let mut files_cleaned_up: u64 = 0;
-                        if cleanup_logs {
-                            files_cleaned_up = cleanup_expired_logs_for(
-                                version,
-                                log_store.as_ref(),
-                                cutoff_timestamp,
-                            )
-                            .await? as u64;
-                        }
-                        Ok((checkpoint_created, files_cleaned_up))
-                    })
-                    .await?;
+                let maintenance = with_operation(&self.log_store, |log_store| async move {
+                    log_store.publish_logs(version).await?;
+                    let mut checkpoint_created = false;
+                    if create_checkpoint {
+                        checkpoint_created =
+                            maybe_create_checkpoint(checkpoint_interval, version, &log_store)
+                                .await?;
+                    }
+                    let mut files_cleaned_up: u64 = 0;
+                    if cleanup_logs {
+                        files_cleaned_up =
+                            cleanup_expired_logs_for(version, log_store.as_ref(), cutoff_timestamp)
+                                .await? as u64;
+                    }
+                    Ok((checkpoint_created, files_cleaned_up))
+                })
+                .await;
+                let (checkpoint_created, files_cleaned_up) = match maintenance {
+                    Ok(result) => result,
+                    Err(e) if self.log_store.is_catalog_managed() => {
+                        warn!(error = %e, "post-commit maintenance failed");
+                        (false, 0)
+                    }
+                    Err(e) => return Err(e),
+                };
 
                 new_checkpoint_created = checkpoint_created;
                 num_log_files_cleaned_up = files_cleaned_up;
@@ -1180,18 +1248,16 @@ impl std::future::IntoFuture for PostCommit {
         let this = self;
 
         Box::pin(async move {
-            match this.run_post_commit_hook().await {
-                Ok((snapshot, post_commit_metrics)) => Ok(FinalizedCommit {
-                    snapshot,
-                    version: this.version,
-                    metrics: Metrics {
-                        num_retries: this.metrics.num_retries,
-                        new_checkpoint_created: post_commit_metrics.new_checkpoint_created,
-                        num_log_files_cleaned_up: post_commit_metrics.num_log_files_cleaned_up,
-                    },
-                }),
-                Err(err) => Err(err),
-            }
+            let (snapshot, post_commit_metrics) = this.run_post_commit_hook().await?;
+            Ok(FinalizedCommit {
+                snapshot,
+                version: this.version,
+                metrics: Metrics {
+                    num_retries: this.metrics.num_retries,
+                    new_checkpoint_created: post_commit_metrics.new_checkpoint_created,
+                    num_log_files_cleaned_up: post_commit_metrics.num_log_files_cleaned_up,
+                },
+            })
         })
     }
 }
@@ -1208,6 +1274,39 @@ mod tests {
     use serde_json::json;
     use url::Url;
 
+    #[test]
+    fn update_commit_info_bumps_in_commit_timestamp_past_previous() {
+        let mut data = CommitData::new(vec![], append(), HashMap::new(), vec![]);
+        let provenance = data.commit_info().unwrap().timestamp;
+        let future = Utc::now().timestamp_millis() + 3_600_000;
+        assert!(data.update_commit_info(0, Some(future)));
+        let info = data.commit_info().unwrap();
+        assert_eq!(info.in_commit_timestamp, Some(future + 1));
+        assert_eq!(info.timestamp, provenance);
+    }
+
+    #[test]
+    fn update_commit_info_recomputes_stale_in_commit_timestamp_from_clock() {
+        let mut data = CommitData::new(vec![], append(), HashMap::new(), vec![]);
+        data.commit_info_mut().unwrap().in_commit_timestamp = Some(100);
+        let before = Utc::now().timestamp_millis();
+        assert!(data.update_commit_info(0, Some(50)));
+        let ict = data.commit_info().unwrap().in_commit_timestamp.unwrap();
+        assert!(ict >= before, "{ict} < {before}");
+    }
+
+    #[test]
+    fn update_commit_info_records_retries_in_operation_metrics() {
+        let metadata = HashMap::from([("operationMetrics".to_string(), json!({"num_files": 1}))]);
+        let mut data = CommitData::new(vec![], append(), metadata, vec![]);
+        assert!(!data.update_commit_info(0, None));
+        assert!(data.update_commit_info(2, None));
+        assert_eq!(
+            data.commit_info().unwrap().info["operationMetrics"]["num_retries"],
+            json!(2)
+        );
+    }
+
     #[tokio::test]
     async fn test_try_commit_transaction() {
         let store = Arc::new(InMemory::new());
@@ -1222,7 +1321,7 @@ mod tests {
 
         let committer = log_store.committer();
         let res = committer
-            .commit(0, CommitOrBytes::LogBytes(PutPayload::new().into()))
+            .commit(0, CommitOrBytes::LogBytes(PutPayload::new().into()), None)
             .await
             .unwrap();
         // conflicts if file version already exists
@@ -1230,7 +1329,7 @@ mod tests {
 
         // succeeds for next version
         let res = committer
-            .commit(1, CommitOrBytes::LogBytes(PutPayload::new().into()))
+            .commit(1, CommitOrBytes::LogBytes(PutPayload::new().into()), None)
             .await
             .unwrap();
         assert_eq!(res, CommitResponse::Committed);
@@ -1486,5 +1585,177 @@ mod tests {
         assert!(!info.info.contains_key("userName"));
         assert!(!info.info.contains_key("readVersion"));
         assert!(!info.info.contains_key("isBlindAppend"));
+    }
+
+    #[test]
+    fn test_txn_id_generated_and_stable() {
+        let data = CommitData::new(
+            vec![],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::new(),
+            vec![],
+        );
+
+        let info = commit_info(&data);
+        assert!(info.txn_id.is_some());
+        let txn_id_1 = info.txn_id.clone();
+
+        assert!(uuid::Uuid::parse_str(txn_id_1.as_ref().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn test_txn_id_caller_supplied() {
+        let supplied_txn_id = "caller-supplied-txn-id";
+        let data = CommitData::new(
+            vec![],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::from([("txnId".to_owned(), json!(supplied_txn_id))]),
+            vec![],
+        );
+
+        let info = commit_info(&data);
+        assert_eq!(info.txn_id.as_deref(), Some(supplied_txn_id));
+    }
+
+    #[test]
+    fn test_txn_id_generated_for_caller_commit_info() {
+        let data = CommitData::new(
+            vec![Action::CommitInfo(CommitInfo::default())],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::new(),
+            vec![],
+        );
+
+        let info = commit_info(&data);
+        assert!(uuid::Uuid::parse_str(info.txn_id.as_deref().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn test_txn_id_kept_on_caller_commit_info() {
+        let data = CommitData::new(
+            vec![Action::CommitInfo(CommitInfo {
+                txn_id: Some("typed-txn-id".to_owned()),
+                ..Default::default()
+            })],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::new(),
+            vec![],
+        );
+        assert_eq!(commit_info(&data).txn_id.as_deref(), Some("typed-txn-id"));
+
+        let data = CommitData::new(
+            vec![Action::CommitInfo(CommitInfo::default())],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::from([("txnId".to_owned(), json!("app-txn-id"))]),
+            vec![],
+        );
+        assert_eq!(commit_info(&data).txn_id.as_deref(), Some("app-txn-id"));
+    }
+
+    fn append() -> DeltaOperation {
+        DeltaOperation::Write {
+            mode: SaveMode::Append,
+            partition_by: None,
+            predicate: None,
+        }
+    }
+
+    fn write_three_versions(dir: &std::path::Path) {
+        use crate::test_utils::catalog_managed::{metadata_action, write_commits};
+        let commit_info = json!({"commitInfo": {"timestamp": 0, "operation": "WRITE"}});
+        write_commits(
+            dir,
+            &[
+                vec![
+                    commit_info.clone(),
+                    json!({"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}}),
+                    metadata_action(json!({})),
+                ],
+                vec![commit_info.clone()],
+                vec![commit_info],
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn test_in_commit_timestamp_exceeds_previous_commit() {
+        use crate::test_utils::catalog_managed::{metadata_action, write_commits};
+        let previous = 4_102_444_800_000_i64;
+        let dir = tempfile::tempdir().unwrap();
+        write_commits(
+            dir.path(),
+            &[vec![
+                json!({"commitInfo": {
+                    "timestamp": previous,
+                    "inCommitTimestamp": previous,
+                    "operation": "CREATE TABLE"
+                }}),
+                json!({"protocol": {
+                    "minReaderVersion": 1,
+                    "minWriterVersion": 7,
+                    "writerFeatures": ["inCommitTimestamp"]
+                }}),
+                metadata_action(json!({"delta.enableInCommitTimestamps": "true"})),
+            ]],
+        );
+        let (table, _) = crate::test_utils::catalog_managed::open(dir.path(), false).await;
+
+        CommitBuilder::default()
+            .build(Some(table.snapshot().unwrap()), table.log_store(), append())
+            .await
+            .unwrap();
+
+        let log_store = table.log_store();
+        let committed = crate::kernel::Snapshot::try_new(log_store.as_ref(), Some(1))
+            .await
+            .unwrap();
+        let ict = committed
+            .in_commit_timestamp(log_store.as_ref())
+            .await
+            .unwrap();
+        assert_eq!(ict, Some(previous + 1));
+    }
+
+    #[tokio::test]
+    async fn test_post_commit_maintenance_failure_keeps_refreshed_catalog_managed_state() {
+        use std::sync::atomic::Ordering;
+
+        let dir = tempfile::tempdir().unwrap();
+        write_three_versions(dir.path());
+        let (table, store) = crate::test_utils::catalog_managed::open(dir.path(), true).await;
+        let store = store.unwrap();
+        store.fail_publish.store(true, Ordering::SeqCst);
+
+        let finalized =
+            CommitBuilder::from(CommitProperties::default().with_create_checkpoint(true))
+                .build(Some(table.snapshot().unwrap()), store, append())
+                .await
+                .expect("a failed publish/checkpoint must not fail a ratified commit");
+        assert_eq!(finalized.version(), 3);
+        assert_eq!(finalized.snapshot().version(), 3);
+        assert!(!finalized.metrics.new_checkpoint_created);
+    }
+
+    #[tokio::test]
+    async fn test_post_commit_refresh_failure_reports_the_committed_version() {
+        use std::sync::atomic::Ordering;
+
+        let dir = tempfile::tempdir().unwrap();
+        write_three_versions(dir.path());
+        let (table, store) = crate::test_utils::catalog_managed::open(dir.path(), true).await;
+        let store = store.unwrap();
+        store.fail_catalog_tail.store(true, Ordering::SeqCst);
+
+        let err = CommitBuilder::default()
+            .build(Some(table.snapshot().unwrap()), store, append())
+            .await
+            .expect_err("stale state must not be returned as a finalized commit");
+        let msg = err.to_string();
+        assert!(msg.contains("version 3 was committed"), "{msg}");
+        assert!(msg.contains("catalog unavailable"), "{msg}");
+        let committed =
+            std::fs::read_to_string(dir.path().join("_delta_log/00000000000000000003.json"))
+                .unwrap();
+        assert!(committed.contains("txnId"), "{committed}");
     }
 }

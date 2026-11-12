@@ -33,9 +33,9 @@ use tracing::*;
 use url::Url;
 
 use super::committer::{CommitResponse, Committer, PayloadKind};
-use super::{CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef};
-use crate::kernel::Version;
+use super::{CatalogLogTail, CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef};
 use crate::kernel::transaction::TransactionError;
+use crate::kernel::{CommitInfo, Version};
 use crate::{DeltaResult, DeltaTableError};
 
 /// Write-side handles for one in-flight operation. Produced by [`LogStore::begin_operation`].
@@ -259,9 +259,10 @@ impl Committer for ScopedCommitter {
         &self,
         version: Version,
         payload: CommitOrBytes,
+        commit_info: Option<&CommitInfo>,
     ) -> Result<CommitResponse, TransactionError> {
         self.state.ensure_open()?;
-        let response = self.inner.commit(version, payload).await?;
+        let response = self.inner.commit(version, payload, commit_info).await?;
         if response == CommitResponse::Committed {
             // The commit published every write made so far.
             self.state.dirty.store(false, Ordering::SeqCst);
@@ -350,6 +351,18 @@ impl LogStore for ScopedLogStore {
         self.parent.get_latest_version(start_version).await
     }
 
+    async fn catalog_log_tail(&self) -> DeltaResult<Option<CatalogLogTail>> {
+        self.parent.catalog_log_tail().await
+    }
+
+    fn is_catalog_managed(&self) -> bool {
+        self.parent.is_catalog_managed()
+    }
+
+    async fn publish_logs(&self, up_to: Version) -> DeltaResult<()> {
+        self.parent.publish_logs(up_to).await
+    }
+
     fn object_store(&self) -> Arc<dyn ObjectStore> {
         self.object_store.clone()
     }
@@ -358,16 +371,16 @@ impl LogStore for ScopedLogStore {
         self.root_object_store.clone()
     }
 
-    fn write_root_url(&self) -> Url {
-        self.write_root.clone()
-    }
-
     fn committer(&self) -> Arc<dyn Committer> {
         self.committer.clone()
     }
 
     async fn begin_operation(&self) -> DeltaResult<Option<OperationContext>> {
         self.parent.begin_operation().await
+    }
+
+    fn write_root_url(&self) -> Url {
+        self.write_root.clone()
     }
 
     async fn is_delta_table_location(&self) -> DeltaResult<bool> {
@@ -678,7 +691,7 @@ mod tests {
             .put(&Path::from("part-1.parquet"), "data".into())
             .await
             .unwrap();
-        let response = scoped.committer().commit(1, payload()).await.unwrap();
+        let response = scoped.committer().commit(1, payload(), None).await.unwrap();
         assert_eq!(response, CommitResponse::Committed);
         assert!(store.table_objects().await.contains("part-1.parquet"));
 
@@ -737,7 +750,7 @@ mod tests {
         let response = scope
             .log_store()
             .committer()
-            .commit(1, payload())
+            .commit(1, payload(), None)
             .await
             .unwrap();
         assert_eq!(response, CommitResponse::Conflict { version: 1 });
@@ -776,7 +789,11 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("scope is closed"), "{err}");
-        let err = scoped.committer().commit(1, payload()).await.unwrap_err();
+        let err = scoped
+            .committer()
+            .commit(1, payload(), None)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("scope is closed"), "{err}");
         assert!(store.take_recorded_writes().is_empty());
         // Log reads still go to the parent.

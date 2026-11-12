@@ -2,6 +2,8 @@ mod factories;
 /// In-memory log store that isolates every operation, for scope tests.
 pub mod isolating_store;
 
+#[cfg(test)]
+pub(crate) mod catalog_managed;
 #[cfg(all(test, feature = "datafusion"))]
 pub(crate) mod datafusion;
 #[cfg(test)]
