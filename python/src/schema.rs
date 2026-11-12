@@ -658,8 +658,7 @@ impl Field {
 
     #[pyo3(text_signature = "($self)")]
     fn to_arrow(&self) -> PyResult<Arro3Field> {
-        let inner_type = self.inner.clone();
-        let field: ArrowField = (&inner_type)
+        let field: ArrowField = (&self.inner)
             .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
@@ -679,8 +678,7 @@ impl Field {
     }
 
     fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyArrowResult<Bound<'py, PyCapsule>> {
-        let inner_type = self.inner.clone();
-        let field: ArrowField = (&inner_type)
+        let field: ArrowField = (&self.inner)
             .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
         to_schema_pycapsule(py, field)
@@ -890,7 +888,7 @@ impl PySchema {
     #[pyo3(signature = (as_large_types = false))]
     fn to_arrow(self_: PyRef<'_, Self>, as_large_types: bool) -> PyResult<Arro3Schema> {
         let super_ = self_.as_ref();
-        let res: ArrowSchema = (&super_.inner_type.clone())
+        let res: ArrowSchema = (&super_.inner_type)
             .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
@@ -963,7 +961,7 @@ impl PySchema {
     ) -> PyArrowResult<Bound<'py, PyCapsule>> {
         let super_ = self_.as_ref();
 
-        let res: ArrowSchema = (&super_.inner_type.clone())
+        let res: ArrowSchema = (&super_.inner_type)
             .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
         to_schema_pycapsule(py, res)
