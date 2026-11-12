@@ -1,4 +1,11 @@
 target/
 /.idea/
 *.bat
-tests/data/
+tests/data/*
+# Tables copied from DAT 0.0.3, which unit tests in deltalake-core read.
+!tests/data/all_primitive_types/
+!tests/data/column_mapping/
+!tests/data/deletion_vectors/
+!tests/data/multi_partitioned/
+!tests/data/multi_partitioned_2/
+!tests/data/nested_types/
