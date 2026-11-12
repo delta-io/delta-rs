@@ -1402,48 +1402,50 @@ mod tests {
         Ok(())
     }
 
+    #[rstest::rstest]
+    #[case::mixed_case_valid("ComputedValue", 2, true)]
+    #[case::mixed_case_invalid("ComputedValue", 3, false)]
+    #[case::dotted_valid("computed.value", 2, true)]
+    #[case::dotted_invalid("computed.value", 3, false)]
     #[tokio::test]
-    async fn test_validation_generated_column_preserves_identifiers() -> Result<()> {
-        for name in ["ComputedValue", "computed.value"] {
-            for (value, valid) in [(2, true), (3, false)] {
-                let schema = Arc::new(Schema::new(vec![
-                    Field::new("id", DataType::Int32, false),
-                    Field::new(name, DataType::Int32, false),
-                ]));
-                let batch = RecordBatch::try_new(
-                    schema.clone(),
-                    vec![
-                        Arc::new(Int32Array::from(vec![1])),
-                        Arc::new(Int32Array::from(vec![value])),
-                    ],
-                )?;
-                let generated = [GeneratedColumn::new(
-                    name,
-                    "id * 2",
-                    &crate::kernel::DataType::INTEGER,
-                )];
-                let ctx = SessionContext::new();
-                let checks = generated_columns_to_exprs(
-                    &ctx.state(),
-                    &DFSchema::try_from(schema.as_ref().clone())?,
-                    &generated,
-                )?;
-                let memory_exec = get_memory_exec(&ctx.state(), schema, vec![batch]).await;
-                let validated_exec = DataValidationExec::try_new_with_labeled_predicates(
-                    &ctx.state(),
-                    memory_exec,
-                    checks,
-                )?;
-                let result = collect(validated_exec, ctx.task_ctx()).await;
-                if valid {
-                    assert_eq!(result?.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
-                } else {
-                    assert!(
-                        result.unwrap_err().to_string().contains("generated column"),
-                        "invalid generated values must be rejected"
-                    );
-                }
-            }
+    async fn test_validation_generated_column_preserves_identifiers(
+        #[case] name: &str,
+        #[case] value: i32,
+        #[case] valid: bool,
+    ) -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(name, DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(Int32Array::from(vec![value])),
+            ],
+        )?;
+        let generated = [GeneratedColumn::new(
+            name,
+            "id * 2",
+            &crate::kernel::DataType::INTEGER,
+        )];
+        let ctx = SessionContext::new();
+        let checks = generated_columns_to_exprs(
+            &ctx.state(),
+            &DFSchema::try_from(schema.as_ref().clone())?,
+            &generated,
+        )?;
+        let memory_exec = get_memory_exec(&ctx.state(), schema, vec![batch]).await;
+        let validated_exec =
+            DataValidationExec::try_new_with_labeled_predicates(&ctx.state(), memory_exec, checks)?;
+        let result = collect(validated_exec, ctx.task_ctx()).await;
+        if valid {
+            assert_eq!(result?.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+        } else {
+            assert!(
+                result.unwrap_err().to_string().contains("generated column"),
+                "invalid generated values must be rejected"
+            );
         }
         Ok(())
     }
