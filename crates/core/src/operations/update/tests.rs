@@ -595,6 +595,14 @@ async fn test_expected_failures() {
 }
 
 #[tokio::test]
+async fn test_update_unknown_column() {
+    let table = prepare_values_table().await;
+    let res = table.update().with_update("Value", lit(10)).await;
+    let err = res.unwrap_err().to_string();
+    assert!(err.contains("No field named"), "{err}");
+}
+
+#[tokio::test]
 async fn test_update_safe_cast_converts_invalid_values_to_null() {
     let table = prepare_values_table().await;
     let (table, metrics) = table
