@@ -32,7 +32,7 @@ use datafusion::{
     error::DataFusionError,
     logical_expr::{
         ExprSchemable as _, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
-        case, cast, col, lit, try_cast, when,
+        case, col, lit, when,
     },
     physical_plan::{ExecutionPlan, metrics::MetricBuilder},
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
@@ -42,6 +42,8 @@ use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use tracing::log::*;
 
+use super::common::assignment::{Assignments, resolve_assignment_key};
+use super::common::cast_expr;
 use super::write::execution::{write_execution_plan, write_execution_plan_cdc};
 use crate::datafile::DeltaWriterProperties;
 use crate::datafile::writer::ArrowWriterOptions;
@@ -85,7 +87,7 @@ pub struct UpdateBuilder {
     /// Which records to update
     predicate: Option<Expression>,
     /// How to update columns in a record that match the predicate
-    updates: HashMap<Column, Expression>,
+    updates: HashMap<DeltaColumn, Expression>,
     /// A snapshot of the table's state
     snapshot: Option<EagerSnapshot>,
     /// Delta object store for handling data files
@@ -142,12 +144,15 @@ impl UpdateBuilder {
     }
 
     /// Perform an additional update expression during the operation
+    ///
+    /// `column` names a column, or a field of a struct column such as `s.a`. The other fields of
+    /// the struct keep their value.
     pub fn with_update<S: Into<DeltaColumn>, E: Into<Expression>>(
         mut self,
         column: S,
         expression: E,
     ) -> Self {
-        self.updates.insert(column.into().into(), expression.into());
+        self.updates.insert(column.into(), expression.into());
         self
     }
 
@@ -276,7 +281,7 @@ impl ExtensionPlanner for UpdateMetricExtensionPlanner {
 )]
 async fn execute(
     predicate: Expr,
-    updates: HashMap<Column, Expression>,
+    updates: HashMap<DeltaColumn, Expression>,
     log_store: LogStoreRef,
     snapshot: &EagerSnapshot,
     session: &dyn Session,
@@ -302,10 +307,15 @@ async fn execute(
     let schema = scan_config
         .table_schema(snapshot.table_configuration())?
         .to_dfschema_ref()?;
-    let updates: HashMap<_, _> = updates
+    let table_schema = snapshot.schema();
+    let updates = updates
         .into_iter()
-        .map(|(key, expr)| expr.resolve(session, schema.clone()).map(|e| (key.name, e)))
-        .try_collect()?;
+        .map(|(key, expr)| {
+            let key = resolve_assignment_key(&key, &schema, &table_schema, session)?;
+            Ok((key, expr.resolve(session, schema.clone())?))
+        })
+        .collect::<DeltaResult<Vec<_>>>()?;
+    let updates = Assignments::try_new(updates)?;
 
     let scan_start = Instant::now();
 
@@ -344,22 +354,27 @@ async fn execute(
         .fields()
         .into_iter()
         .map(|field| {
-            let expr = match updates.get(field.name()) {
+            let current = col(Column::from_name(field.name()));
+            let update_expr = updates.column_value(
+                field.name(),
+                field.data_type(),
+                Some((current.clone(), field.data_type())),
+                safe_cast,
+            )?;
+            let expr = match update_expr {
                 Some(expr) => {
                     let target_type = field.data_type().clone();
                     let update_expr = if expr.get_type(plan_with_metrics.schema())? == target_type {
-                        expr.to_owned()
-                    } else if safe_cast {
-                        try_cast(expr.to_owned(), target_type)
+                        expr
                     } else {
-                        cast(expr.to_owned(), target_type)
+                        cast_expr(expr, target_type, safe_cast)
                     };
                     case(col(UPDATE_PREDICATE_COLNAME))
                         .when(lit(true), update_expr)
-                        .otherwise(col(Column::from_name(field.name())))?
+                        .otherwise(current)?
                         .alias(field.name())
                 }
-                None => col(Column::from_name(field.name())),
+                None => current,
             };
             Ok::<_, DataFusionError>(expr)
         })

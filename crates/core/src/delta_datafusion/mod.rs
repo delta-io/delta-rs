@@ -577,47 +577,55 @@ impl TableProviderFactory for DeltaTableFactory {
     }
 }
 
-/// A wrapper for Deltafusion's Column to preserve case-sensitivity during string conversion
+/// The column or struct field that an assignment of `update` or `merge` sets
+///
+/// The name is kept as written, for example `value`, `s.a` or `target.s.a`. The operation
+/// resolves it against the table schema when it runs.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DeltaColumn {
-    inner: Column,
+    name: String,
+}
+
+impl DeltaColumn {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 impl From<&str> for DeltaColumn {
     fn from(c: &str) -> Self {
-        DeltaColumn {
-            inner: Column::from_qualified_name_ignore_case(c),
-        }
+        DeltaColumn { name: c.to_owned() }
     }
 }
 
 /// Create a column, cloning the string
 impl From<&String> for DeltaColumn {
     fn from(c: &String) -> Self {
-        DeltaColumn {
-            inner: Column::from_qualified_name_ignore_case(c),
-        }
+        DeltaColumn { name: c.clone() }
     }
 }
 
 /// Create a column, reusing the existing string
 impl From<String> for DeltaColumn {
     fn from(c: String) -> Self {
-        DeltaColumn {
-            inner: Column::from_qualified_name_ignore_case(c),
-        }
+        DeltaColumn { name: c }
     }
 }
 
+/// Reads the name as `[table.]column`. A name that sets a struct field, such as `s.a`, gives
+/// the column `a` of the table `s`.
 impl From<DeltaColumn> for Column {
     fn from(value: DeltaColumn) -> Self {
-        value.inner
+        Column::from_qualified_name_ignore_case(value.name)
     }
 }
 
-/// Create a column, reusing the existing datafusion column
+/// Create a column from a datafusion column. The table reference and the name are quoted.
 impl From<Column> for DeltaColumn {
     fn from(c: Column) -> Self {
-        DeltaColumn { inner: c }
+        DeltaColumn {
+            name: c.quoted_flat_name(),
+        }
     }
 }
 

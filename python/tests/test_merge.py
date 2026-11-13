@@ -2,6 +2,7 @@ import datetime
 import os
 import pathlib
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 import pytest
 from arro3.core import Array, DataType, Table
@@ -11,6 +12,9 @@ from deltalake import CommitProperties, DeltaTable, Field, Schema, write_deltala
 from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
 from deltalake.schema import PrimitiveType
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 
 @pytest.mark.parametrize("streaming", (True, False))
@@ -633,6 +637,7 @@ def test_merge_when_matched_update_all_wo_predicate(
                 [True, True],
                 ArrowField("deleted", type=DataType.bool(), nullable=True),
             ),
+            # The target has no column `weight`: `update_all` leaves it out
             "weight": Array(
                 [10, 15],
                 ArrowField("weight", type=DataType.int64(), nullable=True),
@@ -707,6 +712,7 @@ def test_merge_when_matched_update_all_with_exclude(
                 [True, True],
                 ArrowField("deleted", type=DataType.bool(), nullable=True),
             ),
+            # The target has no column `weight`: `update_all` leaves it out
             "weight": Array(
                 [10, 15],
                 ArrowField("weight", type=DataType.int64(), nullable=True),
@@ -2404,6 +2410,199 @@ def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: b
 
     with pytest.raises(Exception):
         get_value("null_count.bar")
+
+
+def test_merge_unknown_column(tmp_path: pathlib.Path, sample_table: Table):
+    write_deltalake(tmp_path, sample_table, mode="append")
+    dt = DeltaTable(tmp_path)
+
+    merger = dt.merge(
+        source=sample_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+    ).when_not_matched_insert({"id": "s.id", "Price": "s.price"})
+
+    with pytest.raises(DeltaError, match="No field named"):
+        merger.execute()
+
+    assert dt.version() == 0
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_struct_field(
+    tmp_path: pathlib.Path, struct_table: "pa.Table", streaming: bool
+):
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, struct_table)
+    dt = DeltaTable(tmp_path)
+    source = pa.table(
+        {"id": pa.array([1, 4], pa.int64()), "x": pa.array([7, 8], pa.int64())}
+    )
+
+    (
+        dt.merge(
+            source=source,
+            predicate="t.id = src.id",
+            source_alias="src",
+            target_alias="t",
+            streamed_exec=streaming,
+        )
+        .when_matched_update({"t.s.a": "src.x", "s.inner.y": "0"})
+        .when_not_matched_insert({"id": "src.id", "s.a": "src.x"})
+        .when_not_matched_by_source_update(
+            {"s.b": "'gone'", "s.inner.x": "5"}, predicate="t.id >= 2"
+        )
+        .execute()
+    )
+
+    result = dt.to_pyarrow_table().sort_by("id").to_pydict()
+    assert result == {
+        "id": [1, 2, 3, 4],
+        "s": [
+            {"a": 7, "b": "one", "inner": {"x": 10, "y": 0}},
+            # A null struct is built: the fields that the update does not set are null
+            {"a": 2, "b": "gone", "inner": {"x": 5, "y": None}},
+            {"a": None, "b": "gone", "inner": {"x": 5, "y": None}},
+            # The insert has no target row: the fields that it does not set are null
+            {"a": 8, "b": None, "inner": None},
+        ],
+    }
+
+
+@pytest.mark.pyarrow
+def test_merge_struct_field_conflict(tmp_path: pathlib.Path, struct_table: "pa.Table"):
+    write_deltalake(tmp_path, struct_table)
+    dt = DeltaTable(tmp_path)
+
+    merger = dt.merge(
+        source=struct_table,
+        predicate="t.id = src.id",
+        source_alias="src",
+        target_alias="t",
+    ).when_matched_update({"s": "src.s", "t.s.a": "0"})
+
+    with pytest.raises(DeltaError, match="set the same field"):
+        merger.execute()
+
+    assert dt.version() == 0
+
+
+@pytest.mark.pyarrow
+def test_merge_struct_field_key_evolves_schema(
+    tmp_path: pathlib.Path, struct_table: "pa.Table"
+):
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, struct_table)
+    dt = DeltaTable(tmp_path)
+    # The source column `s` has the field `c`, which the target column `s` does not have
+    source = pa.table(
+        {
+            "id": pa.array([1], pa.int64()),
+            "s": pa.array([{"c": 7}], type=pa.struct([("c", pa.int64())])),
+        }
+    )
+
+    dt.merge(
+        source=source,
+        predicate="t.id = src.id",
+        source_alias="src",
+        target_alias="t",
+        merge_schema=True,
+    ).when_matched_update({"s.c": "src.s.c"}).execute()
+
+    result = dt.to_pyarrow_table().sort_by("id").to_pydict()
+    assert result == {
+        "id": [1, 2, 3],
+        "s": [
+            {"a": 1, "b": "one", "inner": {"x": 10, "y": 11}, "c": 7},
+            {"a": 2, "b": "two", "inner": None, "c": None},
+            None,
+        ],
+    }
+
+
+@pytest.mark.pyarrow
+def test_merge_struct_field_key_on_source_only_column(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, pa.table({"id": pa.array([1, 2], pa.int64())}))
+    dt = DeltaTable(tmp_path)
+    # The target has no column `new`. The source column `new` has the fields `c` and `d`,
+    # and the key sets only `c`.
+    struct = pa.struct([("c", pa.int64()), ("d", pa.int64())])
+    source = pa.table(
+        {
+            "id": pa.array([1], pa.int64()),
+            "new": pa.array([{"c": 7, "d": 8}], type=struct),
+        }
+    )
+
+    dt.merge(
+        source=source,
+        predicate="t.id = src.id",
+        source_alias="src",
+        target_alias="t",
+        merge_schema=True,
+    ).when_matched_update({"new.c": "src.new.c"}).execute()
+
+    result = dt.to_pyarrow_table().sort_by("id").to_pydict()
+    assert result == {"id": [1, 2], "new": [{"c": 7}, None]}
+
+
+@pytest.mark.pyarrow
+def test_merge_added_column_is_null_for_insert_that_does_not_set_it(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, pa.table({"id": pa.array([1, 2], pa.int64())}))
+    dt = DeltaTable(tmp_path)
+    # The target has no column `new`. The update clause sets it, the insert clause does not.
+    source = pa.table(
+        {
+            "id": pa.array([1, 3], pa.int64()),
+            "new": pa.array([7, 8], pa.int64()),
+        }
+    )
+
+    dt.merge(
+        source=source,
+        predicate="t.id = src.id",
+        source_alias="src",
+        target_alias="t",
+        merge_schema=True,
+    ).when_matched_update({"new": "src.new"}).when_not_matched_insert(
+        {"id": "src.id"}
+    ).execute()
+
+    # The inserted row 3 gets NULL for `new`, as in Delta Spark, not the source value 8
+    result = dt.to_pyarrow_table().sort_by("id").to_pydict()
+    assert result == {"id": [1, 2, 3], "new": [7, None, None]}
+
+
+def test_merge_duplicate_key_error_shows_keys_as_written(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+    dt = DeltaTable(tmp_path)
+
+    merger = dt.merge(
+        source=sample_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+    ).when_matched_update({"price": "s.price", "t.price": "s.price"})
+
+    with pytest.raises(
+        DeltaError, match=r"'price' and 't\.price'|'t\.price' and 'price'"
+    ):
+        merger.execute()
+
+    assert dt.version() == 0
 
 
 def test_merge_field_special_characters_delete_2438(tmp_path: pathlib.Path):

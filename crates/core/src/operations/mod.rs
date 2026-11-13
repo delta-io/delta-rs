@@ -60,6 +60,8 @@ pub mod vacuum;
 #[cfg(feature = "datafusion")]
 mod cdc;
 #[cfg(feature = "datafusion")]
+mod common;
+#[cfg(feature = "datafusion")]
 pub mod constraints;
 #[cfg(feature = "datafusion")]
 pub mod delete;

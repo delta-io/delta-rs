@@ -7,7 +7,7 @@ use arrow::array::{Array, ArrayRef, BooleanArray, Int32Array, RecordBatch, UInt6
 use arrow::compute::{filter_record_batch, take};
 use arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::TreeNodeRecursion;
-use datafusion::common::{Column, DataFusionError, Result as DataFusionResult};
+use datafusion::common::{DataFusionError, Result as DataFusionResult};
 use datafusion::execution::context::SessionState;
 use datafusion::logical_expr::{
     Expr, Extension, LogicalPlan, UserDefinedLogicalNodeCore, col,
@@ -25,6 +25,7 @@ use roaring::RoaringTreemap;
 
 use crate::DeltaTableError;
 use crate::delta_datafusion::get_path_column;
+use crate::operations::common::assignment::Assignments;
 use crate::operations::merge::{
     DUPLICATE_MATCH_MARKER_COLUMNS, MatchParticipationClass, OPERATION_COLUMN, OperationType,
     TARGET_MATCH_CARDINALITY_CLASS_COLUMN, TARGET_ROW_ORDINAL_IN_FILE_COLUMN,
@@ -403,11 +404,7 @@ impl RecordBatchStream for MergeValidationStream {
 pub(super) fn build_duplicate_match_validation_plan(
     input: LogicalPlan,
     state: &SessionState,
-    ops: &[(
-        HashMap<Column, Expr>,
-        OperationType,
-        MatchParticipationClass,
-    )],
+    ops: &[(Assignments, OperationType, MatchParticipationClass)],
     file_column: Arc<String>,
 ) -> DataFusionResult<LogicalPlan> {
     let mut cardinality_when = Vec::with_capacity(ops.len());

@@ -2,6 +2,9 @@ use super::*;
 
 use crate::kernel::{Action, PrimitiveType, StructField, StructType};
 use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
+use crate::operations::common::assignment::tests::{
+    not_null_field_table, not_null_nested_field_table, struct_table,
+};
 use crate::writer::test_utils::datafusion::{get_data, write_batch};
 use crate::writer::test_utils::{
     get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
@@ -592,6 +595,226 @@ async fn test_expected_failures() {
     let table = prepare_values_table().await;
     let res = table.update().with_update("value", lit("a string")).await;
     assert!(res.is_err());
+}
+
+#[tokio::test]
+async fn test_update_unknown_column() {
+    let table = prepare_values_table().await;
+    let res = table.update().with_update("Value", lit(10)).await;
+    let err = res.unwrap_err().to_string();
+    assert!(err.contains("No field named"), "{err}");
+}
+
+#[tokio::test]
+async fn test_update_struct_field() {
+    let table = struct_table().await;
+    let (table, metrics) = table
+        .update()
+        .with_predicate(col("id").eq(lit(1)))
+        .with_update("s.a", lit(0))
+        .await
+        .unwrap();
+    assert_eq!(metrics.num_updated_rows, 1);
+
+    let expected = [
+        "+----+-----+---------------------------------------+",
+        "| id | a   | s                                     |",
+        "+----+-----+---------------------------------------+",
+        "| 1  | 100 | {a: 0, b: one, inner: {x: 10, y: 11}} |",
+        "| 2  | 200 | {a: 2, b: two, inner: }               |",
+        "| 3  | 300 |                                       |",
+        "+----+-----+---------------------------------------+",
+    ];
+    let actual = get_data(&table).await;
+    assert_batches_sorted_eq!(&expected, &actual);
+}
+
+#[tokio::test]
+async fn test_update_struct_field_builds_null_struct() {
+    // In row 2 `s.inner` is NULL and in row 3 `s` is NULL. The update builds the struct, as Delta
+    // Spark does: the fields that it does not set are NULL.
+    let table = struct_table().await;
+    let (table, metrics) = table
+        .update()
+        .with_update("s.inner.x", "coalesce(s.inner.x, 0) + 1")
+        .with_update("`s`.`b`", lit("new"))
+        .await
+        .unwrap();
+    assert_eq!(metrics.num_updated_rows, 3);
+
+    let expected = [
+        "+----+-----+---------------------------------------+",
+        "| id | a   | s                                     |",
+        "+----+-----+---------------------------------------+",
+        "| 1  | 100 | {a: 1, b: new, inner: {x: 11, y: 11}} |",
+        "| 2  | 200 | {a: 2, b: new, inner: {x: 1, y: }}    |",
+        "| 3  | 300 | {a: , b: new, inner: {x: 1, y: }}     |",
+        "+----+-----+---------------------------------------+",
+    ];
+    let actual = get_data(&table).await;
+    assert_batches_sorted_eq!(&expected, &actual);
+}
+
+#[tokio::test]
+async fn test_update_struct_field_safe_cast() {
+    let table = struct_table().await;
+    let (table, _) = table
+        .update()
+        .with_predicate(col("id").eq(lit(1)))
+        .with_safe_cast(true)
+        .with_update("s.a", lit("a string"))
+        .await
+        .unwrap();
+
+    let expected = [
+        "+----+-----+--------------------------------------+",
+        "| id | a   | s                                    |",
+        "+----+-----+--------------------------------------+",
+        "| 1  | 100 | {a: , b: one, inner: {x: 10, y: 11}} |",
+        "| 2  | 200 | {a: 2, b: two, inner: }              |",
+        "| 3  | 300 |                                      |",
+        "+----+-----+--------------------------------------+",
+    ];
+    let actual = get_data(&table).await;
+    assert_batches_sorted_eq!(&expected, &actual);
+}
+
+#[tokio::test]
+async fn test_update_struct_field_with_not_null_sibling() {
+    for safe_cast in [false, true] {
+        let table = not_null_field_table().await;
+        let schema = table.snapshot().unwrap().schema();
+        let (table, _) = table
+            .update()
+            .with_safe_cast(safe_cast)
+            .with_predicate(col("id").eq(lit(1)))
+            .with_update("s.b", lit("new"))
+            .await
+            .unwrap();
+
+        let expected = [
+            "+----+----------------+",
+            "| id | s              |",
+            "+----+----------------+",
+            "| 1  | {a: 1, b: new} |",
+            "| 2  |                |",
+            "+----+----------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+        assert_eq!(table.snapshot().unwrap().schema(), schema);
+    }
+}
+
+#[tokio::test]
+async fn test_update_struct_field_of_null_struct_with_not_null_sibling() {
+    // In row 2 `s` is NULL. The update builds the struct, so the NOT NULL field `s.a` needs a
+    // value.
+    let res = not_null_field_table()
+        .await
+        .update()
+        .with_update("s.b", lit("new"))
+        .await;
+    let err = res.unwrap_err().to_string();
+    assert!(
+        err.contains("NULL value in the NOT NULL field 'a'"),
+        "{err}"
+    );
+
+    let (table, _) = not_null_field_table()
+        .await
+        .update()
+        .with_update("s.a", lit(5))
+        .with_update("s.b", lit("new"))
+        .await
+        .unwrap();
+
+    let expected = [
+        "+----+----------------+",
+        "| id | s              |",
+        "+----+----------------+",
+        "| 1  | {a: 5, b: new} |",
+        "| 2  | {a: 5, b: new} |",
+        "+----+----------------+",
+    ];
+    let actual = get_data(&table).await;
+    assert_batches_sorted_eq!(&expected, &actual);
+}
+
+#[tokio::test]
+async fn test_update_struct_field_null_in_not_null_field() {
+    let table = not_null_field_table().await;
+    let res = table
+        .update()
+        .with_update("s.a", lit(ScalarValue::Int32(None)))
+        .await;
+    let err = res.unwrap_err().to_string();
+    assert!(
+        err.contains("NULL value in the NOT NULL field 'a'"),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_struct_field_errors() {
+    for (keys, message) in [
+        (
+            vec!["s", "s.a"],
+            "Assignment keys 's' and 's.a' set the same field",
+        ),
+        (vec!["s.inner", "s.inner.x"], "set the same field"),
+        (vec!["s.a", "`s`.a"], "set the same field"),
+        (vec!["s.c"], "field 'c' not found"),
+        (vec!["s.a.x"], "intermediate field 'a' is not a struct"),
+        (vec!["t.s.a"], "No field named t.s"),
+    ] {
+        let mut update = struct_table().await.update();
+        for key in &keys {
+            update = update.with_update(*key, lit(0));
+        }
+        let err = update.await.unwrap_err().to_string();
+        assert!(err.contains(message), "{keys:?}: {err}");
+    }
+}
+
+#[tokio::test]
+async fn test_update_struct_field_to_struct_with_not_null_field() {
+    // The key sets the struct `s.inner` as a whole. Its field `x` is NOT NULL.
+    let (table, _) = not_null_nested_field_table()
+        .await
+        .update()
+        .with_update("s.inner", "named_struct('x', 5)")
+        .await
+        .unwrap();
+
+    let expected = [
+        "+----+-------------------------+",
+        "| id | s                       |",
+        "+----+-------------------------+",
+        "| 1  | {inner: {x: 5}, b: one} |",
+        "+----+-------------------------+",
+    ];
+    let actual = get_data(&table).await;
+    assert_batches_sorted_eq!(&expected, &actual);
+}
+
+#[tokio::test]
+async fn test_update_key_that_needs_backticks() {
+    // `my field` is not an identifier without backticks. The error must tell the user that.
+    let res = struct_table()
+        .await
+        .update()
+        .with_update("s.my field", lit(0))
+        .await;
+    let err = res.unwrap_err().to_string();
+    assert_eq!(
+        err,
+        "Generic DeltaTable error: Schema error: No field named \"s.my field\".\n\
+         Valid fields are id, a, s.\n\
+         's.my field' is read as one column name, because it is not a list of identifiers. \
+         Put backticks around each name that has a space or another special character, \
+         for example `my col`.a"
+    );
 }
 
 #[tokio::test]
