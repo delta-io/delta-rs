@@ -2625,6 +2625,69 @@ class TableAlterer:
             post_commithook_properties,
         )
 
+    def drop_columns(
+        self,
+        column_names: str | list[str],
+        raise_if_not_exists: bool = True,
+        *,
+        commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
+    ) -> None:
+        """
+        Drop one or more columns, or fields nested inside them, from the table.
+
+        This is the equivalent of ``ALTER TABLE <table> DROP COLUMNS (<names>)``. It is a
+        metadata-only operation: the columns are removed from the table's schema while the
+        existing data files are left untouched.
+
+        Because of that, the table must have
+        [column mapping](https://docs.delta.io/delta-column-mapping/) enabled
+        (``delta.columnMapping.mode`` set to ``name`` or ``id``). Without column mapping the
+        drop would require rewriting every data file, which is not supported, and the
+        operation raises instead.
+
+        A nested field is named by its path, such as ``"s.a"``. The element of an array is
+        ``element``, and the key and value of a map are ``key`` and ``value``, so
+        ``"points.element.x"`` names the field ``x`` of the structs in the array ``points``.
+        A column name that contains a dot matches that column first; quote a name in a path
+        with backticks, such as ``"`a.b`.c"``.
+
+        A column cannot be dropped if it is a partition column, or if it is still referenced
+        by an invariant or a generated column. A reference to a struct also references the
+        fields inside it. A check constraint that only references dropped columns is dropped
+        with them; one that also references a remaining column blocks the drop. Dropped
+        columns, and any field nested inside them, are removed from
+        ``delta.dataSkippingStatsColumns``. When no listed column is left, the property
+        becomes an empty string, so stats are collected for no column. Dropping every column,
+        or every field of a struct,
+        is also rejected, since a table must keep at least one column and a struct at least
+        one field.
+
+        Args:
+            column_names: the name or path of the column to drop, or a list of them.
+            raise_if_not_exists: raise if a requested column does not exist.
+            commit_properties: properties of the transaction commit. If None, default values are used.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table")
+            dt.alter.drop_columns("legacy_column")
+            dt.alter.drop_columns(["first_unused", "second_unused"])
+            dt.alter.drop_columns("some_struct.unused_field")
+            ```
+        """
+        if isinstance(column_names, str):
+            column_names = [column_names]
+
+        self.table._table.drop_columns(
+            column_names,
+            raise_if_not_exists,
+            commit_properties,
+            post_commithook_properties,
+        )
+
     def set_table_properties(
         self,
         properties: dict[str, str],

@@ -399,6 +399,13 @@ pub enum DeltaOperation {
         /// The name of the column whose `NOT NULL` constraint was dropped
         column: StructField,
     },
+    /// Drop one or more columns from the table schema
+    #[serde(rename_all = "camelCase")]
+    DropColumns {
+        /// The names of the columns, or the paths of the nested fields, that were removed from
+        /// the schema
+        columns: Vec<String>,
+    },
 }
 
 impl DeltaOperation {
@@ -430,6 +437,7 @@ impl DeltaOperation {
             DeltaOperation::UpdateFieldMetadata { .. } => "UPDATE FIELD METADATA",
             DeltaOperation::UpdateTableMetadata { .. } => "UPDATE TABLE METADATA",
             DeltaOperation::DropColumnNotNull { .. } => "CHANGE COLUMN",
+            DeltaOperation::DropColumns { .. } => "DROP COLUMNS",
         }
     }
 
@@ -458,6 +466,7 @@ impl DeltaOperation {
             | Self::UpdateFieldMetadata { .. }
             | Self::UpdateTableMetadata { .. }
             | Self::DropColumnNotNull { .. }
+            | Self::DropColumns { .. }
             | Self::SetTableProperties { .. }
             | Self::AddColumn { .. }
             | Self::AddFeature { .. }

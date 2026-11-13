@@ -14,6 +14,7 @@ from deltalake import (
 from deltalake.exceptions import DeltaError
 from deltalake.schema import Field as DeltaField
 from deltalake.schema import PrimitiveType, StructType
+from deltalake.schema import Schema as DeltaSchema
 
 if TYPE_CHECKING:
     pass
@@ -601,6 +602,52 @@ def test_drop_column_not_null_already_nullable(tmp_path: pathlib.Path):
 
     with pytest.raises(DeltaError):
         dt.alter.drop_column_not_null("value")
+
+
+def test_drop_columns_requires_column_mapping(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    """Without column mapping a drop would require rewriting every data file, so it is
+    rejected. Column-mapped round-trips live in test_column_mapping.py."""
+    write_deltalake(tmp_path, sample_table)
+
+    dt = DeltaTable(tmp_path)
+
+    with pytest.raises(DeltaError, match="requires column mapping"):
+        dt.alter.drop_columns("price")
+
+
+def test_drop_columns_nested_field(tmp_path: pathlib.Path):
+    dt = DeltaTable.create(
+        tmp_path,
+        schema=DeltaSchema(
+            [
+                DeltaField("id", PrimitiveType("integer")),
+                DeltaField(
+                    "some_struct",
+                    StructType(
+                        [
+                            DeltaField("nested", PrimitiveType("integer")),
+                            DeltaField("kept", PrimitiveType("integer")),
+                        ]
+                    ),
+                ),
+            ]
+        ),
+        configuration={"delta.columnMapping.mode": "name"},
+    )
+
+    dt.alter.drop_columns("some_struct.nested")
+
+    some_struct = dt.schema().fields[1].type
+    assert [field.name for field in some_struct.fields] == ["kept"]
+    assert next(dt.history(1))["operationParameters"] == {
+        "columns": '["some_struct.nested"]'
+    }
+
+    # A struct must keep at least one field.
+    with pytest.raises(DeltaError, match="Cannot drop every field of 'some_struct'"):
+        dt.alter.drop_columns("some_struct.kept")
 
 
 def test_set_column_metadata(tmp_path: pathlib.Path, sample_table: Table):
