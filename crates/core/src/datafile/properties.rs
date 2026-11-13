@@ -27,7 +27,7 @@ use parquet::schema::types::ColumnPath;
 use crate::datafile::writer::ArrowWriterOptions;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::arrow::engine_ext::stats_table_properties;
-use crate::parquet_utils::default_writer_properties;
+use crate::parquet_utils::{ContentDefinedChunking, default_writer_properties};
 use crate::table::config::{DEFAULT_NUM_INDEX_COLS, TablePropertiesExt as _};
 
 /// Rows per slice handed to the parquet writer when none is set.
@@ -289,6 +289,21 @@ impl DeltaWriterProperties {
             self.target_file_size = Some(table_config.table_properties().target_file_size());
         }
         self.apply_table_stats(table_config)
+    }
+
+    /// Add the parquet settings the table's `Metadata.format.options` configure, such as
+    /// content-defined chunking, as a layer after the ones already set, so every file gets
+    /// them whatever parquet properties the caller passed. Call it once per write.
+    // Only the DataFusion write paths call this.
+    #[cfg_attr(not(feature = "datafusion"), allow(dead_code))]
+    pub(crate) fn apply_table_format(self, table_config: &TableConfiguration) -> DeltaResult<Self> {
+        let format_options = table_config.metadata().format_options();
+        Ok(
+            match ContentDefinedChunking::from_format_options(format_options)? {
+                Some(cdc) => self.with_layer(cdc),
+                None => self,
+            },
+        )
     }
 
     /// Run `layer` on every file's parquet properties, after the layers added before it.
