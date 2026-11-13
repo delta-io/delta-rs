@@ -612,6 +612,17 @@ mod tests {
         let expected =
             Predicate::junction(JunctionPredicateOp::And, vec![column.clone().is_not_null()]);
         assert_eq!(predicate, expected);
+
+        let literal = ("s", FilterOp::NotIn, FilterValue::Set(vec!["", "books"]));
+        let predicate = literal_to_kernel_predicate(&literal, &schema).unwrap();
+        let expected = Predicate::junction(
+            JunctionPredicateOp::And,
+            vec![
+                column.clone().is_not_null(),
+                column.clone().ne(Scalar::String("books".to_string())),
+            ],
+        );
+        assert_eq!(predicate, expected);
     }
 
     #[test]
