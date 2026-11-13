@@ -533,6 +533,7 @@ impl ProtocolInner {
         new_properties: &HashMap<String, String>,
         raise_if_not_exists: bool,
     ) -> DeltaResult<Self> {
+        let had_writer_features = self.min_writer_version >= 7;
         let mut parsed_properties: HashMap<TableProperty, String> = HashMap::new();
 
         for (key, value) in new_properties {
@@ -667,8 +668,9 @@ impl ProtocolInner {
         }
 
         // If the minWriterVersion has been set to 7 then there are additional writer features
-        // which must be applied
-        if self.min_writer_version >= 7
+        // which must be applied. A table that was already at 7 lists the features it uses.
+        if !had_writer_features
+            && self.min_writer_version >= 7
             && let Some(features) = writer_features_for_version(self.min_writer_version)
         {
             self = self.append_writer_features(features);
@@ -1667,6 +1669,32 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_properties_does_not_add_unused_writer_features() {
+        // A table already at writer 7 lists the features it uses: setting a property must not add
+        // appendOnly and invariants to it (#5021)
+        let protocol: Protocol = serde_json::from_value(serde_json::json!({
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": ["timestampNtz"],
+            "writerFeatures": ["timestampNtz"],
+        }))
+        .unwrap();
+        let config = HashMap::from([(
+            "delta.logRetentionDuration".to_string(),
+            "interval 2 days".to_string(),
+        )]);
+
+        let protocol = protocol
+            .apply_properties_to_protocol(&config, true)
+            .unwrap();
+
+        assert_eq!(
+            protocol.writer_features_set(),
+            Some(HashSet::from([TableFeature::TimestampWithoutTimezone]))
+        );
+    }
+
+    #[test]
     fn test_apply_properties_column_mapping_independent_reader_writer() {
         // Reader and writer are bumped independently: a feature-based writer (v7) declares the
         // ColumnMapping writer feature, while the legacy reader is bumped to v2.
@@ -1690,15 +1718,6 @@ mod tests {
                 .unwrap()
                 .contains(&TableFeature::ColumnMapping),
             "writerFeatures should contain ColumnMapping, got: {:?}",
-            protocol.writer_features()
-        );
-
-        assert!(
-            protocol
-                .writer_features()
-                .unwrap()
-                .contains(&TableFeature::Invariants),
-            "writerFeatures should be upgraded include Invariants, got: {:?}",
             protocol.writer_features()
         );
 
