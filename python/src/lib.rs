@@ -56,8 +56,8 @@ use deltalake::parquet::basic::{Compression, Encoding};
 use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 use deltalake::partitions::{
-    FilterLiteral, FilterValue, conjunction_to_kernel_predicate, dnf_to_kernel_predicate,
-    filter_literal,
+    FilterLiteral, FilterValue, conjunction_to_kernel_predicate, conjunction_to_sql_predicate,
+    dnf_to_kernel_predicate, filter_literal,
 };
 use deltalake::protocol::log_compaction::compact_logs;
 use deltalake::protocol::{DeltaOperation, SaveMode};
@@ -1696,7 +1696,7 @@ impl RawDeltaTable {
                 ));
             }
 
-            match mode {
+            let predicate = match mode {
                 SaveMode::Overwrite => {
                     let partitions_filters = partitions_filters.unwrap_or_default();
                     let converted_filters = convert_partition_filters(&partitions_filters)
@@ -1704,16 +1704,17 @@ impl RawDeltaTable {
 
                     let state = self.cloned_state()?;
                     let log_store = self.log_store()?;
-                    let filter = if converted_filters.is_empty() {
-                        None
+                    let (filter, predicate) = if converted_filters.is_empty() {
+                        (None, None)
                     } else {
-                        Some(Arc::new(
-                            conjunction_to_kernel_predicate(
-                                &converted_filters,
-                                state.schema().as_ref(),
-                            )
-                            .map_err(PythonError::from)?,
-                        ) as PredicateRef)
+                        let table_schema = state.schema();
+                        let filter =
+                            conjunction_to_kernel_predicate(&converted_filters, &table_schema)
+                                .map_err(PythonError::from)?;
+                        let predicate =
+                            conjunction_to_sql_predicate(&converted_filters, &table_schema)
+                                .map_err(PythonError::from)?;
+                        (Some(Arc::new(filter) as PredicateRef), Some(predicate))
                     };
                     let add_actions: Vec<_> = rt()
                         .block_on(async {
@@ -1741,19 +1742,21 @@ impl RawDeltaTable {
                             .map_err(PythonError::from)?;
                         commit_actions.push(Action::Metadata(metadata));
                     }
+                    predicate
                 }
                 _ => {
                     // This should be unreachable from Python
                     if &schema != existing_schema.as_ref() {
                         DeltaProtocolError::new_err("Cannot change schema except in overwrite.");
                     }
+                    None
                 }
-            }
+            };
 
             let operation = DeltaOperation::Write {
                 mode,
                 partition_by: Some(partition_by),
-                predicate: None,
+                predicate,
             };
 
             let properties =
