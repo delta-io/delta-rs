@@ -685,6 +685,7 @@ mod tests {
     mod datafusion_tests {
         use super::*;
 
+        use crate::kernel::transaction::{CommitConflictError, TransactionError};
         use crate::writer::test_utils::get_record_batch;
         #[tokio::test]
         async fn test_create_table_save_mode() {
@@ -779,6 +780,46 @@ mod tests {
             assert_eq!(state.version(), 1);
             // Checks if files got removed after overwrite
             assert_eq!(state.log_data().num_files(), 0);
+        }
+
+        #[tokio::test]
+        async fn test_create_or_replace_conflicts_with_concurrent_append() -> DeltaResult<()> {
+            let batch = get_record_batch(None, false);
+            let table = DeltaTable::new_in_memory()
+                .write(vec![batch.clone()])
+                .await?;
+            let stale_snapshot = table.snapshot()?.clone();
+            let (_, actions, operation) = table
+                .create()
+                .with_columns(get_delta_schema().fields().cloned())
+                .with_save_mode(SaveMode::Overwrite)
+                .into_table_and_actions()
+                .await?;
+            let mut table = table
+                .write(vec![batch])
+                .with_save_mode(SaveMode::Append)
+                .await?;
+
+            let result = CommitBuilder::default()
+                .with_actions(actions)
+                .build(Some(&stale_snapshot), table.log_store(), operation)
+                .await;
+
+            assert!(
+                matches!(
+                    result,
+                    Err(DeltaTableError::Transaction {
+                        source: TransactionError::CommitConflict(
+                            CommitConflictError::ConcurrentAppend
+                        )
+                    })
+                ),
+                "{result:?}"
+            );
+            table.update_state().await?;
+            assert_eq!(table.version(), Some(1));
+            assert_eq!(table.snapshot()?.log_data().num_files(), 2);
+            Ok(())
         }
 
         #[tokio::test]
