@@ -221,6 +221,9 @@ impl Snapshot {
     /// When `catalog_log_tail` is `Some`, the catalog is the source of truth: the ratified
     /// commits are passed via `with_log_tail` and the kernel is capped at `max_version` via
     /// `with_max_catalog_version`, so filesystem commits beyond that version are ignored.
+    /// This is the entry point used for catalog-managed tables (e.g. Unity Catalog managed
+    /// commits), where commits are staged in `_delta_log/_staged_commits/` until the catalog
+    /// ratifies them; see [`CatalogLogTail`].
     pub async fn try_new_with_engine_and_catalog(
         engine: Arc<dyn Engine>,
         table_root: Url,
@@ -260,6 +263,11 @@ impl Snapshot {
     }
 
     /// Create a new [`Snapshot`] instance
+    ///
+    /// The log store is first asked for a [`CatalogLogTail`]: catalog-managed stores supply
+    /// the staged commits and catalog-ratified maximum version handed to the kernel, while
+    /// filesystem-managed stores return `None` and the snapshot is built from the filesystem
+    /// listing as usual. See [`Snapshot::try_new_with_engine_and_catalog`].
     pub async fn try_new(log_store: &dyn LogStore, version: Option<Version>) -> DeltaResult<Self> {
         let engine = log_store.engine();
 
@@ -1356,6 +1364,10 @@ impl EagerSnapshot {
     }
 
     /// Update the snapshot to the given version
+    ///
+    /// Catalog-managed tables are rebuilt from a fresh catalog log tail rather than updated
+    /// incrementally: the incremental filesystem-only path cannot see ratified-but-unpublished
+    /// commits, and the catalog — not the filesystem — decides the latest version.
     pub(crate) async fn update(
         &mut self,
         log_store: &dyn LogStore,
