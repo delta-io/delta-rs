@@ -250,11 +250,31 @@ pub fn literal_to_kernel_predicate(
                 .iter()
                 .map(|v| dt.parse_scalar(v))
                 .collect::<Result<Vec<_>, _>>()?;
+            // A null value (an empty string parses to null) is matched with IS [NOT] NULL,
+            // the same way the `=` / `!=` arms above handle it.
             let (term, junction): (Box<dyn Fn(Scalar) -> Predicate>, _) =
                 if matches!(op, FilterOp::In) {
-                    (Box::new(|v| col.clone().eq(v)), JunctionPredicateOp::Or)
+                    (
+                        Box::new(|v: Scalar| {
+                            if v.is_null() {
+                                col.clone().is_null()
+                            } else {
+                                col.clone().eq(v)
+                            }
+                        }),
+                        JunctionPredicateOp::Or,
+                    )
                 } else {
-                    (Box::new(|v| col.clone().ne(v)), JunctionPredicateOp::And)
+                    (
+                        Box::new(|v: Scalar| {
+                            if v.is_null() {
+                                col.clone().is_not_null()
+                            } else {
+                                col.clone().ne(v)
+                            }
+                        }),
+                        JunctionPredicateOp::And,
+                    )
                 };
             let predicates = values.into_iter().map(term).collect::<Vec<_>>();
             Predicate::junction(junction, predicates)
@@ -558,6 +578,39 @@ mod tests {
             .map(|s| column.clone().ne(s))
             .collect::<Vec<_>>();
         let expected = Predicate::junction(JunctionPredicateOp::And, expected_inner);
+        assert_eq!(predicate, expected);
+    }
+
+    #[test]
+    fn test_literal_to_kernel_predicate_in_with_null() {
+        let schema = StructType::try_new(vec![StructField::new(
+            "s",
+            DataType::Primitive(PrimitiveType::String),
+            true,
+        )])
+        .unwrap();
+        let column = Expression::column(["s"]);
+
+        let literal = ("s", FilterOp::In, FilterValue::Set(vec![""]));
+        let predicate = literal_to_kernel_predicate(&literal, &schema).unwrap();
+        let expected = Predicate::junction(JunctionPredicateOp::Or, vec![column.clone().is_null()]);
+        assert_eq!(predicate, expected);
+
+        let literal = ("s", FilterOp::In, FilterValue::Set(vec!["", "books"]));
+        let predicate = literal_to_kernel_predicate(&literal, &schema).unwrap();
+        let expected = Predicate::junction(
+            JunctionPredicateOp::Or,
+            vec![
+                column.clone().is_null(),
+                column.clone().eq(Scalar::String("books".to_string())),
+            ],
+        );
+        assert_eq!(predicate, expected);
+
+        let literal = ("s", FilterOp::NotIn, FilterValue::Set(vec![""]));
+        let predicate = literal_to_kernel_predicate(&literal, &schema).unwrap();
+        let expected =
+            Predicate::junction(JunctionPredicateOp::And, vec![column.clone().is_not_null()]);
         assert_eq!(predicate, expected);
     }
 
