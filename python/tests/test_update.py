@@ -384,3 +384,26 @@ def test_update_stats_columns_stats_provided(tmp_path: pathlib.Path):
 
     with pytest.raises(Exception):
         get_value("null_count.bar")
+
+
+@pytest.mark.pyarrow
+def test_update_tuple_predicate(tmp_path: pathlib.Path):
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    data = pa.table(
+        {
+            "id": pa.array([1, 2, 3]),
+            "val": pa.array([10, 20, 30]),
+        }
+    )
+    write_deltalake(tmp_path, data)
+    dt = DeltaTable(tmp_path)
+
+    dt.update(updates={"val": "99"}, predicate=[("id", "=", 2)])
+    res = dt.to_pyarrow_table()
+    assert res.filter(pc.equal(res["id"], 2))["val"].to_pylist() == [99]
+
+    dt.update(new_values={"val": 100}, predicate=[("id", ">", 2)])
+    res = dt.to_pyarrow_table()
+    assert res.filter(pc.equal(res["id"], 3))["val"].to_pylist() == [100]

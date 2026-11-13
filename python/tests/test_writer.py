@@ -3649,3 +3649,24 @@ def test_remove_action_constructor():
         repr(full)
         == "RemoveAction(path=part-b.parquet, data_change=True, deletion_timestamp=456, size=10, partition_values={'ds': '2026-01-01'})"
     )
+
+
+@pytest.mark.pyarrow
+def test_write_deltalake_overwrite_with_tuple_predicate(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    data = pa.table(
+        {
+            "part": pa.array(["x", "y"]),
+            "val": pa.array([1, 2]),
+        }
+    )
+    write_deltalake(tmp_path, data, partition_by=["part"])
+    replacement = pa.table({"part": pa.array(["y"]), "val": pa.array([20])})
+    write_deltalake(
+        tmp_path, replacement, mode="overwrite", predicate=[("part", "=", "y")]
+    )
+
+    dt = DeltaTable(tmp_path)
+    res = dt.to_pyarrow_table().to_pydict()
+    assert res["val"] == [1, 20] or res["val"] == [20, 1]
