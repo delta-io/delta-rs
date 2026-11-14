@@ -92,7 +92,7 @@ either = "1.8"
 foldhash = "0.2"
 indexmap = "2.2.1"
 itertools = "0.15"
-parking_lot = "0.12"
+parking_lot = "0.13"
 percent-encoding = "2"
 pin-project-lite = "^0.2.7"
 tracing = { workspace = true }
@@ -129,10 +129,10 @@ datafusion = [
 ]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
-python = ["arrow/pyarrow"]
+python = []
 native-tls = ["delta_kernel_default_engine/native-tls"]
 rustls = ["delta_kernel_default_engine/rustls"]
-cloud = ["object_store/cloud", "dep:humantime"]
+cloud = ["object_store/cloud-base", "dep:humantime"]
 
 # enable caching some file I/O operations when scanning delta logs
 delta-cache = ["foyer", "tempfile", "url/serde"]

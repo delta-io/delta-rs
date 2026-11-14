@@ -13,7 +13,7 @@ use rstest::rstest;
 use super::*;
 
 fn with_id(field: Field, id: i64) -> Field {
-    field.with_metadata([(PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())].into())
+    field.with_metadata(std::collections::HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())]))
 }
 
 fn long(name: &str, id: Option<i64>) -> Field {

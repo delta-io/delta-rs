@@ -216,6 +216,7 @@ impl DeltaFileSystemHandler {
                     Ok(ListResult {
                         common_prefixes: vec![],
                         objects: vec![],
+                        extensions: Default::default(),
                     })
                 } else {
                     Err(ObjectStoreError::NotFound { path, source })
@@ -339,7 +340,7 @@ impl DeltaFileSystemHandler {
 
 // TODO the C++ implementation track an internal lock on all random access files, DO we need this here?
 // TODO add buffer to store data ...
-#[pyclass(weakref, module = "deltalake._internal", skip_from_py_object)]
+#[pyclass(weakref, module = "deltalake._internal")]
 #[derive(Debug, Clone)]
 pub struct ObjectInputFile {
     store: Arc<DynObjectStore>,

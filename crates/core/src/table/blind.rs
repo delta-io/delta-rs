@@ -303,7 +303,7 @@ fn adds_to_record_batch(adds: &[Add]) -> DeltaResult<RecordBatch> {
         None,
     ));
 
-    // Build the schema - MapBuilder uses "keys" and "values" as default field names
+    // Build the schema - MapBuilder uses "key" and "value" as default field names
     let schema = Arc::new(Schema::new(vec![
         Field::new("path", DataType::Utf8, false),
         Field::new(
@@ -312,8 +312,8 @@ fn adds_to_record_batch(adds: &[Add]) -> DeltaResult<RecordBatch> {
                 Arc::new(Field::new(
                     "entries",
                     DataType::Struct(Fields::from(vec![
-                        Field::new("keys", DataType::Utf8, false),
-                        Field::new("values", DataType::Utf8, true),
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Utf8, true),
                     ])),
                     false,
                 )),
