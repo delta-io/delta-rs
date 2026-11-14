@@ -441,7 +441,7 @@ fn field_id_schema() -> StructType {
 
 /// `field` with the parquet field id `id`, as parquet-rs reads and writes it.
 fn arrow_with_id(field: ArrowField, id: i64) -> ArrowField {
-    field.with_metadata([(PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())].into())
+    field.with_metadata(std::collections::HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())]))
 }
 
 /// `field` with the kernel's `parquet.field.id`.
