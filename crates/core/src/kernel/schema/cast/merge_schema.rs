@@ -345,12 +345,12 @@ fn merge_arrow_vec_fields(
                         // have merged in.
                         f.set_metadata(field.metadata().clone());
 
-                        let mut field_metadata = f.metadata().clone();
+                        let mut field_metadata = HashMap::from(f.metadata());
                         // Column generation expressions are table-defined metadata and should not
                         // be inferred or overridden by incoming batch schemas. Ignore them when
                         // merging Arrow field metadata to avoid spurious schema errors when the
                         // input includes conflicting `delta.generationExpression` metadata.
-                        let mut right_metadata = right_field.metadata().clone();
+                        let mut right_metadata = HashMap::from(right_field.metadata());
                         right_metadata.remove(ColumnMetadataKey::GenerationExpression.as_ref());
                         try_merge_metadata(&mut field_metadata, &right_metadata)?;
                         f.set_metadata(field_metadata);
