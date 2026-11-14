@@ -33,7 +33,7 @@ fn sendable_streams_to_stream(streams: Vec<SendableRecordBatchStream>) -> BatchS
 pub(crate) async fn coalesce_provider_scan(
     provider: &Arc<dyn TableProvider>,
     session: &dyn Session,
-    projection: Option<&Vec<usize>>,
+    projection: Option<&[usize]>,
     limit: Option<usize>,
 ) -> DeltaResult<SendableRecordBatchStream> {
     let scan_plan = provider.scan(session, projection, &[], limit).await?;
@@ -155,7 +155,13 @@ impl DeltaDataReaderExt for DataFusionDataReader {
     ) -> DeltaResult<SendableRecordBatchStream> {
         let projection =
             projection_indices(&self.provider.schema(), options.projection.as_deref())?;
-        coalesce_provider_scan(&self.provider, session, projection.as_ref(), options.limit).await
+        coalesce_provider_scan(
+            &self.provider,
+            session,
+            projection.as_deref(),
+            options.limit,
+        )
+        .await
     }
 }
 

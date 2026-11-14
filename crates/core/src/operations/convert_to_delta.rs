@@ -411,7 +411,7 @@ impl ConvertToDeltaBuilder {
 
             // Arrow schema of Parquet files may have conflicting metadata
             // Since Arrow schema metadata is not used to generate Delta table schema, we set the metadata field to an empty HashMap
-            arrow_schema.metadata = HashMap::new();
+            arrow_schema.metadata = HashMap::new().into();
             arrow_schemas.push(arrow_schema);
         }
 
