@@ -100,6 +100,36 @@ where
     }
 }
 
+/// Build the evaluator that normalizes cached scan-row batches, using `input_schema` as the
+/// evaluator's declared input.
+///
+/// The input schema must describe the batches actually evaluated. Cached batches may lack
+/// `partitionValues_parsed` even when the snapshot's metadata is partitioned (for example after
+/// an overwrite changed the partition columns), so callers should pass the batch's own schema.
+pub(crate) fn scan_row_in_eval_for_schema(
+    input_schema: &Arc<Schema>,
+) -> DeltaResult<Arc<dyn ExpressionEvaluator>> {
+    static EXPRESSION: LazyLock<Arc<Expression>> = LazyLock::new(|| {
+        Expression::struct_from(
+            scan_row_schema()
+                .fields()
+                .map(|field| Expression::column([field.name.clone()])),
+        )
+        .into()
+    });
+    static OUT_TYPE: LazyLock<DataType> =
+        LazyLock::new(|| DataType::Struct(Box::new(scan_row_schema().as_ref().clone())));
+
+    let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
+
+    Ok(ARROW_HANDLER.new_expression_evaluator(
+        input_schema,
+        EXPRESSION.clone(),
+        OUT_TYPE.clone(),
+    )?)
+}
+
+#[cfg(test)]
 pub(crate) fn scan_row_in_eval(
     snapshot: &KernelSnapshot,
 ) -> DeltaResult<Arc<dyn ExpressionEvaluator>> {
@@ -595,8 +625,29 @@ fn primitive_partition_values_to_array(
             )?)
             .with_precision_and_scale(decimal.precision(), decimal.scale() as i8)?,
         ) as ArrayRef,
+        // Kernel reads intervals as arrow integers: months, and microseconds.
+        PrimitiveType::IntervalYearMonth => Arc::new(Int32Array::from_iter(typed_partition_values(
+            field_name,
+            expected_data_type,
+            values,
+            |value| match value {
+                Scalar::IntervalYearMonth(value) => Some(*value),
+                _ => None,
+            },
+        )?)) as ArrayRef,
+        PrimitiveType::IntervalDayTime => Arc::new(Int64Array::from_iter(typed_partition_values(
+            field_name,
+            expected_data_type,
+            values,
+            |value| match value {
+                Scalar::IntervalDayTime(value) => Some(*value),
+                _ => None,
+            },
+        )?)) as ArrayRef,
         others => {
-            todo!("The primitive type {others} is not supported currently!");
+            return Err(DeltaTableError::SchemaMismatch {
+                msg: format!("Partition field {field_name} has unsupported type {others}."),
+            });
         }
     })
 }
@@ -867,6 +918,38 @@ mod tests {
             err.to_string().contains("Partition field part expected"),
             "unexpected error: {err}"
         );
+    }
+
+    /// Interval partition values become the integers kernel reads intervals as.
+    #[test]
+    fn primitive_partition_values_to_array_reads_intervals() -> DeltaResult<()> {
+        use arrow::datatypes::{Int32Type, Int64Type};
+
+        let months = primitive_partition_values_to_array(
+            "part",
+            &PrimitiveType::IntervalYearMonth,
+            &DataType::INTERVAL_YEAR_MONTH,
+            &[
+                Scalar::IntervalYearMonth(14),
+                Scalar::Null(DataType::INTERVAL_YEAR_MONTH),
+            ],
+        )?;
+        assert_eq!(
+            months.as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![Some(14), None])
+        );
+
+        let micros = primitive_partition_values_to_array(
+            "part",
+            &PrimitiveType::IntervalDayTime,
+            &DataType::INTERVAL_DAY_TIME,
+            &[Scalar::IntervalDayTime(90_000_000)],
+        )?;
+        assert_eq!(
+            micros.as_primitive::<Int64Type>(),
+            &Int64Array::from(vec![90_000_000])
+        );
+        Ok(())
     }
 
     #[test]

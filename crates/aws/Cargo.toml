@@ -65,3 +65,6 @@ rustls = [
 
 [package.metadata.cargo-machete]
 ignored = ["aws-sdk-sts", "aws-smithy-runtime-api", "time"]
+
+[lints]
+workspace = true

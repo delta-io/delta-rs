@@ -1089,7 +1089,10 @@ async fn execute(
     // Apply the early filter only to file skipping.
     let file_skipping_predicates =
         build_file_skipping_predicates(target_subset_filter, target_alias.as_deref());
-    let needs_duplicate_match_validation = !match_operations.is_empty();
+    // NOT MATCHED BY SOURCE clauses rewrite files that also hold matched rows, so every
+    // duplicate match of a target row would otherwise be copied out again
+    let needs_duplicate_match_validation =
+        !match_operations.is_empty() || !not_match_source_operations.is_empty();
 
     let target_provider = {
         let mut builder = DeltaScanNext::builder()
@@ -1361,12 +1364,6 @@ async fn execute(
         };
         let mut null_target_column = None;
 
-        let source_qualifier = match &source_alias {
-            Some(alias) => Some(TableReference::Bare {
-                table: alias.to_owned().into(),
-            }),
-            None => TableReference::none(),
-        };
         let name = delta_field.name();
         let kernel_arrow_type: DataType = delta_field.data_type().try_into_arrow()?;
         let mut cast_type: DataType = target_arrow_schema
@@ -1378,7 +1375,8 @@ async fn execute(
 
         // Receive the correct column reference given that some columns are only in source table
         let mut field_changed = false;
-        let column = if let Some(field) = snapshot.schema().field(name) {
+        let column = Column::new(qualifier.clone(), name);
+        let added_column_source = if let Some(field) = snapshot.schema().field(name) {
             if field != delta_field {
                 // The field changed, e.g. a struct gained a field. Cast every branch, including
                 // the target value kept by rows that don't set it, to the merged type; missing
@@ -1386,21 +1384,33 @@ async fn execute(
                 field_changed = true;
                 cast_type = kernel_arrow_type;
             }
-            Column::new(qualifier.clone(), name)
+            None
         } else {
             null_target_column = Some(merge_cast(
                 lit(ScalarValue::Null).alias(name),
                 cast_type.clone(),
                 safe_cast,
             ));
-            Column::new(source_qualifier.clone(), name)
+            let source_qualifier = source_alias.as_ref().map(|alias| TableReference::Bare {
+                table: alias.to_owned().into(),
+            });
+            Some(Column::new(source_qualifier, name))
         };
 
-        for (idx, (operations, _, _)) in ops.iter().enumerate() {
+        for (idx, (operations, operation_type, _)) in ops.iter().enumerate() {
+            // A column the merge adds has no target value: rows the merge copies unchanged keep it
+            // null, and rows it writes without assigning it take the source value
+            let unassigned = || match (&added_column_source, operation_type) {
+                (None, _) => col(column.clone()),
+                (Some(_), OperationType::Copy) => {
+                    merge_cast(lit(ScalarValue::Null), cast_type.clone(), safe_cast)
+                }
+                (Some(source_column), _) => col(source_column.clone()),
+            };
             let op: Expr = operations
                 .get(&column)
                 .map(|expr| expr.to_owned())
-                .unwrap_or_else(|| col(column.clone()));
+                .unwrap_or_else(unassigned);
             // `try_cast` can't plan struct casts that add fields (DataFusion checks them with
             // arrow's `can_cast_types`), and the merged type is a superset of the target and
             // source types, so a strict cast loses nothing.
@@ -5269,6 +5279,121 @@ mod tests {
             "+----+-------+------------+------------------+-----------------+",
         ];
         assert_batches_sorted_eq!(&expected_cdf, &batches);
+    }
+
+    #[tokio::test]
+    async fn test_merge_schema_new_column_uses_assignments_and_keeps_copied_rows_null() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+        let table = write_data(table, &schema).await;
+
+        let source_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new("tag", ArrowDataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            source_schema,
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![20, 5, 7])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-05",
+                    "2023-07-06",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["b", "c", "x"])),
+            ],
+        )
+        .unwrap();
+        let source = SessionContext::new().read_batch(batch).unwrap();
+
+        let (table, _) = table
+            .merge(source, "target.id = source.id")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .when_matched_update(|update| {
+                update
+                    .predicate("source.value > target.value")
+                    .update("value", "source.value")
+                    .update("tag", "upper(source.tag)")
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", "source.id")
+                    .set("value", "source.value")
+                    .set("modified", "source.modified")
+                    .set("tag", "'manual'")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+--------+",
+            "| id | value | modified   | tag    |",
+            "+----+-------+------------+--------+",
+            "| A  | 1     | 2021-02-01 |        |",
+            "| B  | 20    | 2021-02-01 | B      |",
+            "| C  | 10    | 2021-02-02 |        |",
+            "| D  | 100   | 2021-02-02 |        |",
+            "| X  | 7     | 2023-07-06 | manual |",
+            "+----+-------+------------+--------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_not_matched_by_source_keeps_one_copy_of_multiply_matched_row() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+        let table = write_data(table, &schema).await;
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "B", "E"])),
+                Arc::new(arrow::array::Int32Array::from(vec![11, 12, 50])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-05",
+                    "2023-07-06",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, _) = table
+            .merge(source, "target.id = source.id")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", "source.id")
+                    .set("value", "source.value")
+                    .set("modified", "source.modified")
+            })
+            .unwrap()
+            .when_not_matched_by_source_delete(|delete| delete)
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| B  | 10    | 2021-02-01 |",
+            "| E  | 50    | 2023-07-06 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 
     #[tokio::test]

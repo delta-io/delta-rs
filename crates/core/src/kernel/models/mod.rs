@@ -15,6 +15,7 @@ pub use actions::*;
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(missing_docs)]
+#[non_exhaustive]
 pub enum Action {
     #[serde(rename = "metaData")]
     Metadata(Metadata),

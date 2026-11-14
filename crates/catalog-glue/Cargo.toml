@@ -35,3 +35,6 @@ rustls = ["deltalake-core/rustls"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

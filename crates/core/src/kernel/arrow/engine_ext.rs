@@ -21,7 +21,7 @@ use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::{DataSkippingNumIndexedCols, TableProperties};
 use delta_kernel::transforms::{SchemaTransform, transform_output_type};
-use delta_kernel::{DeltaResult, ExpressionEvaluator};
+use delta_kernel::{ExpressionEvaluator, KernelResult as DeltaResult};
 
 use crate::errors::{DeltaResult as DeltaResultLocal, DeltaTableError};
 use crate::kernel::{SCAN_ROW_ARROW_SCHEMA, StatsProjection};

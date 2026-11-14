@@ -9,6 +9,7 @@ use tokio::runtime::Handle;
 
 /// Kinds of storage integration
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum MsftIntegration {
     Azure(String),
     Onelake,

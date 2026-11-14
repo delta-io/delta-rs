@@ -70,6 +70,7 @@ use crate::{
 /// Planner used by optimize.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum PlannerStrategy {
     /// Older metrics with no planner field.
     #[default]
@@ -265,6 +266,7 @@ impl Default for MetricDetails {
 
 /// Type of optimization to perform.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum OptimizeType {
     /// Compact files into pre-determined bins
     Compact,
