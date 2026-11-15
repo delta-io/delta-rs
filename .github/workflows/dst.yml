@@ -1,0 +1,36 @@
+name: dst
+
+# Deterministic simulation of concurrent commits (crates/core/tests/it_datafusion/dst_commits.rs).
+# Each seed replays exactly, so a failure here can be reproduced locally with DST_SEED=<seed>.
+
+on:
+  push:
+    branches: [main, "rust-v*"]
+  pull_request:
+    branches: [main, "rust-v*", next, next/*]
+  workflow_dispatch:
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
+jobs:
+  concurrent-commits:
+    runs-on: ubuntu-latest
+    env:
+      # Create races are excluded until delta-io/delta-rs#4982 is fixed.
+      DST_CREATE_PCT: "0"
+      DST_SEEDS: "500"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: ./.github/actions/setup-builder
+      - name: load DAT
+        run: make setup-dat
+      - name: Build the test binary
+        run: cargo test -p deltalake-core --features datafusion --test it_datafusion --no-run
+      - name: Concurrent commits
+        run: cargo test -p deltalake-core --features datafusion --test it_datafusion dst_ -- --ignored --nocapture
+      - name: Concurrent commits with commit failures
+        env:
+          DST_FAULTS: "25"
+        run: cargo test -p deltalake-core --features datafusion --test it_datafusion dst_ -- --ignored --nocapture
