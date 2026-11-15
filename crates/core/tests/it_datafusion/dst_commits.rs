@@ -1,23 +1,18 @@
-//! Deterministic simulation of concurrent commits.
+//! Seeded simulation of concurrent commits.
 //!
-//! Several writers load the same table version and each runs one operation. A gated object
-//! store parks every create-only put of a `_delta_log/NNN.json` commit. A seeded scheduler waits
-//! until every live writer is parked or done, then picks which parked commit lands next. Commit
-//! puts are the only place writers share state, so a seed fixes the whole interleaving and a
-//! failing seed replays exactly.
+//! Writers load the same table version and each runs one operation. [`GatedStore`] holds every
+//! commit put until [`Scheduler`] releases it, and the scheduler picks the order from a seed, so
+//! a failing seed replays exactly. Each run is checked against [`State::apply`]: the table must
+//! match some serial order of the commits that landed.
 //!
-//! The oracle replays the committed operations against a small in-memory model. The final table
-//! must equal the result of running the committed operations in some serial order (write
-//! serializability). Every writer that reports success must own the version it reports, and no
-//! writer that reports failure may appear in the log.
-//!
-//! The tests are ignored by default. Run them with:
+//! `dst_concurrent_commits_smoke` runs a few seeds with the other tests. For a longer run:
 //!
 //! ```text
-//! DST_SEEDS=300 cargo test -p deltalake-core --features datafusion --test it_datafusion dst_ -- --ignored --nocapture
-//! DST_SEED=42 cargo test ...        # replay one seed and print its trace
-//! DST_FAULTS=20 cargo test ...      # fail 20% of commit puts, before or after they land
+//! DST_SEEDS=1000 cargo test -p deltalake-core --features datafusion --test it_datafusion dst_ -- --ignored --nocapture
 //! ```
+//!
+//! `DST_SEED=<n>` replays one seed, `DST_FAULTS=<percent>` fails commit puts, and
+//! `DST_CREATE_PCT=<percent>` sets how often writers race to create the table.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
@@ -29,7 +24,7 @@ use datafusion::logical_expr::{col, lit};
 use datafusion::prelude::SessionContext;
 use deltalake_core::kernel::transaction::CommitProperties;
 use deltalake_core::protocol::SaveMode;
-use deltalake_core::{DeltaTable, DeltaTableBuilder, DeltaTableError};
+use deltalake_core::{DeltaResult, DeltaTable, DeltaTableBuilder, DeltaTableError};
 use futures::stream::BoxStream;
 use object_store::memory::InMemory;
 use object_store::path::Path;
@@ -37,23 +32,18 @@ use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     ObjectStoreExt, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
+use rstest::rstest;
 use tokio::sync::{Notify, oneshot};
 use url::Url;
 
+/// Key in `commitInfo` that records which simulated writer made a commit.
 const WRITER_KEY: &str = "dst_writer";
 const TABLE_URL: &str = "memory:///dst";
 
-// ---------------------------------------------------------------------------------------------
-// Seeded randomness. SplitMix64 keeps seeds stable across `rand` upgrades.
-// ---------------------------------------------------------------------------------------------
-
+/// SplitMix64, so a seed means the same run regardless of the `rand` version.
 struct Rng(u64);
 
 impl Rng {
-    fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-
     fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
@@ -71,12 +61,9 @@ impl Rng {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Operations and the model they run against.
-// ---------------------------------------------------------------------------------------------
-
 type Rows = Vec<(i64, i64)>;
 
+/// One operation a simulated writer runs against the table.
 #[derive(Clone, Debug)]
 enum Op {
     /// Write to a table that does not exist yet, with `SaveMode::ErrorIfExists`.
@@ -99,7 +86,7 @@ enum Op {
         below: i64,
         add: i64,
     },
-    /// Upsert by `id`: matched rows take the source value, unmatched rows are inserted.
+    /// Upsert by `id`.
     Merge {
         rows: Rows,
     },
@@ -111,12 +98,12 @@ enum Op {
     },
 }
 
-/// What a table holds, as far as the oracle cares.
+/// The parts of a table the check compares.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct State {
     exists: bool,
     name: Option<String>,
-    /// Sorted `(id, value)` pairs. A multiset, so duplicate ids show up as a difference.
+    /// Sorted `(id, value)` pairs, kept as a multiset so duplicated rows show up.
     rows: Rows,
     /// Constraint name to its `value < bound` bound.
     constraints: BTreeMap<String, i64>,
@@ -133,51 +120,57 @@ impl State {
     }
 
     fn allows(&self, value: i64) -> bool {
-        self.constraints.values().all(|bound| value < *bound)
+        for bound in self.constraints.values() {
+            if value >= *bound {
+                return false;
+            }
+        }
+        true
     }
 
-    /// Run `op` serially against this state. `None` means the operation could not have
-    /// succeeded at this point in a serial order.
+    /// Run `op` against this state on its own. Returns `None` if `op` could not succeed here.
     fn apply(&self, op: &Op) -> Option<State> {
         let mut next = self.clone();
-        if !matches!(op, Op::Create { .. }) && !next.exists {
+        let creates = matches!(op, Op::Create { .. });
+        if next.exists == creates {
             return None;
         }
         match op {
             Op::Create { rows, name } => {
-                if next.exists {
-                    return None;
-                }
                 next.exists = true;
                 next.name = Some(name.clone());
                 next.rows = rows.clone();
             }
             Op::Append { rows } => {
-                if !rows.iter().all(|(_, v)| next.allows(*v)) {
-                    return None;
+                for (id, value) in rows {
+                    if !self.allows(*value) {
+                        return None;
+                    }
+                    next.rows.push((*id, *value));
                 }
-                next.rows.extend(rows.iter().copied());
             }
             Op::Overwrite { rows } => {
-                if !rows.iter().all(|(_, v)| next.allows(*v)) {
-                    return None;
+                for (_, value) in rows {
+                    if !self.allows(*value) {
+                        return None;
+                    }
                 }
                 next.rows = rows.clone();
             }
-            Op::Delete { below } => next.rows.retain(|(_, v)| *v >= *below),
+            Op::Delete { below } => next.rows.retain(|(_, value)| value >= below),
             Op::Update { below, add } => {
-                for (_, v) in next.rows.iter_mut() {
-                    if *v < *below {
-                        *v += add;
+                for (_, value) in next.rows.iter_mut() {
+                    if *value < *below {
+                        *value += add;
+                        if !self.allows(*value) {
+                            return None;
+                        }
                     }
-                }
-                if !next.rows.iter().all(|(_, v)| self.allows(*v)) {
-                    return None;
                 }
             }
             Op::Merge { rows } => {
                 for (id, value) in rows {
-                    if !next.allows(*value) {
+                    if !self.allows(*value) {
                         return None;
                     }
                     let mut matched = false;
@@ -194,10 +187,13 @@ impl State {
             }
             Op::Optimize => {}
             Op::AddConstraint { name, below } => {
-                if next.constraints.contains_key(name)
-                    || !next.rows.iter().all(|(_, v)| *v < *below)
-                {
+                if next.constraints.contains_key(name) {
                     return None;
+                }
+                for (_, value) in &next.rows {
+                    if value >= below {
+                        return None;
+                    }
                 }
                 next.constraints.insert(name.clone(), *below);
             }
@@ -207,79 +203,72 @@ impl State {
     }
 }
 
-/// Search for a serial order of `ops` that turns `base` into `target`.
-fn serial_order(base: &State, ops: &[(usize, &Op)], target: &State) -> Option<Vec<usize>> {
-    fn search(
-        state: &State,
-        remaining: &mut Vec<(usize, &Op)>,
-        order: &mut Vec<usize>,
-        target: &State,
-    ) -> bool {
-        if remaining.is_empty() {
-            return state == target;
-        }
-        for i in 0..remaining.len() {
-            let (writer, op) = remaining.remove(i);
-            if let Some(next) = state.apply(op) {
-                order.push(writer);
-                if search(&next, remaining, order, target) {
-                    return true;
-                }
-                order.pop();
-            }
-            remaining.insert(i, (writer, op));
-        }
-        false
+/// Whether some order of `ops`, applied one at a time, turns `state` into `target`.
+fn has_serial_order(state: &State, ops: &mut Vec<&Op>, target: &State) -> bool {
+    if ops.is_empty() {
+        return state == target;
     }
-    let mut remaining = ops.to_vec();
-    let mut order = vec![];
-    search(base, &mut remaining, &mut order, target).then_some(order)
+    for i in 0..ops.len() {
+        let op = ops.remove(i);
+        if let Some(next) = state.apply(op)
+            && has_serial_order(&next, ops, target)
+        {
+            return true;
+        }
+        ops.insert(i, op);
+    }
+    false
 }
 
-// ---------------------------------------------------------------------------------------------
-// The gated store and the scheduler that releases parked commits.
-// ---------------------------------------------------------------------------------------------
-
-/// What the scheduler does with a parked commit put.
+/// What the scheduler tells a held commit put to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Release {
-    /// Perform the put.
     Land,
-    /// Return an error without writing anything.
+    /// Fail without writing.
     FailBefore,
-    /// Perform the put, then return an error, as when a response is lost after a write lands.
+    /// Write, then fail, like a response lost after the put landed.
     FailAfter,
 }
 
 #[derive(Debug)]
 enum Slot {
     Running,
-    Parked {
+    Waiting {
         version: u64,
         release: oneshot::Sender<Release>,
     },
     Done,
 }
 
+/// Releases held commit puts one at a time, in an order chosen by its seed.
 #[derive(Debug)]
 struct Scheduler {
     slots: Mutex<Vec<Slot>>,
     changed: Notify,
+    /// Releases in the order they happened, for printing a failing seed.
     trace: Mutex<Vec<String>>,
+    /// Writers that had at least one commit put fail.
+    faulted: Mutex<BTreeSet<usize>>,
 }
 
 impl Scheduler {
     fn new(writers: usize) -> Arc<Self> {
+        let mut slots = vec![];
+        for _ in 0..writers {
+            slots.push(Slot::Running);
+        }
         Arc::new(Self {
-            slots: Mutex::new((0..writers).map(|_| Slot::Running).collect()),
+            slots: Mutex::new(slots),
             changed: Notify::new(),
             trace: Mutex::new(vec![]),
+            faulted: Mutex::new(BTreeSet::new()),
         })
     }
 
-    fn park(&self, writer: usize, version: u64) -> oneshot::Receiver<Release> {
+    /// Hold `writer`'s commit of `version` until the scheduler releases it.
+    fn hold(&self, writer: usize, version: u64) -> oneshot::Receiver<Release> {
         let (tx, rx) = oneshot::channel();
-        self.slots.lock().unwrap()[writer] = Slot::Parked {
+        self.slots.lock().unwrap()[writer] = Slot::Waiting {
             version,
             release: tx,
         };
@@ -292,41 +281,47 @@ impl Scheduler {
         self.changed.notify_one();
     }
 
-    /// Release parked commits one at a time until every writer is done. A commit is released
-    /// only when no writer is running, so the order of releases is the only freedom.
-    async fn drive(&self, rng: &mut Rng, fault_percent: u64) {
+    /// Release held commits until every writer is done. A commit is released only while no
+    /// writer is running, so the release order is the only thing that varies between runs.
+    async fn run(&self, rng: &mut Rng, fault_percent: u64) {
         loop {
             {
                 let mut slots = self.slots.lock().unwrap();
-                if slots.iter().all(|s| matches!(s, Slot::Done)) {
+                let mut waiting = vec![];
+                let mut running = false;
+                for (writer, slot) in slots.iter().enumerate() {
+                    match slot {
+                        Slot::Running => running = true,
+                        Slot::Waiting { .. } => waiting.push(writer),
+                        Slot::Done => {}
+                    }
+                }
+                if !running && waiting.is_empty() {
                     return;
                 }
-                if !slots.iter().any(|s| matches!(s, Slot::Running)) {
-                    let parked: Vec<usize> = (0..slots.len())
-                        .filter(|i| matches!(slots[*i], Slot::Parked { .. }))
-                        .collect();
-                    let writer = parked[rng.below(parked.len() as u64) as usize];
-                    let release = if fault_percent > 0 && rng.chance(fault_percent) {
-                        if rng.chance(50) {
+                if !running {
+                    let writer = waiting[rng.below(waiting.len() as u64) as usize];
+                    let mut release = Release::Land;
+                    if fault_percent > 0 && rng.chance(fault_percent) {
+                        release = if rng.chance(50) {
                             Release::FailBefore
                         } else {
                             Release::FailAfter
-                        }
-                    } else {
-                        Release::Land
-                    };
-                    let Slot::Parked {
+                        };
+                        self.faulted.lock().unwrap().insert(writer);
+                    }
+                    let Slot::Waiting {
                         version,
                         release: tx,
                     } = std::mem::replace(&mut slots[writer], Slot::Running)
                     else {
-                        unreachable!("picked a parked writer");
+                        unreachable!("writer {writer} is waiting");
                     };
                     self.trace
                         .lock()
                         .unwrap()
                         .push(format!("w{writer}->v{version}:{release:?}"));
-                    // The writer may have been dropped; it then shows up as an error result.
+                    // A dropped writer shows up as an error in its result.
                     let _ = tx.send(release);
                     continue;
                 }
@@ -336,7 +331,7 @@ impl Scheduler {
     }
 }
 
-/// An in-memory store whose commit puts from simulated writers wait for the scheduler.
+/// An in-memory store that holds commit puts from simulated writers for the [`Scheduler`].
 #[derive(Debug)]
 struct GatedStore {
     inner: InMemory,
@@ -351,7 +346,8 @@ impl GatedStore {
         })
     }
 
-    fn gate(&self, scheduler: Option<Arc<Scheduler>>) {
+    /// Start or stop holding commit puts.
+    fn set_scheduler(&self, scheduler: Option<Arc<Scheduler>>) {
         *self.scheduler.lock().unwrap() = scheduler;
     }
 }
@@ -362,38 +358,37 @@ impl Display for GatedStore {
     }
 }
 
-/// The version of a `_delta_log/NNNNNNNNNNNNNNNNNNNN.json` commit file.
+/// The version of a `_delta_log/<20 digits>.json` commit file, or `None` for any other path.
 fn commit_version(location: &Path) -> Option<u64> {
-    let mut parts = location.parts().collect::<Vec<_>>();
-    let file = parts.pop()?;
-    let dir = parts.pop()?;
-    if dir.as_ref() != "_delta_log" {
+    let parts: Vec<_> = location.parts().collect();
+    if parts.len() < 2 || parts[parts.len() - 2].as_ref() != "_delta_log" {
         return None;
     }
-    let stem = file.as_ref().strip_suffix(".json")?;
-    (stem.len() == 20 && stem.bytes().all(|b| b.is_ascii_digit()))
-        .then(|| stem.parse().ok())
-        .flatten()
+    let stem = parts[parts.len() - 1].as_ref().strip_suffix(".json")?;
+    if stem.len() != 20 || !stem.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    stem.parse().ok()
 }
 
-/// The simulated writer that produced a commit, read from its commitInfo metadata.
+/// The simulated writer recorded in a commit's `commitInfo`, if any.
 fn commit_writer(bytes: &[u8]) -> Option<usize> {
     let text = std::str::from_utf8(bytes).ok()?;
     for line in text.lines() {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        let Ok(action) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        if let Some(info) = value.get("commitInfo") {
+        if let Some(info) = action.get("commitInfo") {
             return info.get(WRITER_KEY)?.as_u64().map(|w| w as usize);
         }
     }
     None
 }
 
-fn injected(what: &str) -> object_store::Error {
+fn injected_failure(when: &str) -> object_store::Error {
     object_store::Error::Generic {
         store: "dst",
-        source: format!("injected failure {what} the commit landed").into(),
+        source: format!("injected failure {when} the commit landed").into(),
     }
 }
 
@@ -409,18 +404,21 @@ impl ObjectStore for GatedStore {
         if let (Some(scheduler), PutMode::Create, Some(version)) =
             (scheduler, &opts.mode, commit_version(location))
         {
-            let bytes: Vec<u8> = payload.iter().flat_map(|b| b.iter().copied()).collect();
+            let mut bytes = vec![];
+            for chunk in payload.iter() {
+                bytes.extend_from_slice(chunk);
+            }
             if let Some(writer) = commit_writer(&bytes) {
-                match scheduler
-                    .park(writer, version)
+                let release = scheduler
+                    .hold(writer, version)
                     .await
-                    .unwrap_or(Release::Land)
-                {
+                    .unwrap_or(Release::Land);
+                match release {
                     Release::Land => {}
-                    Release::FailBefore => return Err(injected("before")),
+                    Release::FailBefore => return Err(injected_failure("before")),
                     Release::FailAfter => {
                         self.inner.put_opts(location, payload, opts).await?;
-                        return Err(injected("after"));
+                        return Err(injected_failure("after"));
                     }
                 }
             }
@@ -469,23 +467,28 @@ impl ObjectStore for GatedStore {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Running operations against delta-rs.
-// ---------------------------------------------------------------------------------------------
-
-fn schema() -> Arc<ArrowSchema> {
-    Arc::new(ArrowSchema::new(vec![
+fn batch(rows: &Rows) -> RecordBatch {
+    let schema = Arc::new(ArrowSchema::new(vec![
         Field::new("id", DataType::Int64, true),
         Field::new("value", DataType::Int64, true),
-    ]))
+    ]));
+    let mut ids = vec![];
+    let mut values = vec![];
+    for (id, value) in rows {
+        ids.push(*id);
+        values.push(*value);
+    }
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int64Array::from(ids)),
+            Arc::new(Int64Array::from(values)),
+        ],
+    )
+    .unwrap()
 }
 
-fn batch(rows: &Rows) -> RecordBatch {
-    let ids = Int64Array::from(rows.iter().map(|(id, _)| *id).collect::<Vec<_>>());
-    let values = Int64Array::from(rows.iter().map(|(_, v)| *v).collect::<Vec<_>>());
-    RecordBatch::try_new(schema(), vec![Arc::new(ids), Arc::new(values)]).unwrap()
-}
-
+/// Load the table at its latest version, or an empty handle if it does not exist yet.
 async fn open(store: &Arc<GatedStore>) -> DeltaResult<DeltaTable> {
     let url = Url::parse(TABLE_URL).unwrap();
     let mut table = DeltaTableBuilder::from_url(url.clone())?
@@ -497,19 +500,13 @@ async fn open(store: &Arc<GatedStore>) -> DeltaResult<DeltaTable> {
     }
 }
 
-type DeltaResult<T> = Result<T, DeltaTableError>;
-
-fn props(writer: Option<usize>) -> CommitProperties {
-    let props = CommitProperties::default();
-    match writer {
-        Some(w) => props.with_metadata([(WRITER_KEY.to_string(), serde_json::json!(w))]),
-        None => props,
+/// Run `op` and return the version of the table it returns. `writer` tags the commit so the
+/// store can hold it; setup commits pass `None` and are never held.
+async fn run_op(table: DeltaTable, op: Op, writer: Option<usize>) -> DeltaResult<Option<u64>> {
+    let mut props = CommitProperties::default();
+    if let Some(writer) = writer {
+        props = props.with_metadata([(WRITER_KEY.to_string(), serde_json::json!(writer))]);
     }
-}
-
-/// Run `op` and return the version the returned table reports.
-async fn run(table: DeltaTable, op: Op, writer: Option<usize>) -> DeltaResult<Option<u64>> {
-    let props = props(writer);
     let table = match op {
         Op::Create { rows, name } => {
             table
@@ -534,25 +531,25 @@ async fn run(table: DeltaTable, op: Op, writer: Option<usize>) -> DeltaResult<Op
                 .await?
         }
         Op::Delete { below } => {
-            table
+            let (table, _) = table
                 .delete()
                 .with_predicate(col("value").lt(lit(below)))
                 .with_commit_properties(props)
-                .await?
-                .0
+                .await?;
+            table
         }
         Op::Update { below, add } => {
-            table
+            let (table, _) = table
                 .update()
                 .with_predicate(col("value").lt(lit(below)))
                 .with_update("value", col("value") + lit(add))
                 .with_commit_properties(props)
-                .await?
-                .0
+                .await?;
+            table
         }
         Op::Merge { rows } => {
             let source = SessionContext::new().read_batch(batch(&rows))?;
-            table
+            let (table, _) = table
                 .merge(source, col("target.id").eq(col("source.id")))
                 .with_source_alias("source")
                 .with_target_alias("target")
@@ -562,10 +559,13 @@ async fn run(table: DeltaTable, op: Op, writer: Option<usize>) -> DeltaResult<Op
                         .set("value", col("source.value"))
                 })?
                 .with_commit_properties(props)
-                .await?
-                .0
+                .await?;
+            table
         }
-        Op::Optimize => table.optimize().with_commit_properties(props).await?.0,
+        Op::Optimize => {
+            let (table, _) = table.optimize().with_commit_properties(props).await?;
+            table
+        }
         Op::AddConstraint { name, below } => {
             table
                 .add_constraint()
@@ -577,27 +577,21 @@ async fn run(table: DeltaTable, op: Op, writer: Option<usize>) -> DeltaResult<Op
     Ok(table.version())
 }
 
-/// Read what the table actually holds.
-async fn observe(store: &Arc<GatedStore>, constraint_bounds: &BTreeMap<String, i64>) -> State {
-    let table = open(store).await.expect("open the final table");
-    let Some(version) = table.version() else {
+/// Read the table back. `bounds` maps constraint names to bounds, which the metadata only holds
+/// as expressions.
+async fn read_state(store: &Arc<GatedStore>, bounds: &BTreeMap<String, i64>) -> State {
+    let table = open(store).await.unwrap();
+    if table.version().is_none() {
         return State::empty();
-    };
-    let _ = version;
-    let snapshot = table.snapshot().expect("snapshot");
-    let metadata = snapshot.metadata();
-    let name = metadata.name().map(str::to_string);
-    let constraints = metadata
-        .configuration()
-        .keys()
-        .filter_map(|k| k.strip_prefix("delta.constraints."))
-        .map(|n| {
-            (
-                n.to_string(),
-                constraint_bounds.get(n).copied().unwrap_or(i64::MIN),
-            )
-        })
-        .collect();
+    }
+    let metadata = table.snapshot().unwrap().metadata();
+    let mut constraints = BTreeMap::new();
+    for key in metadata.configuration().keys() {
+        if let Some(name) = key.strip_prefix("delta.constraints.") {
+            let bound = bounds.get(name).copied().unwrap_or(i64::MIN);
+            constraints.insert(name.to_string(), bound);
+        }
+    }
 
     let ctx = SessionContext::new();
     table.update_datafusion_session(&ctx.state()).unwrap();
@@ -611,87 +605,98 @@ async fn observe(store: &Arc<GatedStore>, constraint_bounds: &BTreeMap<String, i
         .await
         .unwrap();
     let mut rows = vec![];
-    for b in batches {
-        let ids = b.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
-        let values = b.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
-        for i in 0..b.num_rows() {
+    for batch in batches {
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let values = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        for i in 0..batch.num_rows() {
             rows.push((ids.value(i), values.value(i)));
         }
-        let _ = ids.len();
     }
     rows.sort_unstable();
     State {
         exists: true,
-        name,
+        name: metadata.name().map(str::to_string),
         rows,
         constraints,
     }
 }
 
-/// Which simulated writer authored each version in `(from, to]`.
-async fn authors(
+/// The simulated writer behind each commit after `base`, by version.
+async fn commit_writers(
     store: &Arc<GatedStore>,
-    from: Option<u64>,
-    to: Option<u64>,
+    base: Option<u64>,
+    latest: Option<u64>,
 ) -> BTreeMap<u64, Option<usize>> {
-    let mut out = BTreeMap::new();
-    let Some(to) = to else { return out };
-    let start = from.map(|v| v + 1).unwrap_or(0);
-    for version in start..=to {
+    let mut writers = BTreeMap::new();
+    let Some(latest) = latest else {
+        return writers;
+    };
+    let first = match base {
+        Some(base) => base + 1,
+        None => 0,
+    };
+    for version in first..=latest {
         let path = Path::from(format!("dst/_delta_log/{version:020}.json"));
         let bytes = store.inner.get(&path).await.unwrap().bytes().await.unwrap();
-        out.insert(version, commit_writer(&bytes));
+        writers.insert(version, commit_writer(&bytes));
     }
-    out
+    writers
 }
 
-// ---------------------------------------------------------------------------------------------
-// Scenarios.
-// ---------------------------------------------------------------------------------------------
-
+/// The starting table, built from `setup` (one commit per entry, none if empty), and the
+/// operations the writers race to commit on top of it.
 #[derive(Clone, Debug)]
 struct Scenario {
-    /// Commits that build the starting table, each one batch of rows. Empty means no table.
     setup: Vec<Rows>,
     ops: Vec<Op>,
 }
 
-fn scenario(seed: u64) -> Scenario {
-    let mut rng = Rng::new(seed);
+fn scenario(seed: u64, create_percent: u64) -> Scenario {
+    let mut rng = Rng(seed);
     let mut next_id = 100;
-    let mut fresh = |rng: &mut Rng, n: usize| -> Rows {
-        (0..n)
-            .map(|_| {
-                next_id += 1;
-                (next_id, rng.below(100) as i64)
-            })
-            .collect()
+    let mut new_rows = |rng: &mut Rng, n: usize| {
+        let mut rows = vec![];
+        for _ in 0..n {
+            next_id += 1;
+            rows.push((next_id, rng.below(100) as i64));
+        }
+        rows
     };
 
-    if rng.chance(env("DST_CREATE_PCT").unwrap_or(20)) {
-        let writers = 2 + rng.below(2) as usize;
-        let ops = (0..writers)
-            .map(|w| Op::Create {
-                rows: fresh(&mut rng, 2),
-                name: format!("w{w}"),
-            })
-            .collect();
+    if rng.chance(create_percent) {
+        let mut ops = vec![];
+        for writer in 0..2 + rng.below(2) {
+            ops.push(Op::Create {
+                rows: new_rows(&mut rng, 2),
+                name: format!("w{writer}"),
+            });
+        }
         return Scenario { setup: vec![], ops };
     }
 
-    let setup: Vec<Rows> = (0..3)
-        .map(|c| (0..2).map(|i| (c * 2 + i, rng.below(100) as i64)).collect())
-        .collect();
-    let writers = 2 + rng.below(3) as usize;
+    let mut setup = vec![];
+    for commit in 0..3 {
+        setup.push(vec![
+            (commit * 2, rng.below(100) as i64),
+            (commit * 2 + 1, rng.below(100) as i64),
+        ]);
+    }
     let mut ops = vec![];
-    for w in 0..writers {
-        let roll = rng.below(100);
-        let op = match roll {
+    for writer in 0..2 + rng.below(3) {
+        let op = match rng.below(100) {
             0..=21 => Op::Append {
-                rows: fresh(&mut rng, 2),
+                rows: new_rows(&mut rng, 2),
             },
             22..=29 => Op::Overwrite {
-                rows: fresh(&mut rng, 2),
+                rows: new_rows(&mut rng, 2),
             },
             30..=44 => Op::Delete {
                 below: rng.below(100) as i64,
@@ -702,13 +707,13 @@ fn scenario(seed: u64) -> Scenario {
             },
             60..=74 => {
                 let existing = (rng.below(6) as i64, rng.below(100) as i64);
-                let mut rows = fresh(&mut rng, 1);
+                let mut rows = new_rows(&mut rng, 1);
                 rows.push(existing);
                 Op::Merge { rows }
             }
             75..=84 => Op::Optimize,
             _ => Op::AddConstraint {
-                name: format!("c{w}"),
+                name: format!("c{writer}"),
                 below: 50 + rng.below(100) as i64,
             },
         };
@@ -717,30 +722,20 @@ fn scenario(seed: u64) -> Scenario {
     Scenario { setup, ops }
 }
 
-// ---------------------------------------------------------------------------------------------
-// One run, checked.
-// ---------------------------------------------------------------------------------------------
-
+/// Everything observable about one run. Two runs of a seed must produce equal values.
 #[derive(Debug, PartialEq, Eq)]
-struct Outcome {
+struct Run {
     trace: Vec<String>,
     results: Vec<String>,
-    authors: BTreeMap<u64, Option<usize>>,
-    observed: State,
+    writers: BTreeMap<u64, Option<usize>>,
+    state: State,
 }
 
-#[derive(Debug)]
-struct Finding {
-    seed: u64,
-    kind: &'static str,
-    detail: String,
-}
-
-async fn run_seed(seed: u64, fault_percent: u64) -> (Outcome, Vec<Finding>, Scenario) {
-    let scenario = scenario(seed);
+/// Run one seed and return what happened plus every problem found, as readable lines.
+async fn run_seed(seed: u64, fault_percent: u64, create_percent: u64) -> (Run, Vec<String>) {
+    let scenario = scenario(seed, create_percent);
     let store = GatedStore::new();
 
-    // Build the starting table without the gate.
     let mut base = State::empty();
     for rows in &scenario.setup {
         let op = if base.exists {
@@ -751,222 +746,160 @@ async fn run_seed(seed: u64, fault_percent: u64) -> (Outcome, Vec<Finding>, Scen
                 name: "base".into(),
             }
         };
-        let table = open(&store).await.unwrap();
-        run(table, op.clone(), None).await.unwrap();
+        run_op(open(&store).await.unwrap(), op.clone(), None)
+            .await
+            .unwrap();
         base = base.apply(&op).unwrap();
     }
     let base_version = open(&store).await.unwrap().version();
 
-    // Every writer loads the starting version before any of them runs.
+    // Every writer loads the starting version before any of them can commit.
     let mut tables = vec![];
     for _ in &scenario.ops {
         tables.push(open(&store).await.unwrap());
     }
-
     let scheduler = Scheduler::new(scenario.ops.len());
-    store.gate(Some(scheduler.clone()));
+    store.set_scheduler(Some(scheduler.clone()));
     let mut handles = vec![];
     for (writer, (table, op)) in tables.into_iter().zip(scenario.ops.clone()).enumerate() {
         let scheduler = scheduler.clone();
         handles.push(tokio::spawn(async move {
-            let result = run(table, op, Some(writer)).await;
+            let result = run_op(table, op, Some(writer)).await;
             scheduler.done(writer);
             result
         }));
     }
-    let mut rng = Rng::new(seed ^ 0xD57_5EED);
-    scheduler.drive(&mut rng, fault_percent).await;
-
-    let mut results: Vec<Result<Option<u64>, String>> = vec![];
+    scheduler
+        .run(&mut Rng(seed ^ 0xD57_5EED), fault_percent)
+        .await;
+    let mut results = vec![];
     for handle in handles {
         results.push(match handle.await {
             Ok(Ok(version)) => Ok(version),
             Ok(Err(err)) => Err(format!("error: {err}")),
-            Err(join) => Err(format!("PANIC: {join}")),
+            Err(join) => Err(format!("panic: {join}")),
         });
     }
-    store.gate(None);
+    store.set_scheduler(None);
 
     let latest = open(&store).await.unwrap().version();
-    let authors = authors(&store, base_version, latest).await;
-    let bounds: BTreeMap<String, i64> = scenario
-        .ops
-        .iter()
-        .filter_map(|op| match op {
-            Op::AddConstraint { name, below } => Some((name.clone(), *below)),
-            _ => None,
-        })
-        .collect();
-    let observed = observe(&store, &bounds).await;
-
-    let mut findings = vec![];
-    let mut found = |kind, detail: String| findings.push(Finding { seed, kind, detail });
-
-    // Each committed version must come from a simulated writer, once.
-    let mut seen = BTreeSet::new();
-    for (version, author) in &authors {
-        match author {
-            None => found("foreign-commit", format!("v{version} has no writer id")),
-            Some(w) if !seen.insert(*w) => found(
-                "double-commit",
-                format!("w{w} committed twice (again at v{version})"),
-            ),
-            Some(_) => {}
+    let writers = commit_writers(&store, base_version, latest).await;
+    let mut bounds = BTreeMap::new();
+    for op in &scenario.ops {
+        if let Op::AddConstraint { name, below } = op {
+            bounds.insert(name.clone(), *below);
         }
     }
-    let fault_hit = |w: usize| {
-        scheduler
-            .trace
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|t| t.starts_with(&format!("w{w}->")) && !t.ends_with("Land"))
-    };
+    let state = read_state(&store, &bounds).await;
+
+    let mut problems = vec![];
+    let mut committed = vec![];
+    for (version, writer) in &writers {
+        match writer {
+            None => problems.push(format!("v{version} was not made by a simulated writer")),
+            Some(w) if committed.contains(w) => {
+                problems.push(format!("w{w} committed twice, again at v{version}"))
+            }
+            Some(w) => committed.push(*w),
+        }
+    }
+    let faulted = scheduler.faulted.lock().unwrap().clone();
     for (w, result) in results.iter().enumerate() {
-        let in_log = authors.values().any(|a| *a == Some(w));
+        let in_log = committed.contains(&w);
         match result {
-            Err(e) if e.starts_with("PANIC") => found("panic", format!("w{w}: {e}")),
-            Err(e) if in_log && !fault_hit(w) => found(
-                "phantom-commit",
-                format!("w{w} failed but its commit is in the log: {e}"),
-            ),
-            Err(e) if in_log => found(
-                "ambiguous-commit",
-                format!("w{w} was told its commit failed after it landed: {e}"),
-            ),
-            Ok(Some(v)) if Some(*v) > base_version && authors.get(v) != Some(&Some(w)) => found(
-                "stolen-version",
-                format!("w{w} reported v{v}, which belongs to {:?}", authors.get(v)),
-            ),
+            Err(err) if err.starts_with("panic") => problems.push(format!("w{w}: {err}")),
+            // A put that landed and then failed cannot be told apart from one that did not land.
+            Err(err) if in_log && !faulted.contains(&w) => {
+                problems.push(format!("w{w} failed but its commit is in the log: {err}"))
+            }
+            Ok(Some(v)) if Some(*v) > base_version && writers.get(v) != Some(&Some(w)) => {
+                problems.push(format!("w{w} reported v{v}, which another writer made"))
+            }
             _ => {}
         }
     }
-
-    // The final table must equal some serial order of the committed operations.
-    let committed: Vec<(usize, &Op)> = authors
-        .values()
-        .filter_map(|a| *a)
-        .map(|w| (w, &scenario.ops[w]))
-        .collect();
-    if serial_order(&base, &committed, &observed).is_none() {
-        let log_order = committed
-            .iter()
-            .try_fold(base.clone(), |s, (_, op)| s.apply(op));
-        found(
-            "not-serializable",
-            format!(
-                "committed in log order {:?}\n      observed {:?}\n      log-order replay {:?}",
-                committed.iter().map(|(w, _)| *w).collect::<Vec<_>>(),
-                observed,
-                log_order
-            ),
-        );
+    let mut ops = vec![];
+    for w in &committed {
+        ops.push(&scenario.ops[*w]);
+    }
+    if !has_serial_order(&base, &mut ops, &state) {
+        problems.push(format!(
+            "no serial order of the commits {committed:?} gives the table {state:?}"
+        ));
+    }
+    if !problems.is_empty() {
+        problems.insert(0, format!("ops {:?}", scenario.ops));
     }
 
-    let outcome = Outcome {
+    let mut result_lines = vec![];
+    for result in &results {
+        result_lines.push(match result {
+            Ok(version) => format!("ok {version:?}"),
+            Err(err) => err.clone(),
+        });
+    }
+    let run = Run {
         trace: scheduler.trace.lock().unwrap().clone(),
-        results: results
-            .iter()
-            .map(|r| match r {
-                Ok(v) => format!("ok {v:?}"),
-                Err(e) => e.clone(),
-            })
-            .collect(),
-        authors,
-        observed,
+        results: result_lines,
+        writers,
+        state,
     };
-    (outcome, findings, scenario)
+    (run, problems)
+}
+
+/// Run `seeds`, replaying every 20th to check the run is deterministic, and fail on any problem.
+async fn check_seeds(seeds: Vec<u64>, fault_percent: u64, create_percent: u64) {
+    let mut failed = vec![];
+    for seed in &seeds {
+        let (run, mut problems) = run_seed(*seed, fault_percent, create_percent).await;
+        if seed % 20 == 0 {
+            let (again, _) = run_seed(*seed, fault_percent, create_percent).await;
+            if again != run {
+                problems.push(format!("replay differs: {run:?} vs {again:?}"));
+            }
+        }
+        if seeds.len() == 1 || !problems.is_empty() {
+            println!("seed {seed}: {:?} {:?}", run.trace, run.results);
+            for problem in &problems {
+                println!("  {problem}");
+            }
+        }
+        if !problems.is_empty() {
+            failed.push(*seed);
+        }
+    }
+    assert!(failed.is_empty(), "failing seeds: {failed:?}");
 }
 
 fn env(name: &str) -> Option<u64> {
-    std::env::var(name).ok().and_then(|v| v.parse().ok())
+    std::env::var(name).ok()?.parse().ok()
+}
+
+// A single-threaded runtime keeps the setup and reads simple; the release order comes from the
+// scheduler either way.
+#[tokio::test(flavor = "current_thread")]
+async fn dst_concurrent_commits_smoke() {
+    // Create races are left out until #4982 is fixed.
+    check_seeds((0..20).collect(), 0, 0).await;
+}
+
+/// Seeds that caught a conflict-checker bug with its fix reverted.
+#[rstest]
+#[case::concurrent_optimizes_4943(24)]
+#[case::constraint_racing_appends_5019(74)]
+#[tokio::test(flavor = "current_thread")]
+async fn dst_concurrent_commits_regressions(#[case] seed: u64) {
+    check_seeds(vec![seed], 0, 0).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "deterministic simulation; run with --ignored"]
+#[ignore = "long-running; see the module docs"]
 async fn dst_concurrent_commits() {
-    let faults = env("DST_FAULTS").unwrap_or(0);
-    let seeds: Vec<u64> = match env("DST_SEED") {
+    let seeds = match env("DST_SEED") {
         Some(seed) => vec![seed],
-        None => (0..env("DST_SEEDS").unwrap_or(100)).collect(),
+        None => (0..env("DST_SEEDS").unwrap_or(500)).collect(),
     };
-    let verbose = seeds.len() == 1;
-
-    let mut findings: Vec<Finding> = vec![];
-    let mut kinds: BTreeMap<&str, Vec<u64>> = BTreeMap::new();
-    // Per operation: [succeeded, failed with a commit conflict, failed otherwise].
-    let mut tally: BTreeMap<String, [usize; 3]> = BTreeMap::new();
-    // Conflict errors that blind appends got, keyed by the first line of the message.
-    let mut append_conflicts: BTreeMap<String, Vec<u64>> = BTreeMap::new();
-    for seed in &seeds {
-        let (outcome, mut seed_findings, scenario) = run_seed(*seed, faults).await;
-        for (op, result) in scenario.ops.iter().zip(&outcome.results) {
-            let name = format!("{op:?}");
-            let name = name.split([' ', '{']).next().unwrap().to_string();
-            let conflict = result.contains("Commit failed") || result.contains("conflict");
-            let slot = if result.starts_with("ok") {
-                0
-            } else if conflict {
-                1
-            } else {
-                2
-            };
-            tally.entry(name.clone()).or_default()[slot] += 1;
-            if name == "Append" && conflict {
-                let line = result.lines().next().unwrap_or_default().to_string();
-                append_conflicts.entry(line).or_default().push(*seed);
-            }
-        }
-        if verbose || !seed_findings.is_empty() {
-            println!("seed {seed}: ops {:?}", scenario.ops);
-            println!("  trace   {:?}", outcome.trace);
-            println!("  results {:?}", outcome.results);
-            println!("  authors {:?}", outcome.authors);
-            for f in &seed_findings {
-                println!("  FINDING {}: {}", f.kind, f.detail);
-            }
-        }
-        // Replaying a seed must reproduce the same run.
-        if seed % 20 == 0 {
-            let (again, _, _) = run_seed(*seed, faults).await;
-            if again != outcome {
-                seed_findings.push(Finding {
-                    seed: *seed,
-                    kind: "nondeterministic",
-                    detail: format!("first {outcome:?}\nsecond {again:?}"),
-                });
-            }
-        }
-        for f in &seed_findings {
-            kinds.entry(f.kind).or_default().push(f.seed);
-        }
-        findings.extend(seed_findings);
-    }
-
-    println!("\noperation outcomes [ok, conflict, other error]:");
-    for (op, counts) in &tally {
-        println!("  {op:<14} {counts:?}");
-    }
-    for (message, seeds) in &append_conflicts {
-        println!(
-            "  blind appends rejected ({} times, e.g. seeds {:?}): {message}",
-            seeds.len(),
-            &seeds[..seeds.len().min(5)]
-        );
-    }
-    println!("\nDST: {} seeds, faults {faults}%", seeds.len());
-    for (kind, seeds) in &kinds {
-        println!(
-            "  {kind}: {} seeds, e.g. {:?}",
-            seeds.len(),
-            &seeds[..seeds.len().min(8)]
-        );
-    }
-    // A put that lands but returns an error is indistinguishable from one that failed, so the
-    // writer reporting failure is expected. It is counted above, not treated as a bug.
-    let bugs = findings
-        .iter()
-        .filter(|f| f.kind != "ambiguous-commit")
-        .count();
-    assert!(bugs == 0, "{bugs} findings");
+    let fault_percent = env("DST_FAULTS").unwrap_or(0);
+    let create_percent = env("DST_CREATE_PCT").unwrap_or(20);
+    check_seeds(seeds, fault_percent, create_percent).await;
 }
