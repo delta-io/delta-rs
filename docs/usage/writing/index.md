@@ -34,6 +34,19 @@ partition columns. This is only supported for full table overwrites. Overwrites
 that use a `predicate` (also known as `replaceWhere`) must keep the existing
 partition columns because they replace only a subset of the table.
 
+## Generated column expressions
+
+delta-rs evaluates generated column expressions using
+[DataFusion SQL semantics](https://datafusion.apache.org/user-guide/sql/index.html),
+which can differ from Spark SQL. For an integer column `n` containing `7`,
+`n / 2` uses integer division in delta-rs, producing `3.0` in a generated `double`
+column, while Spark produces `3.5`. Use `CAST(n AS DOUBLE) / 2` for floating-point
+division. Similarly, `concat(s, 'x')` produces `'x'` in delta-rs and `NULL` in Spark
+when `s` is `NULL`.
+
+When writing a table from multiple engines, choose and test expressions that
+produce the same results in each engine, including their type and NULL handling.
+
 ## Overwriting part of the table data using a predicate
 
 !!! note
