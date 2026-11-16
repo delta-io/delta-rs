@@ -87,6 +87,8 @@ jobs:
       DEFAULT_FEATURES: "datafusion"
       CARGO_LLVM_COV_RUSTC_WRAPPER: "sccache"
       NEXTEST_PROFILE: "ci"
+      # Merge profiles per binary to keep Windows coverage within runner disk space.
+      LLVM_PROFILE_FILE_NAME: ${{ matrix.os == 'windows-latest' && 'delta-rs-%m.profraw' || '' }}
 
     steps:
       # v6.0.2
@@ -117,7 +119,9 @@ jobs:
         shell: bash
         run: |
           make setup-dat
+          # shortcut: remove the coverage workaround after https://github.com/taiki-e/cargo-llvm-cov/pull/533 is released.
           cargo llvm-cov nextest --cargo-profile=ci --features ${{ env.DEFAULT_FEATURES }} \
+            ${{ runner.os == 'Windows' && '--no-rustc-wrapper' || '' }} \
             --workspace \
             --codecov \
             --output-path codecov.json \
@@ -137,7 +141,7 @@ jobs:
         run: |
           # Use the environment from llvm-cov and the same target dir and
           # package selection, to avoid recompilation.
-          eval "$(cargo llvm-cov show-env --sh)"
+          eval "$(cargo llvm-cov show-env --sh ${{ runner.os == 'Windows' && '--no-rustc-wrapper' || '' }})"
           cargo test --profile=ci --features ${{ env.DEFAULT_FEATURES }} \
             --target-dir target/llvm-cov-target \
             --workspace \
