@@ -40,6 +40,7 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion_datasource::PartitionedFile;
 use delta_kernel::table_features::ColumnMappingMode;
+use object_store::path::Path;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -507,8 +508,9 @@ impl CdfLoadBuilder {
 
                 let mut new_part_values = spec_partition_values.clone();
                 new_part_values.extend(partition_values);
-                let mut part_file = PartitionedFile::new(action.path(), action.size()? as u64)
-                    .with_partition_values(new_part_values.clone());
+                let mut part_file =
+                    partitioned_file(Path::parse(action.path())?, action.size()? as u64)
+                        .with_partition_values(new_part_values.clone());
 
                 if let Some(access_plan) = create_file_scan_plan(
                     Arc::clone(&self.log_store.engine(None)),
@@ -611,6 +613,7 @@ impl CdfLoadBuilder {
             global: session.config().options().execution.parquet.clone(),
             ..Default::default()
         };
+        let metadata_size_hint = parquet_options.global.metadata_size_hint;
 
         let mut cdc_source = ParquetSource::new(cdc_table_schema)
             .with_table_parquet_options(parquet_options.clone())
@@ -621,6 +624,11 @@ impl CdfLoadBuilder {
         let mut remove_source = ParquetSource::new(remove_table_schema)
             .with_table_parquet_options(parquet_options)
             .with_parquet_file_reader_factory(self.parquet_metadata_cache.clone());
+        if let Some(hint) = metadata_size_hint {
+            cdc_source = cdc_source.with_metadata_size_hint(hint);
+            add_source = add_source.with_metadata_size_hint(hint);
+            remove_source = remove_source.with_metadata_size_hint(hint);
+        }
 
         // Set up the partition to physical file mapping, this is a mostly unmodified version of what is done in load
         let engine = self.log_store.engine(None);
@@ -1619,6 +1627,54 @@ pub(crate) mod tests {
             .filter(|action| matches!(action, &&Action::Cdc(_)))
             .collect_vec();
         assert!(cdc_actions.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_cdf_with_escaped_partition_values() -> TestResult {
+        let delta_schema = TestSchemas::simple();
+        let table: DeltaTable = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(delta_schema.fields().cloned())
+            .with_partition_columns(["modified"])
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await?;
+
+        let schema: Arc<Schema> = Arc::new(delta_schema.try_into_arrow()?);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("1"), Some("2"), Some("3")])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+                Arc::new(StringArray::from(vec![
+                    Some("a b"),
+                    Some("a b"),
+                    Some("2024-01-01 12:00:00"),
+                ])),
+            ],
+        )?;
+        let table = table.write(vec![batch]).await?;
+        let (table, _) = table.delete().with_predicate("value = 1").await?;
+
+        let ctx = SessionContext::new();
+        let cdf_scan = table
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&ctx.state(), None)
+            .await?;
+        let mut batches = collect(cdf_scan, ctx.task_ctx()).await?;
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();
+
+        assert_batches_sorted_eq! {[
+            "+----+-------+---------------------+--------------+-----------------+",
+            "| id | value | modified            | _change_type | _commit_version |",
+            "+----+-------+---------------------+--------------+-----------------+",
+            "| 1  | 1     | a b                 | delete       | 2               |",
+            "| 1  | 1     | a b                 | insert       | 1               |",
+            "| 2  | 2     | a b                 | insert       | 1               |",
+            "| 3  | 3     | 2024-01-01 12:00:00 | insert       | 1               |",
+            "+----+-------+---------------------+--------------+-----------------+",
+        ], &batches }
         Ok(())
     }
 
