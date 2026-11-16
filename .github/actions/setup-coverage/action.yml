@@ -5,8 +5,8 @@ runs:
   using: "composite"
   steps:
     - name: Install cargo-llvm-cov
-      # cargo-llvm-cov
-      uses: taiki-e/install-action@ad25acb6b9413207b3174a4202c12aa9133691c6
+      # cargo-llvm-cov v0.9.1
+      uses: taiki-e/install-action@c2e5d2ce8920c881761c4cabb41434daa1f95687
       # nextest
     - name: Install nextest 
       uses: taiki-e/install-action@8c6986fc38d22c217606a7ad4f1d438eced263e0
