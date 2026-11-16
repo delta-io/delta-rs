@@ -52,6 +52,13 @@ runs:
     - name: Enable sccahe
       shell: bash
       run: echo RUSTC_WRAPPER=sccache >> $GITHUB_ENV
+    # shortcut: restore Windows caching after https://github.com/mozilla/sccache/pull/3026 is released.
+    - name: Disable sccache on Windows
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+        echo "CARGO_LLVM_COV_RUSTC_WRAPPER=" >> "$GITHUB_ENV"
     - name: Make sccache read-only for PRs
       # Only write to the cache from branch pushes, so PR builds can't evict
       # cache entries from main or release branches. PRs can stil read caches

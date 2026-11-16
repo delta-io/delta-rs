@@ -1614,8 +1614,7 @@ impl RawDeltaTable {
         let active_partitions: HashSet<Vec<(&str, Option<String>)>> = adds
             .iter()
             .flat_map(|add| {
-                #[allow(deprecated)]
-                let partition_values = add.add_action().partition_values;
+                let partition_values = add.partition_values_map();
                 Ok::<_, PythonError>(
                     partition_column_keys
                         .iter()
