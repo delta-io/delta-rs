@@ -39,6 +39,7 @@ use datafusion::catalog::Session;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{
     Column, DFSchema, DFSchemaRef, ExprSchema, ScalarValue, TableReference, plan_err,
+    unqualified_field_not_found,
 };
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
@@ -1351,6 +1352,16 @@ async fn execute(
     } else {
         snapshot.schema()
     };
+
+    // An assignment to a column the output schema lacks would be dropped
+    if let Some(column) = ops
+        .iter()
+        .flat_map(|(operations, _, _)| operations.keys())
+        .find(|column| schema.field(&column.name).is_none())
+    {
+        let table_schema = DFSchema::try_from(snapshot.input_schema())?;
+        return Err(unqualified_field_not_found(&column.name, &table_schema).into());
+    }
 
     for delta_field in schema.fields() {
         let mut when_expr = Vec::with_capacity(operations_size);
@@ -3705,6 +3716,57 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_normalize_target_subset_filter_with_many_placeholder_values() {
+        use datafusion::common::tree_node::TreeNode;
+
+        // The early filter of `target.id = source.id AND target.day = source.day`, with `day` a
+        // partition column, has one such term per distinct `day` of the source.
+        let placeholder = |id: &str| {
+            Expr::Placeholder(Placeholder {
+                id: id.to_string(),
+                field: None,
+            })
+        };
+        let term = col("id")
+            .between(placeholder("id_0_min"), placeholder("id_0_max"))
+            .and(col("day").eq(placeholder("day_1")));
+
+        let rows = 10_000;
+        let ids = Arc::new(arrow::array::Int32Array::from_iter_values(0..rows));
+        let items = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("id_0_min", ArrowDataType::Int32, true),
+                Field::new("id_0_max", ArrowDataType::Int32, true),
+                Field::new("day_1", ArrowDataType::Int32, true),
+            ])),
+            vec![ids.clone(), ids.clone(), ids],
+        )
+        .unwrap();
+        let filter = super::filter::filter_from_placeholder_values(&term, &items)
+            .unwrap()
+            .unwrap();
+
+        let schema = ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Int32, true),
+            Field::new("day", ArrowDataType::Int32, true),
+        ])
+        .to_dfschema()
+        .unwrap();
+        let normalized = super::normalize_target_subset_filter(Arc::new(schema), filter).unwrap();
+
+        let mut day_columns = 0;
+        normalized
+            .apply(|expr| {
+                if matches!(expr, Expr::Column(column) if column.name == "day") {
+                    day_columns += 1;
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .unwrap();
+        assert_eq!(day_columns, rows);
+    }
+
     #[tokio::test]
     async fn test_merge_with_user_path_column_namespace_collision() {
         let delta_schema = vec![
@@ -5073,6 +5135,22 @@ mod tests {
             .unwrap()
             .await;
         assert!(res.is_err())
+    }
+
+    #[tokio::test]
+    async fn test_merge_unknown_column() {
+        let (table, source) = setup().await;
+        let res = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_not_matched_insert(|insert| {
+                insert.set("id", "source.id").set("Value", "source.value")
+            })
+            .unwrap()
+            .await;
+        let err = res.unwrap_err().to_string();
+        assert!(err.contains("No field named"), "{err}");
     }
 
     #[tokio::test]
