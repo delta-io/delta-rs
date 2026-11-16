@@ -17,8 +17,13 @@ rust-version.workspace = true
 delta_kernel = { workspace = true, features = [
     "declarative-plans",
     "default-engine-base",
-    "vendored-protoc",
 ] }
+
+# `vendored-protoc` ships a protoc binary via `protoc-bin-vendored`, which has
+# no FreeBSD build. On FreeBSD, skip it and use the system `protoc` (or set
+# `PROTOC`). See https://github.com/delta-io/delta-rs/issues/5073
+[target.'cfg(not(target_os = "freebsd"))'.dependencies]
+delta_kernel = { workspace = true, features = ["vendored-protoc"] }
 
 # The storage / file-format handlers wrap the default engine's object_store
 # based handlers, one per object store registered in the DataFusion session.
