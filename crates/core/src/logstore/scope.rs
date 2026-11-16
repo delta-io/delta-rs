@@ -34,8 +34,8 @@ use url::Url;
 
 use super::committer::{CommitResponse, Committer, PayloadKind};
 use super::{CatalogLogTail, CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef};
+use crate::kernel::Version;
 use crate::kernel::transaction::TransactionError;
-use crate::kernel::{CommitInfo, Version};
 use crate::{DeltaResult, DeltaTableError};
 
 /// Write-side handles for one in-flight operation. Produced by [`LogStore::begin_operation`].
@@ -259,10 +259,9 @@ impl Committer for ScopedCommitter {
         &self,
         version: Version,
         payload: CommitOrBytes,
-        commit_info: Option<&CommitInfo>,
     ) -> Result<CommitResponse, TransactionError> {
         self.state.ensure_open()?;
-        let response = self.inner.commit(version, payload, commit_info).await?;
+        let response = self.inner.commit(version, payload).await?;
         if response == CommitResponse::Committed {
             // The commit published every write made so far.
             self.state.dirty.store(false, Ordering::SeqCst);
@@ -691,7 +690,7 @@ mod tests {
             .put(&Path::from("part-1.parquet"), "data".into())
             .await
             .unwrap();
-        let response = scoped.committer().commit(1, payload(), None).await.unwrap();
+        let response = scoped.committer().commit(1, payload()).await.unwrap();
         assert_eq!(response, CommitResponse::Committed);
         assert!(store.table_objects().await.contains("part-1.parquet"));
 
@@ -750,7 +749,7 @@ mod tests {
         let response = scope
             .log_store()
             .committer()
-            .commit(1, payload(), None)
+            .commit(1, payload())
             .await
             .unwrap();
         assert_eq!(response, CommitResponse::Conflict { version: 1 });
@@ -789,11 +788,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("scope is closed"), "{err}");
-        let err = scoped
-            .committer()
-            .commit(1, payload(), None)
-            .await
-            .unwrap_err();
+        let err = scoped.committer().commit(1, payload()).await.unwrap_err();
         assert!(err.to_string().contains("scope is closed"), "{err}");
         assert!(store.take_recorded_writes().is_empty());
         // Log reads still go to the parent.

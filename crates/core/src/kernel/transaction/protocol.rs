@@ -303,6 +303,20 @@ impl ProtocolChecker {
             ]));
         }
 
+        let enables_in_commit_timestamps = actions.iter().any(|action| {
+            matches!(action, Action::Metadata(metadata) if metadata
+                .configuration()
+                .get("delta.enableInCommitTimestamps")
+                .is_some_and(|value| value.eq_ignore_ascii_case("true")))
+        });
+        if enables_in_commit_timestamps
+            && snapshot.config().enable_in_commit_timestamps != Some(true)
+        {
+            return Err(TransactionError::UnsupportedTableFeatures(vec![
+                TableFeature::InCommitTimestamp,
+            ]));
+        }
+
         Ok(())
     }
 }

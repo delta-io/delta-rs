@@ -482,10 +482,14 @@ impl CommitData {
         mut app_metadata: HashMap<String, Value>,
         app_transactions: Vec<Transaction>,
     ) -> Self {
-        if let Some(Action::CommitInfo(commit_info)) = actions
-            .iter_mut()
-            .find(|action| matches!(action, Action::CommitInfo(..)))
-        {
+        let index = actions
+            .iter()
+            .position(|action| matches!(action, Action::CommitInfo(..)))
+            .unwrap_or(0);
+        if index != 0 {
+            actions[..=index].rotate_right(1);
+        }
+        if let Some(Action::CommitInfo(commit_info)) = actions.get_mut(index) {
             // Callers that provide a CommitInfo action own generated typed fields such as
             // timestamp and engineInfo. Flattened app metadata overrides custom keys, and callers
             // may provide clientVersion for compatibility.
@@ -504,9 +508,7 @@ impl CommitData {
             actions.insert(0, Action::CommitInfo(commit_info));
         }
 
-        if let Some(Action::CommitInfo(commit_info)) = actions
-            .iter_mut()
-            .find(|action| matches!(action, Action::CommitInfo(..)))
+        if let Some(Action::CommitInfo(commit_info)) = actions.get_mut(index)
             && commit_info.txn_id.is_none()
         {
             commit_info.txn_id = Some(uuid::Uuid::new_v4().to_string());
@@ -535,6 +537,7 @@ impl CommitData {
         Ok(bytes::Bytes::from(jsons.join("\n")))
     }
 
+    #[cfg(test)]
     fn commit_info(&self) -> Option<&CommitInfo> {
         self.actions.iter().find_map(|action| match action {
             Action::CommitInfo(info) => Some(info),
@@ -861,10 +864,7 @@ impl<'a> IntoFuture for PreparedCommit<'a> {
                     table_data.eager_snapshot().clone()
                 } else {
                     debug!("committing initial table version 0");
-                    match committer
-                        .commit(0, commit_or_bytes.clone(), data.commit_info())
-                        .await
-                    {
+                    match committer.commit(0, commit_or_bytes.clone()).await {
                         Ok(CommitResponse::Committed) => {
                             return Ok(PostCommit {
                                 version: 0,
@@ -995,12 +995,8 @@ impl<'a> IntoFuture for PreparedCommit<'a> {
                         let changed = data.update_commit_info(current_retries, prev_ict);
 
                         let payload = match &commit_or_bytes {
-                            CommitOrBytes::LogBytes(bytes) => {
-                                if changed {
-                                    CommitOrBytes::LogBytes(data.get_bytes()?)
-                                } else {
-                                    CommitOrBytes::LogBytes(bytes.clone())
-                                }
+                            CommitOrBytes::LogBytes(_) => {
+                                CommitOrBytes::LogBytes(data.get_bytes()?)
                             }
                             CommitOrBytes::TmpCommit(path) => {
                                 if changed {
@@ -1013,7 +1009,7 @@ impl<'a> IntoFuture for PreparedCommit<'a> {
                             }
                         };
 
-                        match committer.commit(version, payload, data.commit_info()).await {
+                        match committer.commit(version, payload).await {
                             Ok(CommitResponse::Committed) => {
                                 info!(
                                     version = version,
@@ -1321,7 +1317,7 @@ mod tests {
 
         let committer = log_store.committer();
         let res = committer
-            .commit(0, CommitOrBytes::LogBytes(PutPayload::new().into()), None)
+            .commit(0, CommitOrBytes::LogBytes(PutPayload::new().into()))
             .await
             .unwrap();
         // conflicts if file version already exists
@@ -1329,7 +1325,7 @@ mod tests {
 
         // succeeds for next version
         let res = committer
-            .commit(1, CommitOrBytes::LogBytes(PutPayload::new().into()), None)
+            .commit(1, CommitOrBytes::LogBytes(PutPayload::new().into()))
             .await
             .unwrap();
         assert_eq!(res, CommitResponse::Committed);
@@ -1758,4 +1754,7 @@ mod tests {
                 .unwrap();
         assert!(committed.contains("txnId"), "{committed}");
     }
+
+    #[test]
+    fn test_rr() {}
 }

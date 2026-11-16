@@ -18,8 +18,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use deltalake_core::kernel::Version;
 use deltalake_core::kernel::transaction::TransactionError;
-use deltalake_core::kernel::{CommitInfo, Version};
 use deltalake_core::logstore::{
     CommitOrBytes, CommitResponse, CommitStrategy, Committer, FileSystemCommitter,
     OperationTransaction, PayloadKind, commit_uri_from_version,
@@ -131,12 +131,11 @@ impl Committer for LakeFSBranchCommitter {
         &self,
         version: Version,
         payload: CommitOrBytes,
-        commit_info: Option<&CommitInfo>,
     ) -> Result<CommitResponse, TransactionError> {
         // 1. Stage the commit file on the transaction branch. The conditional put reports a
         //    version that already exists on the branch before any LakeFS call is made.
         if let conflict @ CommitResponse::Conflict { .. } =
-            self.staging.commit(version, payload, commit_info).await?
+            self.staging.commit(version, payload).await?
         {
             return Ok(conflict);
         }
@@ -246,10 +245,9 @@ impl Committer for LakeFSSourceCommitter {
         &self,
         version: Version,
         payload: CommitOrBytes,
-        commit_info: Option<&CommitInfo>,
     ) -> Result<CommitResponse, TransactionError> {
         if let conflict @ CommitResponse::Conflict { .. } =
-            self.staging.commit(version, payload, commit_info).await?
+            self.staging.commit(version, payload).await?
         {
             return Ok(conflict);
         }
@@ -460,7 +458,7 @@ mod tests {
         let store = Arc::new(InMemory::new());
         let committer = branch_committer(&server, store.clone());
         assert_eq!(committer.payload_kind(), PayloadKind::Bytes);
-        let response = committer.commit(1, payload(), None).await.unwrap();
+        let response = committer.commit(1, payload()).await.unwrap();
         assert_eq!(response, CommitResponse::Committed);
         assert!(store.head(&commit_path(1)).await.is_ok());
         commit.assert_async().await;
@@ -502,14 +500,14 @@ mod tests {
         let store = Arc::new(InMemory::new());
         let committer = branch_committer(&server, store.clone());
 
-        let response = committer.commit(1, payload(), None).await.unwrap();
+        let response = committer.commit(1, payload()).await.unwrap();
         assert_eq!(response, CommitResponse::Conflict { version: 1 });
         assert!(
             store.head(&commit_path(1)).await.is_err(),
             "the losing commit file is removed from the branch"
         );
 
-        let response = committer.commit(2, payload(), None).await.unwrap();
+        let response = committer.commit(2, payload()).await.unwrap();
         assert_eq!(response, CommitResponse::Committed);
         assert!(store.head(&commit_path(2)).await.is_ok());
         commits.assert_async().await;
@@ -541,7 +539,7 @@ mod tests {
 
         let store = Arc::new(InMemory::new());
         let committer = branch_committer(&server, store.clone());
-        let err = committer.commit(1, payload(), None).await.unwrap_err();
+        let err = committer.commit(1, payload()).await.unwrap_err();
         let message = err.to_string();
         assert!(
             message.contains("uncommitted changes") && message.contains("`main`"),
@@ -562,7 +560,7 @@ mod tests {
         let store = Arc::new(InMemory::new());
         let committer = branch_committer(&server, store.clone());
         let payload = CommitOrBytes::TmpCommit(Path::from("_delta_log/_commit_x.json.tmp"));
-        let err = committer.commit(1, payload, None).await.unwrap_err();
+        let err = committer.commit(1, payload).await.unwrap_err();
         assert!(err.to_string().contains("payload"), "{err}");
         assert!(store.head(&commit_path(1)).await.is_err());
         lakefs.assert_async().await;
@@ -598,13 +596,13 @@ mod tests {
         let store = Arc::new(InMemory::new());
         let committer = LakeFSSourceCommitter::new(client(&server), store.clone(), location());
         assert_eq!(committer.payload_kind(), PayloadKind::Bytes);
-        let response = committer.commit(0, payload(), None).await.unwrap();
+        let response = committer.commit(0, payload()).await.unwrap();
         assert_eq!(response, CommitResponse::Committed);
         assert!(store.head(&commit_path(0)).await.is_ok());
         commit.assert_async().await;
 
         // The conflict is detected by the conditional put, before any LakeFS call.
-        let response = committer.commit(0, payload(), None).await.unwrap();
+        let response = committer.commit(0, payload()).await.unwrap();
         assert_eq!(response, CommitResponse::Conflict { version: 0 });
         committer.abort(0, payload()).await.unwrap();
         assert!(

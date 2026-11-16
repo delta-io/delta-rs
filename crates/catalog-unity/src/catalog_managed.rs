@@ -4,7 +4,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use delta_kernel::LogPath;
 use deltalake_core::kernel::transaction::TransactionError;
-use deltalake_core::kernel::{Action, CommitInfo, Version};
+use deltalake_core::kernel::{Action, Version};
 use deltalake_core::logstore::object_store::{
     Error as ObjectStoreError, ObjectStore, ObjectStoreExt, PutMode,
 };
@@ -172,13 +172,27 @@ impl Committer for UnityCommitCoordinator {
         &self,
         version: Version,
         payload: CommitOrBytes,
-        commit_info: Option<&CommitInfo>,
     ) -> Result<CommitResponse, TransactionError> {
         let CommitOrBytes::LogBytes(bytes) = payload else {
             return Err(commit_failed(
                 "CatalogManagedLogStore requires a LogBytes payload".to_string(),
             ));
         };
+
+        let actions = get_actions(version, &bytes).map_err(|e| commit_failed(e.to_string()))?;
+        let mut commit_info = None;
+        for action in actions {
+            match action {
+                Action::Metadata(_) | Action::Protocol(_) => return Err(commit_failed(
+                    "Unity Catalog managed tables do not allow metadata or protocol changes yet"
+                        .to_string(),
+                )),
+                Action::CommitInfo(info) if commit_info.is_none() => {
+                    commit_info.replace(info);
+                }
+                _ => {}
+            }
+        }
 
         let (file_name, staged_path) = staged_commit_file(version, Uuid::new_v4());
         self.store.put(&staged_path, bytes.clone().into()).await?;
@@ -187,6 +201,7 @@ impl Committer for UnityCommitCoordinator {
             Err(_) => (bytes.len() as i64, Utc::now().timestamp_millis()),
         };
         let timestamp = commit_info
+            .as_ref()
             .and_then(|info| info.in_commit_timestamp.or(info.timestamp))
             .unwrap_or(modified);
         let commit = Commit::new(
@@ -224,11 +239,17 @@ impl Committer for UnityCommitCoordinator {
             // when a conflict occurs
             // Err(err) if is_version_conflict(&err) => Ok(CommitResponse::Conflict { version }),
             Err(err) => {
-                let txn_id = commit_info.and_then(|info| info.txn_id.as_deref());
+                let txn_id = commit_info.and_then(|info| info.txn_id);
                 let resolved = match self.get_commits().await {
                     Ok(list) => {
-                        classify_attempt(self.store.as_ref(), version, &file_name, txn_id, &list)
-                            .await
+                        classify_attempt(
+                            self.store.as_ref(),
+                            version,
+                            &file_name,
+                            txn_id.as_deref(),
+                            &list,
+                        )
+                        .await
                     }
                     Err(_) => None,
                 };
@@ -432,6 +453,7 @@ impl<C: CommitCoordinator + Committer + 'static> LogStore for CatalogManagedLogS
 #[cfg(test)]
 mod tests {
     use super::*;
+    use deltalake_core::kernel::CommitInfo;
     use deltalake_core::logstore::StorageConfig;
     use deltalake_core::logstore::object_store::memory::InMemory;
     use reqwest::Url;
@@ -463,7 +485,6 @@ mod tests {
             &self,
             _version: Version,
             _payload: CommitOrBytes,
-            _commit_info: Option<&CommitInfo>,
         ) -> Result<CommitResponse, TransactionError> {
             unimplemented!()
         }
