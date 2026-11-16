@@ -1,0 +1,89 @@
+name: backportable
+
+# Evaluates whether a PR targeting `main` can be backported to `release/1.x`.
+# A PR is backportable when its non-merge commits cherry-pick cleanly onto
+# release/1.x AND `cargo semver-checks` passes for deltalake-core on the result.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backportable-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  backportable:
+    name: Backport check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: release/1.x
+          fetch-depth: 0
+
+      - name: Cherry-pick PR commits onto release/1.x
+        id: pick
+        run: |
+          set -uo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}"
+
+          commits=$(git rev-list --reverse --no-merges "${BASE_SHA}..${HEAD_SHA}")
+          if [ -z "$commits" ]; then
+            echo "No non-merge commits to backport"
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # shellcheck disable=SC2086
+          if git cherry-pick $commits; then
+            echo "Cherry-pick succeeded"
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            git cherry-pick --abort || true
+            echo "Cherry-pick conflicted with release/1.x"
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: ./.github/actions/setup-builder
+        if: steps.pick.outputs.result == 'success'
+
+      - name: Semver check (deltalake-core) on backported tree
+        if: steps.pick.outputs.result == 'success'
+        id: semver
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          # Use the stable toolchain installed by setup-builder; the action ignores rust-toolchain.toml
+          rust-toolchain: manual
+          package: deltalake-core
+          features: datafusion
+          # Namespace the rustdoc cache by PR so baselines never leak between PRs
+          prefix-key: backportable-${{ github.event.pull_request.number }}
+
+      - name: Apply backportable label
+        if: always()
+        run: |
+          set -uo pipefail
+          if [ "${{ steps.pick.outputs.result }}" = "success" ] && [ "${{ steps.semver.outcome }}" = "success" ]; then
+            echo "PR #${PR_NUMBER} is backportable"
+            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label backportable
+          else
+            echo "PR #${PR_NUMBER} is not backportable"
+            # Keep the label accurate after new pushes; ignore if it was never set.
+            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label backportable || true
+          fi
