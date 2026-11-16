@@ -3,6 +3,10 @@ name: backportable
 # Evaluates whether a PR targeting `main` can be backported to `release/1.x`.
 # A PR is backportable when its non-merge commits cherry-pick cleanly onto
 # release/1.x AND `cargo semver-checks` passes for deltalake-core on the result.
+#
+# This workflow runs with a read-only token so that it is safe for fork PRs,
+# whose code is built and executed here. It does not label the PR; it uploads
+# the result as an artifact that `backportable-label.yml` consumes.
 
 on:
   pull_request:
@@ -20,11 +24,7 @@ jobs:
   backportable:
     name: Backport check
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
     env:
-      GH_TOKEN: ${{ github.token }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -75,15 +75,26 @@ jobs:
           # Namespace the rustdoc cache by PR so baselines never leak between PRs
           prefix-key: backportable-${{ github.event.pull_request.number }}
 
-      - name: Apply backportable label
+      - name: Record backportable result
         if: always()
+        env:
+          PICK_RESULT: ${{ steps.pick.outputs.result }}
+          SEMVER_OUTCOME: ${{ steps.semver.outcome }}
         run: |
           set -uo pipefail
-          if [ "${{ steps.pick.outputs.result }}" = "success" ] && [ "${{ steps.semver.outcome }}" = "success" ]; then
-            echo "PR #${PR_NUMBER} is backportable"
-            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label backportable
+          mkdir -p backportable-result
+          if [ "$PICK_RESULT" = "success" ] && [ "$SEMVER_OUTCOME" = "success" ]; then
+            result=success
           else
-            echo "PR #${PR_NUMBER} is not backportable"
-            # Keep the label accurate after new pushes; ignore if it was never set.
-            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label backportable || true
+            result=failure
           fi
+          echo "PR #${PR_NUMBER} backportable: ${result}"
+          printf '%s\n' "$result" > backportable-result/result
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: backportable-result-${{ github.event.pull_request.number }}
+          path: backportable-result/
+          retention-days: 1
+          if-no-files-found: error
