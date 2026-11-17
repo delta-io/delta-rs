@@ -304,7 +304,11 @@ async fn execute(
         .to_dfschema_ref()?;
     let updates: HashMap<_, _> = updates
         .into_iter()
-        .map(|(key, expr)| expr.resolve(session, schema.clone()).map(|e| (key.name, e)))
+        .map(|(key, expr)| {
+            // An assignment to a column the table lacks would be dropped
+            schema.field_with_unqualified_name(&key.name)?;
+            expr.resolve(session, schema.clone()).map(|e| (key.name, e))
+        })
         .try_collect()?;
 
     let scan_start = Instant::now();
