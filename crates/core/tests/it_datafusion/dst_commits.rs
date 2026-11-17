@@ -879,17 +879,18 @@ fn env(name: &str) -> Option<u64> {
 // scheduler either way.
 #[tokio::test(flavor = "current_thread")]
 async fn dst_concurrent_commits_smoke() {
-    // Create races are left out until #4982 is fixed.
-    check_seeds((0..20).collect(), 0, 0).await;
+    check_seeds((0..20).collect(), 0, 20).await;
 }
 
-/// Seeds that caught a conflict-checker bug with its fix reverted.
+/// Seeds that catch a known commit bug when its fix is missing. Each case keeps the create
+/// percentage it was found with, because that changes which scenario the seed builds.
 #[rstest]
-#[case::concurrent_optimizes_4943(24)]
-#[case::constraint_racing_appends_5019(74)]
+#[case::concurrent_optimizes_4943(24, 0)]
+#[case::constraint_racing_appends_5019(74, 0)]
+#[case::concurrent_creates_4982(20, 100)]
 #[tokio::test(flavor = "current_thread")]
-async fn dst_concurrent_commits_regressions(#[case] seed: u64) {
-    check_seeds(vec![seed], 0, 0).await;
+async fn dst_concurrent_commits_regressions(#[case] seed: u64, #[case] create_percent: u64) {
+    check_seeds(vec![seed], 0, create_percent).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
