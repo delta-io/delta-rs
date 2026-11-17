@@ -119,6 +119,15 @@ fn staged_commit_file(version: Version, uuid: Uuid) -> (String, Path) {
     (file_name, path)
 }
 
+/// A hack until kernel crate properly bubbles up the max unpublished error
+fn is_commit_limit_error(err: &UCError) -> bool {
+    match err {
+        UCError::MaxUnpublishedCommitsExceeded(_) => true,
+        UCError::Generic(msg) => msg.contains("Max number of commits per table reached"),
+        _ => false,
+    }
+}
+
 /// Wrap an error as a `TransactionError` the commit loop treats as a hard (non-conflict) failure.
 fn commit_failed(msg: String) -> TransactionError {
     TransactionError::LogStoreError {
@@ -217,11 +226,7 @@ impl Committer for UnityCommitCoordinator {
         let target = self.target();
 
         let mut outcome = self.update.update_table(&target, request).await;
-        // TODO: this is not correct, need to stop it from doubling up on requests
-        if matches!(
-            outcome,
-            Err(UCError::MaxUnpublishedCommitsExceeded(_num_commits))
-        ) {
+        if outcome.as_ref().is_err_and(is_commit_limit_error) {
             warn!(
                 version,
                 "UC reports too many unpublished commits; publishing then retrying ratify"
@@ -321,7 +326,10 @@ impl CommitCoordinator for UnityCommitCoordinator {
         let list = self.get_commits().await?;
         let mut commits = list.commits.to_vec();
         commits.sort_by_key(|c| c.version);
-        let mut published = commits.first().map(|c| c.version - 1).unwrap_or(0) as Version;
+        let Some(catalog_backfilled) = commits.first().map(|c| c.version - 1) else {
+            return Ok(());
+        };
+        let mut published = catalog_backfilled as Version;
         for commit in commits {
             let version = commit.version as u64;
             if version > up_to {
@@ -347,6 +355,21 @@ impl CommitCoordinator for UnityCommitCoordinator {
             published = version;
             self.last_published_version
                 .fetch_max(published as i64, Ordering::Relaxed);
+        }
+        if published as i64 > catalog_backfilled {
+            let request = UpdateTableRequest::new(
+                vec![DeltaTableRequirement::AssertTableUuid {
+                    uuid: self.table_uuid.clone(),
+                }],
+                vec![DeltaTableUpdate::SetLatestBackfilledVersion {
+                    latest_published_version: published as i64,
+                }],
+            )
+            .map_err(UnityCatalogError::from)?;
+            self.update
+                .update_table(&self.target(), request)
+                .await
+                .map_err(UnityCatalogError::from)?;
         }
 
         Ok(())

@@ -482,12 +482,13 @@ impl CommitData {
         mut app_metadata: HashMap<String, Value>,
         app_transactions: Vec<Transaction>,
     ) -> Self {
-        let index = actions
+        let mut index = actions
             .iter()
             .position(|action| matches!(action, Action::CommitInfo(..)))
             .unwrap_or(0);
         if index != 0 {
             actions[..=index].rotate_right(1);
+            index = 0;
         }
         if let Some(Action::CommitInfo(commit_info)) = actions.get_mut(index) {
             // Callers that provide a CommitInfo action own generated typed fields such as
@@ -1127,7 +1128,8 @@ impl PostCommit {
             let mut new_checkpoint_created = false;
             let mut num_log_files_cleaned_up: u64 = 0;
 
-            if self.create_checkpoint || cleanup_logs {
+            // Catalog-managed tables always publish so the catalog's unbackfilled count stays low.
+            if self.create_checkpoint || cleanup_logs || self.log_store.is_catalog_managed() {
                 let version = self.version;
                 let create_checkpoint = self.create_checkpoint;
                 let checkpoint_interval = state.config().checkpoint_interval().get();

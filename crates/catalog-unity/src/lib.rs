@@ -1149,11 +1149,10 @@ fn resolve_managed_table(
         ))
     })?;
     let uc = UnityCatalogFactory::new_delta_client(options)?;
-    if let Some(client) = uc.delta_rest_client() {
-        let loaded =
-            UnityCatalogBuilder::execute_uc_future(client.load_table(&catalog, &schema, &table))?
-                .map_err(UnityCatalogError::from)?;
-
+    if let Some(client) = uc.delta_rest_client()
+        && let Ok(Ok(loaded)) =
+            UnityCatalogBuilder::execute_uc_future(client.load_table(&catalog, &schema, &table))
+    {
         return Ok(Some(ManagedTable {
             uc,
             catalog,
