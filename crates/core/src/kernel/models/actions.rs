@@ -1670,8 +1670,6 @@ mod tests {
 
     #[test]
     fn test_apply_properties_column_mapping_independent_reader_writer() {
-        // Reader and writer are bumped independently: a feature-based writer (v7) declares the
-        // ColumnMapping writer feature, while the legacy reader is bumped to v2.
         let protocol: Protocol = serde_json::from_value(serde_json::json!({
             "minReaderVersion": 1,
             "minWriterVersion": 7,
@@ -1689,22 +1687,18 @@ mod tests {
         assert!(
             protocol
                 .writer_features()
-                .unwrap()
-                .contains(&TableFeature::ColumnMapping),
-            "writerFeatures should contain ColumnMapping, got: {:?}",
-            protocol.writer_features()
+                .as_ref()
+                .is_some_and(|f| f.contains(&TableFeature::ColumnMapping)),
+            "writerFeatures should be upgraded to include ColumnMapping, got: {protocol:?}",
         );
-
         assert!(
-            protocol
+            !protocol
                 .writer_features()
                 .unwrap()
                 .contains(&TableFeature::Invariants),
-            "writerFeatures should be upgraded include Invariants, got: {:?}",
+            "writerFeatures should NOT include Invariants, got: {:?}",
             protocol.writer_features()
         );
-
-        // Reader stayed legacy (v2), so it carries no ColumnMapping reader feature.
         assert!(
             !protocol
                 .reader_features()
@@ -1893,4 +1887,21 @@ mod tests {
     //     let found = tree_map.iter().collect::<Vec<_>>();
     //     assert_eq!(found, expected)
     // }
+    #[test]
+    fn test_set_table_properties_does_not_add_unused_writer_features() {
+        let mut proto = ProtocolInner::new(3, 7);
+        proto.writer_features = Some(HashSet::from([TableFeature::TimestampWithoutTimezone]));
+        proto.reader_features = Some(HashSet::from([TableFeature::TimestampWithoutTimezone]));
+
+        let mut props = HashMap::new();
+        props.insert("my.prop".to_string(), "1".to_string());
+
+        let result = proto.apply_properties_to_protocol(&props, false).unwrap();
+
+        assert_eq!(result.min_writer_version, 7);
+        assert_eq!(
+            result.writer_features.unwrap(),
+            HashSet::from([TableFeature::TimestampWithoutTimezone])
+        );
+    }
 }
