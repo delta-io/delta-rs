@@ -250,7 +250,7 @@ struct Scheduler {
     changed: Notify,
     /// Releases in the order they happened, for printing a failing seed.
     trace: Mutex<Vec<String>>,
-    /// Writers that had at least one commit put fail.
+    /// Writers that had a commit put fail in a way they cannot tell apart from it not landing.
     faulted: Mutex<BTreeSet<usize>>,
 }
 
@@ -311,7 +311,10 @@ impl Scheduler {
                             1 => Release::FailAfter,
                             _ => Release::LandReportExists,
                         };
-                        self.faulted.lock().unwrap().insert(writer);
+                        // A writer told its own commit is there can always tell it landed.
+                        if release != Release::LandReportExists {
+                            self.faulted.lock().unwrap().insert(writer);
+                        }
                     }
                     let Slot::Waiting {
                         version,

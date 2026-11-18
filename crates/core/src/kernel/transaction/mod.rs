@@ -870,7 +870,6 @@ impl<'a> IntoFuture for PreparedCommit<'a> {
                         let latest_version = log_store
                             .get_latest_version(read_snapshot.version())
                             .await?;
-                        let mut own_commit_version: Option<Version> = None;
 
                         if latest_version > read_snapshot.version() {
                             // If max_retries are set to 0, do not try to use the conflict checker to resolve the conflict
@@ -909,14 +908,23 @@ impl<'a> IntoFuture for PreparedCommit<'a> {
                                 if is_own_commit(
                                     unconfirmed_attempt.as_ref(),
                                     winning_version,
-                                    &summary,
+                                    &summary.bytes,
                                 ) {
                                     warn!(
                                         version = winning_version,
-                                        "commit reported as a conflict was our own, treating it as committed"
+                                        "version holds our own commit, treating it as committed"
                                     );
-                                    own_commit_version = Some(winning_version);
-                                    break;
+                                    read_snapshot
+                                        .update(&log_store, Some(winning_version))
+                                        .await?;
+                                    return Ok(committed(
+                                        winning_version,
+                                        data,
+                                        post_commit,
+                                        log_store,
+                                        read_snapshot,
+                                        attempt_number - 1,
+                                    ));
                                 }
                                 let conflict_read_set = read_snapshot
                                     .snapshot()
@@ -953,95 +961,93 @@ impl<'a> IntoFuture for PreparedCommit<'a> {
                                 conflicts_checked = conflicts_checked,
                                 "all conflicts resolved, updating snapshot"
                             );
-                            // Update snapshot to latest version after successful conflict check,
-                            // or to our own commit if it turned out to be in the log already
+                            // Update snapshot to latest version after successful conflict check
                             read_snapshot
-                                .update(&log_store, Some(own_commit_version.unwrap_or(latest_version)))
+                                .update(&log_store, Some(latest_version))
                                 .await?;
                         }
+                        let version: Version = latest_version + 1;
+                        attempted_version = version;
+                        Span::current().record("target_version", version);
 
-                        let version = match own_commit_version {
-                            Some(version) => version,
-                            None => {
-                                let version: Version = latest_version + 1;
-                                attempted_version = version;
-                                Span::current().record("target_version", version);
+                        // Calculate current retry count (attempt 1 = 0 retries, attempt 2 = 1 retry, etc.)
+                        let current_retries = (attempt_number - 1) as u64;
 
-                                // Calculate current retry count (attempt 1 = 0 retries, attempt 2 = 1 retry, etc.)
-                                let current_retries = (attempt_number - 1) as u64;
-
-                                // Update operationMetrics.numRetries in the serialized bytes
-                                let updated_commit_or_bytes = match &commit_or_bytes {
-                                    CommitOrBytes::LogBytes(bytes) => {
-                                        let updated_bytes = if current_retries > 0 {
-                                            CommitData::update_retry_count_in_bytes(
-                                                bytes,
-                                                current_retries,
-                                            )?
-                                        } else {
-                                            bytes.clone()
-                                        };
-                                        CommitOrBytes::LogBytes(updated_bytes)
-                                    }
-                                    CommitOrBytes::TmpCommit(_path) => {
-                                        // For TmpCommit stores, keep original behavior for now
-                                        // (these stores write to tmp file first, then rename)
-                                        commit_or_bytes.clone()
-                                    }
+                        // Update operationMetrics.numRetries in the serialized bytes
+                        let updated_commit_or_bytes = match &commit_or_bytes {
+                            CommitOrBytes::LogBytes(bytes) => {
+                                let updated_bytes = if current_retries > 0 {
+                                    CommitData::update_retry_count_in_bytes(bytes, current_retries)?
+                                } else {
+                                    bytes.clone()
                                 };
-                                let sent_bytes = match &updated_commit_or_bytes {
-                                    CommitOrBytes::LogBytes(bytes) => Some(bytes.clone()),
-                                    CommitOrBytes::TmpCommit(_) => None,
-                                };
-
-                                match committer.commit(version, updated_commit_or_bytes).await {
-                                    Ok(CommitResponse::Committed) => version,
-                                    Ok(CommitResponse::Conflict { .. })
-                                    | Err(TransactionError::VersionAlreadyExists(_)) => {
-                                        warn!(
-                                            version = version,
-                                            attempt = attempt_number,
-                                            "version already exists, will retry"
-                                        );
-                                        unconfirmed_attempt =
-                                            sent_bytes.map(|bytes| (version, bytes));
-                                        // If the version already exists, loop through again and re-check
-                                        // conflicts
-                                        attempt_number += 1;
-                                        continue;
-                                    }
-                                    Err(err) => {
-                                        error!(
-                                            version = version,
-                                            error = %err,
-                                            "commit failed, aborting"
-                                        );
-                                        return Err(err.into());
-                                    }
-                                }
+                                CommitOrBytes::LogBytes(updated_bytes)
+                            }
+                            CommitOrBytes::TmpCommit(_path) => {
+                                // For TmpCommit stores, keep original behavior for now
+                                // (these stores write to tmp file first, then rename)
+                                commit_or_bytes.clone()
                             }
                         };
 
-                        info!(
+                        let sent_bytes = match &updated_commit_or_bytes {
+                            CommitOrBytes::LogBytes(bytes) => Some(bytes.clone()),
+                            CommitOrBytes::TmpCommit(_) => None,
+                        };
+
+                        match committer.commit(version, updated_commit_or_bytes).await {
+                            Ok(CommitResponse::Committed) => {
+                                return Ok(committed(
+                                    version,
+                                    data,
+                                    post_commit,
+                                    log_store,
+                                    read_snapshot,
+                                    attempt_number,
+                                ));
+                            }
+                            Ok(CommitResponse::Conflict { .. })
+                            | Err(TransactionError::VersionAlreadyExists(_)) => {
+                                warn!(
+                                    version = version,
+                                    attempt = attempt_number,
+                                    "version already exists, will retry"
+                                );
+                                unconfirmed_attempt = sent_bytes.map(|bytes| (version, bytes));
+                                // If the version already exists, loop through again and re-check
+                                // conflicts
+                                attempt_number += 1;
+                            }
+                            Err(err) => {
+                                error!(
+                                    version = version,
+                                    error = %err,
+                                    "commit failed, aborting"
+                                );
+                                return Err(err.into());
+                            }
+                        }
+                    }
+
+                    // Out of attempts. The last one may still have landed with its response lost.
+                    if let Some((version, _)) = &unconfirmed_attempt
+                        && let Some(stored_bytes) = log_store.read_commit_entry(*version).await?
+                        && is_own_commit(unconfirmed_attempt.as_ref(), *version, &stored_bytes)
+                    {
+                        let version = *version;
+                        warn!(
                             version = version,
-                            num_retries = attempt_number - 1,
-                            "transaction committed successfully"
+                            "version holds our own commit, treating it as committed"
                         );
-                        return Ok(PostCommit {
+                        read_snapshot.update(&log_store, Some(version)).await?;
+                        return Ok(committed(
                             version,
                             data,
-                            create_checkpoint: post_commit
-                                .map(|v| v.create_checkpoint)
-                                .unwrap_or_default(),
-                            cleanup_expired_logs: post_commit
-                                .map(|v| v.cleanup_expired_logs)
-                                .unwrap_or_default(),
+                            post_commit,
                             log_store,
-                            table_data: Some(Box::new(read_snapshot)),
-                            metrics: CommitMetrics {
-                                num_retries: (attempt_number - 1) as u64,
-                            },
-                        });
+                            read_snapshot,
+                            attempt_number - 1,
+                        ));
                     }
 
                     error!(
@@ -1070,16 +1076,45 @@ impl<'a> IntoFuture for PreparedCommit<'a> {
     }
 }
 
-/// Returns true when the commit at `winning_version` is byte for byte the attempt we were told
-/// had lost that version.
+/// Returns true when `stored_bytes` at `version` are byte for byte the attempt we were told had
+/// lost that version.
 fn is_own_commit(
     unconfirmed_attempt: Option<&(Version, Bytes)>,
-    winning_version: Version,
-    summary: &WinningCommitSummary,
+    version: Version,
+    stored_bytes: &Bytes,
 ) -> bool {
     unconfirmed_attempt.is_some_and(|(attempted_version, attempted_bytes)| {
-        *attempted_version == winning_version && *attempted_bytes == summary.bytes
+        *attempted_version == version && attempted_bytes == stored_bytes
     })
+}
+
+/// Builds the result of a transaction that committed `version` on attempt `attempt_number`.
+fn committed(
+    version: Version,
+    data: CommitData,
+    post_commit: Option<PostCommitHookProperties>,
+    log_store: LogStoreRef,
+    read_snapshot: EagerSnapshot,
+    attempt_number: usize,
+) -> PostCommit {
+    info!(
+        version = version,
+        num_retries = attempt_number - 1,
+        "transaction committed successfully"
+    );
+    PostCommit {
+        version,
+        data,
+        create_checkpoint: post_commit.map(|v| v.create_checkpoint).unwrap_or_default(),
+        cleanup_expired_logs: post_commit
+            .map(|v| v.cleanup_expired_logs)
+            .unwrap_or_default(),
+        log_store,
+        table_data: Some(Box::new(read_snapshot)),
+        metrics: CommitMetrics {
+            num_retries: (attempt_number - 1) as u64,
+        },
+    }
 }
 
 /// Represents items for the post commit hook
@@ -1251,6 +1286,8 @@ mod tests {
     use crate::kernel::IsolationLevel;
     use crate::logstore::{LogStore, StorageConfig, default_logstore::DefaultLogStore};
     use crate::protocol::SaveMode;
+    #[cfg(feature = "datafusion")]
+    use crate::test_utils::lost_response_store::LostResponseStore;
     use object_store::{PutPayload, memory::InMemory};
     use serde_json::json;
     use url::Url;
@@ -1537,11 +1574,8 @@ mod tests {
 
     /// Creates a table holding ids 1 and 2 on a store that can lose a commit's put response.
     #[cfg(feature = "datafusion")]
-    async fn table_on_lost_response_store() -> (
-        Arc<crate::test_utils::lost_response_store::LostResponseStore>,
-        crate::DeltaTable,
-    ) {
-        let store = Arc::new(crate::test_utils::lost_response_store::LostResponseStore::default());
+    async fn table_on_lost_response_store() -> (Arc<LostResponseStore>, crate::DeltaTable) {
+        let store = Arc::new(LostResponseStore::default());
         let url = Url::parse("memory:///lost_response").unwrap();
         let table = crate::DeltaTableBuilder::from_url(url.clone())
             .unwrap()
@@ -1627,6 +1661,32 @@ mod tests {
             .lose_next_create
             .store(true, std::sync::atomic::Ordering::SeqCst);
         let (table, _metrics) = table.delete().with_predicate("id = 1").await.unwrap();
+
+        assert_eq!(table.version(), Some(1));
+        assert!(
+            table
+                .log_store()
+                .read_commit_entry(2)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn lost_commit_response_on_last_attempt_succeeds() {
+        let (store, table) = table_on_lost_response_store().await;
+
+        store
+            .lose_next_create
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let table = table
+            .write(vec![id_batch(vec![3, 4])])
+            .with_save_mode(SaveMode::Append)
+            .with_commit_properties(CommitProperties::default().with_max_retries(0))
+            .await
+            .unwrap();
 
         assert_eq!(table.version(), Some(1));
         assert!(
