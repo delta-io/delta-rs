@@ -658,16 +658,10 @@ fn apply_min_max_for_column(
                     ColumnValueStat::Column(maxes),
                     ColumnCountStat::Column(null_counts),
                 ) => {
-                    let remaining_parts: Vec<String> = column_path_parts
-                        .iter()
-                        .skip(1)
-                        .map(|s| s.to_string())
-                        .collect();
-
                     apply_min_max_for_column(
                         statistics,
                         column_descr,
-                        remaining_parts.as_slice(),
+                        &column_path_parts[1..],
                         mins,
                         maxes,
                         null_counts,
