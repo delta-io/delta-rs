@@ -168,12 +168,12 @@ impl LogicalFileView {
 
     /// Returns the file modification time as a UTC DateTime.
     pub fn modification_datetime(&self) -> DeltaResult<chrono::DateTime<Utc>> {
-        DateTime::from_timestamp_millis(self.modification_time()).ok_or(
+        DateTime::from_timestamp_millis(self.modification_time()).ok_or_else(|| {
             DeltaTableError::MetadataError(format!(
                 "invalid modification_time: {:?}",
                 self.modification_time()
-            )),
-        )
+            ))
+        })
     }
 
     /// Returns the raw JSON statistics string for this file, if available.
