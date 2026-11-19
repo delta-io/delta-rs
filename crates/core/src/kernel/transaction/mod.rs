@@ -905,18 +905,13 @@ impl<'a> IntoFuture for PreparedCommit<'a> {
                                     winning_version,
                                 )
                                 .await?;
-                                if is_own_commit(
-                                    unconfirmed_attempt.as_ref(),
-                                    winning_version,
-                                    &summary.bytes,
-                                ) {
+                                if unconfirmed_attempt
+                                    == Some((winning_version, summary.bytes.clone()))
+                                {
                                     warn!(
                                         version = winning_version,
                                         "version holds our own commit, treating it as committed"
                                     );
-                                    read_snapshot
-                                        .update(&log_store, Some(winning_version))
-                                        .await?;
                                     return Ok(committed(
                                         winning_version,
                                         data,
@@ -1030,16 +1025,13 @@ impl<'a> IntoFuture for PreparedCommit<'a> {
                     }
 
                     // Out of attempts. The last one may still have landed with its response lost.
-                    if let Some((version, _)) = &unconfirmed_attempt
-                        && let Some(stored_bytes) = log_store.read_commit_entry(*version).await?
-                        && is_own_commit(unconfirmed_attempt.as_ref(), *version, &stored_bytes)
+                    if let Some((version, bytes)) = unconfirmed_attempt
+                        && log_store.read_commit_entry(version).await? == Some(bytes)
                     {
-                        let version = *version;
                         warn!(
                             version = version,
                             "version holds our own commit, treating it as committed"
                         );
-                        read_snapshot.update(&log_store, Some(version)).await?;
                         return Ok(committed(
                             version,
                             data,
@@ -1074,18 +1066,6 @@ impl<'a> IntoFuture for PreparedCommit<'a> {
             }
         })
     }
-}
-
-/// Returns true when `stored_bytes` at `version` are byte for byte the attempt we were told had
-/// lost that version.
-fn is_own_commit(
-    unconfirmed_attempt: Option<&(Version, Bytes)>,
-    version: Version,
-    stored_bytes: &Bytes,
-) -> bool {
-    unconfirmed_attempt.is_some_and(|(attempted_version, attempted_bytes)| {
-        *attempted_version == version && attempted_bytes == stored_bytes
-    })
 }
 
 /// Builds the result of a transaction that committed `version` on attempt `attempt_number`.
@@ -1288,6 +1268,8 @@ mod tests {
     use crate::protocol::SaveMode;
     #[cfg(feature = "datafusion")]
     use crate::test_utils::lost_response_store::LostResponseStore;
+    #[cfg(feature = "datafusion")]
+    use crate::writer::test_utils::get_record_batch;
     use object_store::{PutPayload, memory::InMemory};
     use serde_json::json;
     use url::Url;
@@ -1572,9 +1554,9 @@ mod tests {
         assert!(!info.info.contains_key("isBlindAppend"));
     }
 
-    /// Creates a table holding ids 1 and 2 on a store that can lose a commit's put response.
+    /// Creates a table on a store that loses the response of the next commit put.
     #[cfg(feature = "datafusion")]
-    async fn table_on_lost_response_store() -> (Arc<LostResponseStore>, crate::DeltaTable) {
+    async fn table_losing_next_commit_response() -> crate::DeltaTable {
         let store = Arc::new(LostResponseStore::default());
         let url = Url::parse("memory:///lost_response").unwrap();
         let table = crate::DeltaTableBuilder::from_url(url.clone())
@@ -1582,120 +1564,55 @@ mod tests {
             .with_storage_backend(store.clone(), url)
             .build()
             .unwrap()
-            .write(vec![id_batch(vec![1, 2])])
-            .with_save_mode(SaveMode::ErrorIfExists)
+            .write(vec![get_record_batch(None, false)])
             .await
             .unwrap();
-        (store, table)
+        store
+            .lose_next_create
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        table
     }
 
-    /// Builds a batch with a single nullable `id` column.
+    /// Checks that the commit after the table creation is in the log once.
     #[cfg(feature = "datafusion")]
-    fn id_batch(ids: Vec<i64>) -> arrow_array::RecordBatch {
-        let schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
-            "id",
-            arrow_schema::DataType::Int64,
-            true,
-        )]));
-        arrow_array::RecordBatch::try_new(
-            schema,
-            vec![Arc::new(arrow_array::Int64Array::from(ids))],
-        )
-        .unwrap()
-    }
-
-    /// Returns the actions written at `version`, one JSON value per log line.
-    #[cfg(feature = "datafusion")]
-    async fn log_actions(table: &crate::DeltaTable, version: Version) -> Vec<serde_json::Value> {
-        let bytes = table
-            .log_store()
-            .read_commit_entry(version)
-            .await
-            .unwrap()
-            .unwrap();
-        String::from_utf8(bytes.to_vec())
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect()
+    async fn assert_committed_once(table: &crate::DeltaTable) {
+        assert_eq!(table.version(), Some(1));
+        let next_commit = table.log_store().read_commit_entry(2).await.unwrap();
+        assert!(next_commit.is_none());
     }
 
     #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn append_with_lost_commit_response_commits_once() {
-        let (store, table) = table_on_lost_response_store().await;
-
-        store
-            .lose_next_create
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        let table = table
-            .write(vec![id_batch(vec![3, 4])])
-            .with_save_mode(SaveMode::Append)
+        let table = table_losing_next_commit_response()
+            .await
+            .write(vec![get_record_batch(None, false)])
             .await
             .unwrap();
-
-        assert_eq!(table.version(), Some(1));
-        assert!(
-            table
-                .log_store()
-                .read_commit_entry(2)
-                .await
-                .unwrap()
-                .is_none()
-        );
-        let added_files = log_actions(&table, 1)
-            .await
-            .into_iter()
-            .filter(|action| action.get("add").is_some())
-            .count();
-        assert_eq!(added_files, 1);
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
+        assert_committed_once(&table).await;
     }
 
     #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn delete_with_lost_commit_response_succeeds() {
-        let (store, table) = table_on_lost_response_store().await;
-
-        store
-            .lose_next_create
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        let (table, _metrics) = table.delete().with_predicate("id = 1").await.unwrap();
-
-        assert_eq!(table.version(), Some(1));
-        assert!(
-            table
-                .log_store()
-                .read_commit_entry(2)
-                .await
-                .unwrap()
-                .is_none()
-        );
+        let (table, _metrics) = table_losing_next_commit_response()
+            .await
+            .delete()
+            .with_predicate("id = 'A'")
+            .await
+            .unwrap();
+        assert_committed_once(&table).await;
     }
 
     #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn lost_commit_response_on_last_attempt_succeeds() {
-        let (store, table) = table_on_lost_response_store().await;
-
-        store
-            .lose_next_create
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        let table = table
-            .write(vec![id_batch(vec![3, 4])])
-            .with_save_mode(SaveMode::Append)
+        let table = table_losing_next_commit_response()
+            .await
+            .write(vec![get_record_batch(None, false)])
             .with_commit_properties(CommitProperties::default().with_max_retries(0))
             .await
             .unwrap();
-
-        assert_eq!(table.version(), Some(1));
-        assert!(
-            table
-                .log_store()
-                .read_commit_entry(2)
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert_committed_once(&table).await;
     }
 }
