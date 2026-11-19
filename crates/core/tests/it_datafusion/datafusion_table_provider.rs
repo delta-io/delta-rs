@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
+use arrow_array::cast::AsArray;
 use arrow_array::types::UInt16Type;
 use arrow_array::{Array, DictionaryArray, StringArray, StringViewArray};
 use datafusion::assert_batches_sorted_eq;
@@ -307,6 +308,41 @@ async fn test_multi_partitioned() -> TestResult<()> {
     assert_batches_sorted_eq!(&expected, &batches);
     let n_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
     assert_eq!(n_rows, 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_null_partition_dictionary_holds_one_value_per_file() -> TestResult<()> {
+    let (snapshot, session) = scan_dat("delta-0.8.0-null-partition").await?;
+    let provider = DeltaScanNext::builder().with_snapshot(snapshot).await?;
+
+    let plan = provider.scan(&session.state(), None, &[], None).await?;
+    let batches: Vec<_> = collect_plan(plan, &session).await?;
+    let expected = vec![
+        "+---+---+",
+        "| k | v |",
+        "+---+---+",
+        "| A | 1 |",
+        "|   | 2 |",
+        "+---+---+",
+    ];
+    assert_batches_sorted_eq!(&expected, &batches);
+
+    let mut null_partition_rows = 0;
+    for batch in &batches {
+        let dict = batch
+            .column_by_name("k")
+            .expect("partition column k")
+            .as_dictionary::<UInt16Type>();
+        null_partition_rows += dict.null_count();
+        let dictionary_values_bytes = dict.values().get_buffer_memory_size();
+        assert!(
+            dictionary_values_bytes < 1024,
+            "partition dictionary values use {dictionary_values_bytes} bytes"
+        );
+    }
+    assert_eq!(null_partition_rows, 1);
 
     Ok(())
 }
