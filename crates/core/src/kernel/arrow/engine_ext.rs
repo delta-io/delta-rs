@@ -466,7 +466,7 @@ impl<'a> SchemaTransform<'a> for MinMaxStatsTransform {
 // Returns true if the column name is included in the list of column names
 // or if the column name is a prefix of any column name in the list
 // or if the column name is a child of any column name in the list
-fn should_include_column(column_name: &ColumnName, column_names: &[ColumnName]) -> bool {
+pub(crate) fn should_include_column(column_name: &ColumnName, column_names: &[ColumnName]) -> bool {
     column_names.iter().any(|name| {
         name.as_ref().starts_with(column_name) || column_name.as_ref().starts_with(name)
     })
