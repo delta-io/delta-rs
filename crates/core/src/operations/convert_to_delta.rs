@@ -480,7 +480,7 @@ fn parse_partition_value(
     let decoded = percent_decode_str(value).decode_utf8()?;
     match field.data_type() {
         DataType::Primitive(p) => p.parse_scalar(decoded.as_ref()),
-        _ => Err(delta_kernel::Error::Generic(format!(
+        _ => Err(delta_kernel::KernelError::Generic(format!(
             "Expected primitive type, found: {:?}",
             field.data_type()
         ))),

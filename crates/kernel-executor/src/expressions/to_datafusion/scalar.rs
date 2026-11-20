@@ -12,7 +12,7 @@ use delta_kernel::arrow::datatypes::{DataType as ArrowDataType, Field as ArrowFi
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::expressions::{ArrayData, MapData, Scalar, StructData};
 use delta_kernel::schema::DataType;
-use delta_kernel::{DeltaResult, Error as KernelError};
+use delta_kernel::{KernelError, KernelResult as DeltaResult};
 
 /// Converts a Delta kernel Scalar value to a DataFusion ScalarValue.
 ///

@@ -17,6 +17,7 @@ use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// possible version specifications for loading a delta table
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum DeltaVersion {
     /// load the newest version
     #[default]

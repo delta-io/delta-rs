@@ -51,3 +51,6 @@ opendal-webdav = ["opendal/services-webdav"]
 opendal-ftp = ["opendal/services-ftp"]
 opendal-sftp = ["opendal/services-sftp"]
 opendal-hf = ["opendal/services-hf"]
+
+[lints]
+workspace = true

@@ -61,32 +61,41 @@ async fn wide_table_with_many_files() -> TestResult<DeltaTable> {
     Ok(table)
 }
 
-/// Sum of `column_statistics` lengths across every planned `PartitionedFile`, plus the
-/// number of files seen. Walks the physical plan down to the DataFusion file-scan source.
-fn count_per_file_column_stats(plan: &Arc<dyn ExecutionPlan>) -> (usize, usize) {
+/// Counts statistics entries, allocated slots, and files in the physical plan.
+fn count_per_file_column_stats(plan: &Arc<dyn ExecutionPlan>) -> (usize, usize, usize) {
     let mut total_column_stats = 0usize;
+    let mut total_capacity = 0usize;
     let mut files = 0usize;
-    collect(plan, &mut total_column_stats, &mut files);
-    (total_column_stats, files)
+    collect(
+        plan,
+        &mut total_column_stats,
+        &mut total_capacity,
+        &mut files,
+    );
+    (total_column_stats, total_capacity, files)
 }
 
-fn collect(plan: &Arc<dyn ExecutionPlan>, total_column_stats: &mut usize, files: &mut usize) {
-    if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-        if let Some(config) = exec.data_source().downcast_ref::<FileScanConfig>() {
-            for group in config.file_groups.iter() {
-                for partitioned_file in group.files() {
-                    *files += 1;
-                    *total_column_stats += partitioned_file
-                        .statistics
-                        .as_ref()
-                        .map(|stats| stats.column_statistics.len())
-                        .unwrap_or(0);
+fn collect(
+    plan: &Arc<dyn ExecutionPlan>,
+    total_column_stats: &mut usize,
+    total_capacity: &mut usize,
+    files: &mut usize,
+) {
+    if let Some(exec) = plan.downcast_ref::<DataSourceExec>()
+        && let Some(config) = exec.data_source().downcast_ref::<FileScanConfig>()
+    {
+        for group in config.file_groups.iter() {
+            for partitioned_file in group.files() {
+                *files += 1;
+                if let Some(stats) = &partitioned_file.statistics {
+                    *total_column_stats += stats.column_statistics.len();
+                    *total_capacity += stats.column_statistics.capacity();
                 }
             }
         }
     }
     for child in plan.children() {
-        collect(child, total_column_stats, files);
+        collect(child, total_column_stats, total_capacity, files);
     }
 }
 
@@ -102,7 +111,7 @@ async fn no_predicate_scan_attaches_no_per_file_column_statistics() -> TestResul
     )?;
     let plan = provider.scan(&session, None, &[], None).await?;
 
-    let (total_column_stats, files) = count_per_file_column_stats(&plan);
+    let (total_column_stats, _, files) = count_per_file_column_stats(&plan);
     assert_eq!(files, NUM_FILES, "expected one planned file per append");
     assert_eq!(
         total_column_stats, 0,
@@ -126,11 +135,16 @@ async fn predicate_scan_retains_statistics_for_pruning() -> TestResult {
     let predicate = col("c0").gt(lit(50i32));
     let plan = provider.scan(&session, None, &[predicate], None).await?;
 
-    let (total_column_stats, files) = count_per_file_column_stats(&plan);
+    let (total_column_stats, total_capacity, files) = count_per_file_column_stats(&plan);
     assert!(
         total_column_stats > 0,
         "a predicate scan must retain per-file statistics for pruning; \
          got {total_column_stats} column-stat entries across {files} files"
+    );
+    assert_eq!(
+        total_capacity, total_column_stats,
+        "per-file column statistics should keep no spare capacity; \
+         got {total_capacity} slots for {total_column_stats} entries across {files} files"
     );
     Ok(())
 }

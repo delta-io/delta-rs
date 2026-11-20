@@ -22,6 +22,7 @@ const STRING_POOL: usize = 10_000;
 
 /// Which write API to exercise.
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WritePath {
     /// High-level `DeltaTable::write` (the DataFusion write path).
     HighLevel,

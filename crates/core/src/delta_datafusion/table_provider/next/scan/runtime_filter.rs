@@ -88,7 +88,7 @@ impl RuntimeScanFilePruner {
         let file_indexes = files
             .iter()
             .enumerate()
-            .map(|(file_index, file)| (file.file_url.to_string(), file_index))
+            .map(|(file_index, file)| (file.meta.location.to_string(), file_index))
             .collect();
         let file_id: Arc<dyn PhysicalExpr> = Arc::new(file_id);
         let filter = Arc::new(DynamicFilterPhysicalExpr::new(

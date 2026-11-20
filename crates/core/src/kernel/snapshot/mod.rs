@@ -245,7 +245,7 @@ impl Snapshot {
             Ok(snapshot) => snapshot,
             Err(e) => {
                 // TODO: we should have more handling-friendly errors upstream in kernel.
-                if e.to_string().contains("No files in log segment") {
+                if matches!(e, delta_kernel::KernelError::EmptyLog) {
                     return Err(DeltaTableError::NotATable(e.to_string()));
                 } else {
                     return Err(e.into());
@@ -275,7 +275,21 @@ impl Snapshot {
         // ratified log tail; filesystem-managed stores return `None` here.
         let catalog_log_tail = log_store.catalog_log_tail().await?;
 
-        Self::try_new_with_engine_and_catalog(engine, table_root, version, catalog_log_tail).await
+        let snapshot =
+            Self::try_new_with_engine_and_catalog(engine, table_root, version, catalog_log_tail)
+                .await?;
+
+        if !log_store.is_catalog_managed() && snapshot.table_configuration().is_catalog_managed() {
+            return Err(DeltaTableError::Generic(
+                "table requires catalog-managed (coordinated) commits but was opened without a \
+                 catalog coordinator; open it through its catalog with catalog-managed commits \
+                 enabled (for Unity Catalog: `uc://catalog.schema.table` with \
+                 `catalog_managed=true`)"
+                    .to_string(),
+            ));
+        }
+
+        Ok(snapshot)
     }
 
     /// Create a [`ScanBuilder`] borrowing this snapshot to configure a read of the table.
@@ -1044,7 +1058,7 @@ impl Snapshot {
         {
             Ok(data) => data,
             Err(err) => {
-                return Box::pin(once(ready(Err(DeltaTableError::KernelError(err)))));
+                return Box::pin(once(ready(Err(err.into()))));
             }
         };
 
@@ -1094,6 +1108,19 @@ impl Snapshot {
         Ok(None)
     }
 
+    pub(crate) async fn in_commit_timestamp(
+        &self,
+        log_store: &dyn LogStore,
+    ) -> DeltaResult<Option<i64>> {
+        let engine = log_store.engine();
+        let inner = self.inner.clone();
+        Ok(
+            spawn_blocking_with_span(move || inner.get_in_commit_timestamp(engine.as_ref()))
+                .await
+                .map_err(|e| DeltaTableError::GenericError { source: e.into() })??,
+        )
+    }
+
     /// Fetch the [domainMetadata] for a specific domain in this snapshot.
     ///
     /// This returns the latest configuration for the domain, or None if the domain does not exist.
@@ -1134,7 +1161,7 @@ impl Snapshot {
                 HistoryCommitType::Published,
             ) {
                 Ok(commit) => Ok(commit.version),
-                Err(delta_kernel::Error::LogHistory(err))
+                Err(delta_kernel::KernelError::LogHistory(err))
                     if matches!(
                         *err,
                         LogHistoryError::TimestampOutOfRange {
@@ -1300,7 +1327,7 @@ async fn read_last_checkpoint_version(
             .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
         match storage.read_files(vec![(checkpoint_path, None)])?.next() {
             Some(Ok(data)) => Ok(parse_last_checkpoint_hint(&data).map(|hint| hint.version)),
-            Some(Err(delta_kernel::Error::FileNotFound(_))) => Ok(None),
+            Some(Err(delta_kernel::KernelError::FileNotFound(_))) => Ok(None),
             Some(Err(err)) => Err(err.into()),
             None => {
                 tracing::warn!("empty _last_checkpoint file");

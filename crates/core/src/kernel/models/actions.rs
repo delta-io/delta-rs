@@ -747,6 +747,7 @@ impl ProtocolInner {
 /// High level table features
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq, Hash)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum TableFeatures {
     /// Mapping of one column to another
     ColumnMapping,
@@ -906,6 +907,7 @@ impl TableFeatures {
 
 ///Storage type of deletion vector
 #[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum StorageType {
     /// Stored at relative path derived from a UUID.
     #[serde(rename = "u")]
@@ -988,7 +990,7 @@ pub struct DeletionVectorDescriptor {
 impl TryFrom<DeletionVectorDescriptor>
     for delta_kernel::actions::deletion_vector::DeletionVectorDescriptor
 {
-    type Error = delta_kernel::Error;
+    type Error = delta_kernel::KernelError;
 
     fn try_from(dv: DeletionVectorDescriptor) -> Result<Self, Self::Error> {
         use delta_kernel::actions::deletion_vector::DeletionVectorStorageType;
@@ -1214,6 +1216,10 @@ pub struct CommitInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_info: Option<String>,
 
+    /// Unique identifier of the transaction that created the commit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub txn_id: Option<String>,
+
     /// Additional provenance information for the commit
     #[serde(flatten, default)]
     pub info: HashMap<String, serde_json::Value>,
@@ -1276,6 +1282,7 @@ pub struct Sidecar {
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
 /// The isolation level applied during transaction
 #[derive(Default)]
+#[non_exhaustive]
 pub enum IsolationLevel {
     /// The strongest isolation level. It ensures that committed write operations
     /// and all reads are Serializable. Operations are allowed as long as there
@@ -1535,7 +1542,7 @@ mod tests {
 
     #[test]
     fn test_serialize_round_trips_spark_written_path() {
-        // Spark writes this path, see dat/v0.0.3/reader_tests/generated/multi_partitioned_2.
+        // Spark writes this path, see crates/test/tests/data/multi_partitioned_2.
         // Re-serializing it has to reproduce the same string, because kernel matches removes
         // against adds on the raw path rather than the decoded one.
         let path = "bool=false/time=1970-01-02%2008%253A45%253A00/amount=12.000000000000000000/part-00000-12004196-1e98-4a42-a622-a12f05a4578e.c000.snappy.parquet";

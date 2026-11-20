@@ -24,7 +24,7 @@ use delta_kernel::expressions::{
     VariadicExpressionOp,
 };
 use delta_kernel::schema::{DataType, PrimitiveType, SchemaRef, StructField, StructType};
-use delta_kernel::{DeltaResult, EngineData, Error as KernelError};
+use delta_kernel::{EngineData, KernelError, KernelResult as DeltaResult};
 
 use super::predicate::to_datafusion_predicate_expr;
 use super::scalar::to_datafusion_scalar;
@@ -540,7 +540,8 @@ mod expression_tests {
     use datafusion::prelude::SessionContext;
     use delta_kernel::expressions::{
         ColumnName as KernelColumnName, Expression as KernelExpr, ExpressionStructPatch,
-        ExpressionStructPatchBuilder, UnaryExpression, column_expr, lit, null_lit,
+        ExpressionStructPatchBuilder, MapToStructOptions, UnaryExpression, column_expr, lit,
+        null_lit,
     };
     use delta_kernel::schema::{ArrayType, DataType, MapType, StructField, StructType};
     use rstest::rstest;
@@ -1014,7 +1015,7 @@ mod expression_tests {
     /// Lowers a `MapToStruct` over `pv` targeting `output_schema` and renders it as a `Display`
     /// string.
     fn lower_map_to_struct(output_schema: StructType) -> String {
-        let kernel = KernelExpr::map_to_struct(column_expr!("pv"));
+        let kernel = KernelExpr::map_to_struct(column_expr!("pv"), MapToStructOptions::default());
         let target: DataType = output_schema.into();
         to_datafusion_expr(&kernel, &pv_map_schema(), Some(&target))
             .unwrap()
@@ -1075,7 +1076,7 @@ mod expression_tests {
         #[case] output_type: Option<DataType>,
         #[case] expected_message: &str,
     ) {
-        let kernel = KernelExpr::map_to_struct(column_expr!("pv"));
+        let kernel = KernelExpr::map_to_struct(column_expr!("pv"), MapToStructOptions::default());
         let err = to_datafusion_expr(&kernel, &pv_map_schema(), output_type.as_ref())
             .unwrap_err()
             .to_string();
@@ -1100,7 +1101,7 @@ mod expression_tests {
             nullable("ts", DataType::TIMESTAMP),
         ]);
         let logical = to_datafusion_expr(
-            &KernelExpr::map_to_struct(column_expr!("pv")),
+            &KernelExpr::map_to_struct(column_expr!("pv"), MapToStructOptions::default()),
             &pv_map_schema(),
             Some(&DataType::from(target)),
         )

@@ -1,7 +1,5 @@
-use std::cell::RefCell;
 use std::pin::Pin;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use arrow_array::RecordBatch;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
@@ -10,14 +8,12 @@ use delta_kernel::schema::SchemaRef;
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::{Engine, EngineData, PredicateRef, SnapshotRef, Version};
 use futures::Stream;
-use futures::future::ready;
-use futures::stream::once;
 use url::Url;
 
 #[cfg(feature = "datafusion")]
 use super::MaterializedFiles;
 use super::stats_projection::{FileStatsMaterialization, StatsProjection, StatsSourcePolicy};
-use crate::kernel::{ReceiverStreamBuilder, scan_row_in_eval};
+use crate::kernel::{ReceiverStreamBuilder, scan_row_in_eval_for_schema};
 use crate::{DeltaResult, DeltaTableError};
 
 /// A boxed, `Send`able stream of [`ScanMetadata`] results produced while scanning a snapshot.
@@ -529,26 +525,25 @@ impl Scan {
         existing_predicate: Option<PredicateRef>,
     ) -> SendableScanMetadataStream {
         let inner = self.inner.clone();
-        let snapshot = self.inner.snapshot().clone();
 
-        // process our stored / cached data to conform to the expected input for log replay
-        let evaluator = match scan_row_in_eval(&snapshot) {
-            Ok(scan_row_in_eval) => scan_row_in_eval,
-            Err(err) => return Box::pin(once(ready(Err(err)))),
-        };
         // TODO: which capacity to choose?
         let mut builder = ReceiverStreamBuilder::<ScanMetadata>::new(100);
         let tx = builder.tx();
         let scan_inner = move || {
-            let evaluation_error: Rc<RefCell<Option<DeltaTableError>>> =
-                Rc::new(RefCell::new(None));
-            let error_slot = Rc::clone(&evaluation_error);
+            let evaluation_error: Arc<Mutex<Option<DeltaTableError>>> = Arc::new(Mutex::new(None));
+            let error_slot = Arc::clone(&evaluation_error);
+            // Normalize each cached batch with an evaluator built from that batch's own schema.
+            // The snapshot's metadata may describe partition columns the cached batches do not
+            // carry yet (e.g. after an overwrite changed them).
             let scan_row_data = existing_data
-                .map(|batch| Box::new(ArrowEngineData::new(batch)) as Box<dyn EngineData>)
-                .map_while(move |batch| match evaluator.evaluate(batch.as_ref()) {
+                .map(|batch| {
+                    let evaluator = scan_row_in_eval_for_schema(&batch.schema())?;
+                    Ok(evaluator.evaluate(&ArrowEngineData::new(batch))?)
+                })
+                .map_while(move |data: DeltaResult<Box<dyn EngineData>>| match data {
                     Ok(data) => Some(data),
                     Err(err) => {
-                        *error_slot.borrow_mut() = Some(err.into());
+                        *error_slot.lock().unwrap() = Some(err);
                         None
                     }
                 })
@@ -560,14 +555,14 @@ impl Scan {
                 Box::new(scan_row_data),
                 existing_predicate,
             )? {
-                if let Some(err) = evaluation_error.borrow_mut().take() {
+                if let Some(err) = evaluation_error.lock().unwrap().take() {
                     return Err(err);
                 }
                 if tx.blocking_send(Ok(res?)).is_err() {
                     break;
                 }
             }
-            if let Some(err) = evaluation_error.borrow_mut().take() {
+            if let Some(err) = evaluation_error.lock().unwrap().take() {
                 return Err(err);
             }
             Ok(())

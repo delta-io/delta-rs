@@ -716,7 +716,7 @@ mod tests {
         get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
     };
     use crate::{DeltaResult, DeltaTable, TableProperty};
-    use arrow::array::Int32Array;
+    use arrow::array::{Decimal128Array, Int32Array};
     use arrow::datatypes::TimestampMicrosecondType;
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -1183,6 +1183,42 @@ mod tests {
 
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[rstest]
+    #[case::min_with_scale_18(18, 1_123_456_789_012_345_678, 2_500_000_000_000_000_000)]
+    #[case::max_above_i64_with_scale_0(0, 10_000_000_000_000_000_000, 1)]
+    #[tokio::test]
+    async fn test_delete_exact_decimal_match(
+        #[case] scale: i8,
+        #[case] target: i128,
+        #[case] other: i128,
+    ) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("amount", DataType::Decimal128(38, scale), false),
+        ]));
+        let amounts = Decimal128Array::from(vec![target, other])
+            .with_precision_and_scale(38, scale)
+            .unwrap();
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(vec![1, 2])), Arc::new(amounts)],
+        )
+        .unwrap();
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .await
+            .unwrap();
+
+        let (_, metrics) = table
+            .delete()
+            .with_predicate(col("amount").eq(lit(ScalarValue::Decimal128(Some(target), 38, scale))))
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.num_deleted_rows, Some(1));
+        assert_eq!(metrics.num_copied_rows, 1);
     }
 
     #[tokio::test]
@@ -2967,6 +3003,47 @@ mod tests {
         remaining.sort_unstable();
         assert_eq!(remaining, expected_remaining);
         assert_eq!(metrics.num_deleted_rows, Some(4 - expected_remaining.len()));
+
+        Ok(())
+    }
+
+    /// A full delete loaded before a compaction must not commit after it: it would remove
+    /// only the pre-compaction files and leave the compacted file's rows in the table.
+    /// <https://github.com/delta-io/delta-rs/issues/4851>
+    #[tokio::test]
+    async fn test_stale_full_delete_conflicts_with_compaction() -> DeltaResult<()> {
+        use crate::kernel::transaction::{CommitConflictError, TransactionError};
+
+        let mut table = setup_table(None).await;
+        for _ in 0..3 {
+            table = write_batch(table, get_record_batch(None, false)).await;
+        }
+        let stale = table.clone();
+        let (compacted, _) = table.optimize().await?;
+        let rows_after_compaction: usize = get_data(&compacted)
+            .await
+            .iter()
+            .map(|b| b.num_rows())
+            .sum();
+
+        let result = stale.delete().await;
+        assert!(
+            matches!(
+                result,
+                Err(DeltaTableError::Transaction {
+                    source: TransactionError::CommitConflict(
+                        CommitConflictError::ConcurrentDeleteDelete
+                    )
+                })
+            ),
+            "stale full delete should conflict with the compaction: {result:?}"
+        );
+
+        let mut reloaded = compacted;
+        reloaded.update_state().await?;
+        let rows_now: usize = get_data(&reloaded).await.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows_now, rows_after_compaction);
+
         Ok(())
     }
 }
