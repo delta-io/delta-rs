@@ -321,6 +321,20 @@ fn validated_plan(
     let mut validations =
         validation_predicates(session, &plan.schema().to_dfschema()?, table_config)?;
 
+    if contains_cdc {
+        // The CDC writer splits batches on `_change_type` and drops rows with
+        // a null `_change_type` from both the data file and the change data
+        // feed: a merge emits such rows for source rows no clause accepts, and
+        // they write nothing anywhere. Only validate rows the split keeps.
+        let keep = col(CDC_COLUMN_NAME).is_not_null();
+        let mut guarded = Vec::with_capacity(validations.len());
+        for check in validations {
+            let expr = when(keep.clone(), check.expr).otherwise(lit(true))?;
+            guarded.push(ValidationCheck::new(expr, check.label));
+        }
+        validations = guarded;
+    }
+
     if let Some(mut pred) = predicate {
         // DataRescue uses an internal insert-marker column; CDC-only plans rely on `_change_type`.
         // A rewrite plan never needs both paths at once.
