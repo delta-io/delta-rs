@@ -2174,6 +2174,134 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
+    async fn int64_qty_table(partitioned: bool) -> DeltaTable {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("qty", DataType::Int64, true),
+        ]));
+        let values = Arc::new(arrow::array::Int64Array::from(vec![7, 8, 9])) as ArrayRef;
+        let batch = RecordBatch::try_new(schema, vec![values.clone(), values]).unwrap();
+        let partitions = if partitioned { vec!["qty"] } else { vec![] };
+        DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_partition_columns(partitions)
+            .await
+            .unwrap()
+    }
+
+    #[rstest]
+    #[case::lt("qty < 8.5", vec![9])]
+    #[case::not_eq("qty != 8.5", vec![])]
+    #[case::eq("qty = 8.5", vec![7, 8, 9])]
+    #[case::in_list("qty IN (7, 8.5)", vec![8, 9])]
+    #[case::between("qty BETWEEN 7.5 AND 9", vec![7])]
+    #[tokio::test]
+    async fn test_delete_does_not_narrow_fractional_literals(
+        #[case] predicate: &str,
+        #[case] expected_ids: Vec<i64>,
+        #[values(false, true)] partitioned: bool,
+    ) {
+        let table = int64_qty_table(partitioned).await;
+        let (table, _) = table.delete().with_predicate(predicate).await.unwrap();
+
+        let mut ids: Vec<i64> = get_data(&table)
+            .await
+            .iter()
+            .flat_map(|batch| {
+                let ids = batch.column_by_name("id").unwrap();
+                arrow::array::AsArray::as_primitive::<arrow::datatypes::Int64Type>(ids)
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        ids.sort();
+        assert_eq!(ids, expected_ids, "predicate: {predicate}");
+    }
+
+    #[rstest]
+    #[case::eq("value = 16777217", vec![1, 2, 3])]
+    #[case::lt("value < 16777217", vec![3])]
+    #[case::gt("value > 16777217", vec![1, 2])]
+    #[case::in_list("value IN (16777217, 1)", vec![2, 3])]
+    #[case::in_list_with_double("value IN (16777217, 1.5)", vec![1, 2, 3])]
+    #[tokio::test]
+    async fn test_delete_float32_column_with_inexact_integer_literal(
+        #[case] predicate: &str,
+        #[case] expected_ids: Vec<i64>,
+        #[values(false, true)] partitioned: bool,
+    ) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("value", DataType::Float32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(arrow::array::Int64Array::from(vec![1, 2, 3])),
+                Arc::new(arrow::array::Float32Array::from(vec![
+                    1.0,
+                    16_777_216.0,
+                    16_777_218.0,
+                ])),
+            ],
+        )
+        .unwrap();
+        let partitions = if partitioned { vec!["value"] } else { vec![] };
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_partition_columns(partitions)
+            .await
+            .unwrap();
+
+        let (table, _) = table.delete().with_predicate(predicate).await.unwrap();
+
+        let mut ids: Vec<i64> = get_data(&table)
+            .await
+            .iter()
+            .flat_map(|batch| {
+                let ids = batch.column_by_name("id").unwrap();
+                arrow::array::AsArray::as_primitive::<arrow::datatypes::Int64Type>(ids)
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        ids.sort();
+        assert_eq!(ids, expected_ids, "predicate: {predicate}");
+    }
+
+    #[tokio::test]
+    async fn test_delete_does_not_round_decimal_literals_to_column_scale() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "price",
+            DataType::Decimal128(10, 2),
+            true,
+        )]));
+        let prices = arrow::array::Decimal128Array::from(vec![123, 124, 125])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(prices)]).unwrap();
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .await
+            .unwrap();
+
+        let (table, _) = table
+            .delete()
+            .with_predicate("price = 1.235")
+            .await
+            .unwrap();
+        let expected = vec![
+            "+-------+",
+            "| price |",
+            "+-------+",
+            "| 1.23  |",
+            "| 1.24  |",
+            "| 1.25  |",
+            "+-------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &get_data(&table).await);
+    }
+
     #[tokio::test]
     async fn test_delete_partition_string_predicate_dictionary_formatting() -> DeltaResult<()> {
         // Regression test: resolving predicates against the execution scan schema can
