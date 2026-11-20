@@ -1809,6 +1809,20 @@ def test_deletion_vectors_empty_table():
     assert vectors.read_all().num_rows == 0
 
 
+def test_deletion_vectors_defers_dv_reads_until_consumption(tmp_path):
+    source = Path("../crates/test/tests/data/table-with-dv-small")
+    table_path = tmp_path / "table"
+    shutil.copytree(source, table_path)
+    dt = DeltaTable(table_path)
+    for dv_file in table_path.glob("deletion_vector_*.bin"):
+        dv_file.unlink()
+
+    reader = dt.deletion_vectors()
+    assert reader.schema.names == ["filepath", "selection_vector"]
+    with pytest.raises(Exception, match="(?i)(not found|no such file)"):
+        reader.read_all()
+
+
 @pytest.mark.pyarrow
 def test_read_variant_fixture():
     table_path = "../crates/test/tests/data/spark-variant-checkpoint"

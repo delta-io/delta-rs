@@ -1,4 +1,5 @@
 mod datafusion;
+mod deletion_vectors;
 mod error;
 mod features;
 mod filesystem;
@@ -10,16 +11,13 @@ mod tracing_otlp;
 mod utils;
 mod writer;
 
-use arrow_schema::{ArrowError, SchemaRef};
+use arrow_schema::SchemaRef;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use delta_kernel::expressions::{PredicateRef, Scalar};
 use delta_kernel::schema::{MetadataValue, StructField};
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
-use deltalake::arrow::{
-    self,
-    datatypes::{DataType as ArrowDataType, Schema as ArrowSchema},
-};
+use deltalake::arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
 use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::provider_as_source;
@@ -27,14 +25,10 @@ use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::engine::AsObjectStoreUrl;
 use deltalake::delta_datafusion::{
-    DataFusionMixins, DeletionVectorSelection, DeltaCdfTableProvider, DeltaScanConfig,
-    DeltaScanNext, DeltaSessionContext,
+    DataFusionMixins, DeltaCdfTableProvider, DeltaScanConfig, DeltaScanNext, DeltaSessionContext,
 };
 use pyo3_arrow::PyDataType;
 
-use deltalake::arrow::array::{
-    ArrayRef, BooleanBuilder, LargeStringBuilder, ListBuilder, RecordBatchIterator,
-};
 use deltalake::datafile::properties::{DEFAULT_PARQUET_PROPERTIES, OPTIMIZE_PARQUET_PROPERTIES};
 use deltalake::delta_datafusion::create_session_state_with_spill_config;
 use deltalake::delta_datafusion::expr::parse_sql_predicate_to_kernel;
@@ -86,6 +80,7 @@ use std::time;
 use writer::maybe_lazy_cast_reader;
 
 use crate::datafusion::TokioDeltaScan;
+use crate::deletion_vectors::deletion_vectors_reader;
 use crate::error::{DeltaProtocolError, PythonError, to_rt_err};
 use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
@@ -214,25 +209,6 @@ const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 55;
 static FALLBACK_TASK_CTX_PROVIDER: OnceLock<Arc<SessionContext>> = OnceLock::new();
 const MAX_OPTIMIZE_TARGET_SIZE: u64 = i64::MAX as u64;
 
-/// Maximum number of file-level deletion vector entries per Arrow RecordBatch when returning
-/// results from `DeltaTable.deletion_vectors()`.  Each entry is one (filepath, selection_vector)
-/// pair, so this bounds memory per batch — not per row within a file's mask.
-const DELETION_VECTOR_BATCH_SIZE: usize = 1024;
-
-fn deletion_vector_schema() -> Arc<arrow::datatypes::Schema> {
-    use arrow::datatypes::{DataType, Field, Schema};
-    Arc::new(Schema::new(vec![
-        // Use LargeUtf8 for filepath to be conservative about long fully-qualified URIs.
-        // Python API docs intentionally expose this as `str`.
-        Field::new("filepath", DataType::LargeUtf8, false),
-        Field::new(
-            "selection_vector",
-            DataType::List(Arc::new(Field::new("item", DataType::Boolean, false))),
-            false,
-        ),
-    ]))
-}
-
 fn parse_optimize_target_size(target_size: u64) -> PyResult<NonZeroU64> {
     let target_size = NonZeroU64::new(target_size).ok_or_else(|| {
         PyValueError::new_err(format!(
@@ -247,45 +223,6 @@ fn parse_optimize_target_size(target_size: u64) -> PyResult<NonZeroU64> {
     }
 
     Ok(target_size)
-}
-
-fn build_deletion_vector_batches(
-    vectors: Vec<DeletionVectorSelection>,
-    batch_size: usize,
-) -> Result<Vec<arrow::record_batch::RecordBatch>, ArrowError> {
-    use arrow::datatypes::{DataType, Field};
-
-    if vectors.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let schema = deletion_vector_schema();
-    let mut batches = Vec::new();
-    let batch_size = batch_size.max(1);
-    for chunk in vectors.chunks(batch_size) {
-        let mut filepath_builder = LargeStringBuilder::new();
-        let mut selection_vector_builder = ListBuilder::new(BooleanBuilder::new())
-            .with_field(Arc::new(Field::new("item", DataType::Boolean, false)));
-
-        for dv in chunk {
-            filepath_builder.append_value(&dv.filepath);
-            for keep in &dv.keep_mask {
-                selection_vector_builder.values().append_value(*keep);
-            }
-            selection_vector_builder.append(true);
-        }
-
-        let batch = arrow::record_batch::RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(filepath_builder.finish()) as ArrayRef,
-                Arc::new(selection_vector_builder.finish()) as ArrayRef,
-            ],
-        )?;
-        batches.push(batch);
-    }
-
-    Ok(batches)
 }
 
 fn datafusion_python_version(py: Python<'_>) -> Option<String> {
@@ -1277,19 +1214,11 @@ impl RawDeltaTable {
             let scan = DeltaScanNext::new(state, DeltaScanConfig::default())
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)?;
-            let vectors = rt()
-                .block_on(scan.deletion_vectors(&session_state))
+            let stream = rt()
+                .block_on(scan.deletion_vectors_stream(&session_state))
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)?;
-
-            let batches = build_deletion_vector_batches(vectors, DELETION_VECTOR_BATCH_SIZE)
-                .map_err(PythonError::from)
-                .map_err(PyErr::from)?;
-
-            let reader: Box<dyn deltalake::arrow::array::RecordBatchReader + Send> = Box::new(
-                RecordBatchIterator::new(batches.into_iter().map(Ok), deletion_vector_schema()),
-            );
-            Ok(reader.into())
+            Ok(deletion_vectors_reader(stream).into())
         })
     }
 
@@ -3400,55 +3329,4 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_build_deletion_vector_batches_chunks_rows() {
-        let vectors = vec![
-            DeletionVectorSelection {
-                filepath: "f1".to_string(),
-                keep_mask: vec![true, false],
-            },
-            DeletionVectorSelection {
-                filepath: "f2".to_string(),
-                keep_mask: vec![true],
-            },
-            DeletionVectorSelection {
-                filepath: "f3".to_string(),
-                keep_mask: vec![false, false, true],
-            },
-        ];
-        let batches = build_deletion_vector_batches(vectors, 2).unwrap();
-
-        assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].num_rows(), 2);
-        assert_eq!(batches[1].num_rows(), 1);
-    }
-
-    #[test]
-    fn test_build_deletion_vector_batches_empty_returns_empty_vec() {
-        let batches = build_deletion_vector_batches(vec![], 1024).unwrap();
-        assert!(batches.is_empty());
-    }
-
-    #[test]
-    fn test_deletion_vector_schema_uses_non_nullable_items() {
-        let schema = deletion_vector_schema();
-        let filepath_field = schema.field_with_name("filepath").unwrap();
-        assert_eq!(
-            filepath_field.data_type(),
-            &arrow::datatypes::DataType::LargeUtf8
-        );
-
-        let selection_vector_field = schema.field_with_name("selection_vector").unwrap();
-        let item_nullable = match selection_vector_field.data_type() {
-            arrow::datatypes::DataType::List(item) => item.is_nullable(),
-            other => panic!("expected list type, got {other:?}"),
-        };
-        assert!(!item_nullable);
-    }
 }
