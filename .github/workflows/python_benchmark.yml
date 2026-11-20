@@ -39,7 +39,7 @@ jobs:
 
       - name: Run benchmark
         run: |
-          uv run pytest tests/test_benchmark.py -m '(benchmark and pyarrow)' --benchmark-json output.json
+          uv run --no-sync pytest tests/test_benchmark.py -m '(benchmark and pyarrow)' --benchmark-json output.json
 
       - name: Store benchmark result
         # <https://github.com/benchmark-action/github-action-benchmark/releases/tag/v1.21.0>
