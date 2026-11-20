@@ -33,6 +33,7 @@ reqwest-middleware = { version = "0.5", features = ["json", "query", "form"] }
 unity-catalog-delta-client-api = "0.1.0"
 unity-catalog-delta-rest-client = "0.1.0"
 rand = "0.10"
+uuid = { workspace = true, features = ["v4"] }
 dashmap = "6"
 datafusion = { workspace = true, optional = true }
 moka = { version = "0.12", optional = true, features = ["future"] }

@@ -76,6 +76,12 @@ SUPPORTED_READER_FEATURES = {
     "variantType-preview",
 }
 
+# Appended to the pyarrow engine's refusals of tables the datafusion engine reads.
+_DATAFUSION_ENGINE_HINT = (
+    ' Read the table with the datafusion engine instead: pass engine="datafusion" '
+    "to to_pyarrow_table or to_pandas, or use DeltaTable.scan."
+)
+
 FSCK_METRICS_FILES_REMOVED_LABEL = "files_removed"
 
 FilterLiteralType = tuple[str, str, Any]
@@ -1348,9 +1354,14 @@ class DeltaTable:
                 SUPPORTED_READER_FEATURES
             )
             if len(missing_features) > 0:
+                hint = (
+                    _DATAFUSION_ENGINE_HINT
+                    if missing_features <= {"columnMapping", "deletionVectors"}
+                    else ""
+                )
                 raise DeltaProtocolError(
                     f"The table has set these reader features: {missing_features} "
-                    "but these are not yet supported by the deltalake reader."
+                    "but these are not supported by the pyarrow engine." + hint
                 )
 
         # minReaderVersion 2 tables carry column mapping without a
@@ -1367,6 +1378,7 @@ class DeltaTable:
             raise DeltaProtocolError(
                 "The table requires reader feature 'columnMapping' "
                 "but this is not supported using pyarrow Datasets."
+                + _DATAFUSION_ENGINE_HINT
             )
 
         if (
@@ -1376,6 +1388,7 @@ class DeltaTable:
             raise DeltaProtocolError(
                 "The table requires reader feature 'deletionVectors' "
                 "but this is not supported using pyarrow Datasets."
+                + _DATAFUSION_ENGINE_HINT
             )
 
         import pyarrow
