@@ -507,6 +507,16 @@ impl DeltaOperation {
             Self::Merge { predicate, .. } if predicate.is_none() => true,
             // Validates every existing row against the new constraint
             Self::AddConstraint { .. } => true,
+            // Removes every file of the table it read, so a file added concurrently must conflict
+            Self::Write {
+                mode: SaveMode::Overwrite,
+                predicate: None,
+                ..
+            }
+            | Self::Create {
+                mode: SaveMode::Overwrite,
+                ..
+            } => true,
             _ => false,
         }
     }

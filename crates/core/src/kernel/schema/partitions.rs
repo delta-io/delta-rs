@@ -296,6 +296,20 @@ pub fn conjunction_to_kernel_predicate(
     })
 }
 
+/// Render a conjunction (AND) of filter literals as a SQL predicate in the dialect
+/// operation predicates such as `replaceWhere` are recorded and conflict-checked in.
+#[cfg(feature = "datafusion")]
+pub fn conjunction_to_sql_predicate(
+    literals: &[FilterLiteral<'_>],
+    table_schema: &StructType,
+) -> DeltaResult<String> {
+    use crate::delta_datafusion::engine::to_datafusion_predicate_expr;
+    use crate::delta_datafusion::expr::fmt_expr_to_sql;
+
+    let predicate = conjunction_to_kernel_predicate(literals, table_schema)?;
+    fmt_expr_to_sql(&to_datafusion_predicate_expr(&predicate, table_schema)?)
+}
+
 /// Translate filters in disjunctive normal form -- an OR across conjunctions
 /// (AND groups) of `(column, op, value)` literals -- into a kernel [`Predicate`].
 pub fn dnf_to_kernel_predicate(
@@ -752,5 +766,81 @@ mod tests {
 
         let literal = ("number", FilterOp::Eq, FilterValue::Scalar("not_a_number"));
         assert!(literal_to_kernel_predicate(&literal, &schema).is_err());
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[test]
+    fn test_conjunction_to_sql_predicate() {
+        use crate::delta_datafusion::expr::parse_predicate_expression;
+        use datafusion::common::ToDFSchema as _;
+        use datafusion::prelude::SessionContext;
+        use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+
+        let schema = StructType::try_new(vec![
+            StructField::new("Region", DataType::Primitive(PrimitiveType::String), true),
+            StructField::new("year", DataType::Primitive(PrimitiveType::Integer), true),
+            StructField::new("day", DataType::Primitive(PrimitiveType::Date), true),
+        ])
+        .unwrap();
+        let arrow_schema: arrow_schema::Schema = (&schema).try_into_arrow().unwrap();
+        let df_schema = arrow_schema.to_dfschema().unwrap();
+        let session = SessionContext::new();
+        let in_years = ("year", FilterOp::In, FilterValue::Set(vec!["2020", "2021"]));
+        let cases = [
+            (
+                vec![("Region", FilterOp::Eq, FilterValue::Scalar("it's"))],
+                "\"Region\" = 'it''s'",
+            ),
+            (
+                vec![("Region", FilterOp::Eq, FilterValue::Scalar(""))],
+                "\"Region\" IS NULL",
+            ),
+            (
+                vec![("Region", FilterOp::Ne, FilterValue::Scalar(""))],
+                "NOT \"Region\" IS NULL",
+            ),
+            (
+                vec![("year", FilterOp::Ne, FilterValue::Scalar("2021"))],
+                "NOT year = 2021",
+            ),
+            (
+                vec![("year", FilterOp::Lt, FilterValue::Scalar("2021"))],
+                "year < 2021",
+            ),
+            (
+                vec![("year", FilterOp::Le, FilterValue::Scalar("2021"))],
+                "NOT year > 2021",
+            ),
+            (
+                vec![("year", FilterOp::Gt, FilterValue::Scalar("2021"))],
+                "year > 2021",
+            ),
+            (
+                vec![("year", FilterOp::Ge, FilterValue::Scalar("2021"))],
+                "NOT year < 2021",
+            ),
+            (vec![in_years.clone()], "year = 2020 OR year = 2021"),
+            (
+                vec![(
+                    "year",
+                    FilterOp::NotIn,
+                    FilterValue::Set(vec!["2020", "2021"]),
+                )],
+                "NOT year = 2020 AND NOT year = 2021",
+            ),
+            (
+                vec![("day", FilterOp::Eq, FilterValue::Scalar("2021-02-03"))],
+                "day = '2021-02-03'::date",
+            ),
+            (
+                vec![in_years, ("Region", FilterOp::Eq, FilterValue::Scalar("a"))],
+                "(year = 2020 OR year = 2021) AND \"Region\" = 'a'",
+            ),
+        ];
+        for (literals, expected) in cases {
+            let sql = conjunction_to_sql_predicate(&literals, &schema).unwrap();
+            assert_eq!(sql, expected);
+            parse_predicate_expression(&df_schema, &sql, &session.state()).unwrap();
+        }
     }
 }

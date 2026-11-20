@@ -3630,6 +3630,60 @@ def test_create_write_transaction_rejects_unknown_action_type(tmp_path: pathlib.
         )
 
 
+def _append_partition(tmp_path: pathlib.Path, id: int, part: str, year: int) -> None:
+    """Append a single row to a table partitioned by a string and an int column."""
+    data = Table.from_pydict(
+        {
+            "id": Array([id], DataType.int64()),
+            "Part": Array([part], DataType.string()),
+            "year": Array([year], DataType.int32()),
+        }
+    )
+    write_deltalake(tmp_path, data, mode="append", partition_by=["Part", "year"])
+
+
+@pytest.mark.parametrize(
+    ("concurrent_part", "concurrent_year", "conflicts"),
+    [("b", 2024, False), ("it's", 2025, False), ("it's", 2024, True)],
+)
+def test_create_write_transaction_partition_overwrite_with_concurrent_append(
+    tmp_path: pathlib.Path, concurrent_part: str, concurrent_year: int, conflicts: bool
+):
+    from arro3.io import write_parquet
+
+    _append_partition(tmp_path, 0, "it's", 2024)
+    stale = DeltaTable(tmp_path)
+    _append_partition(tmp_path, 1, concurrent_part, concurrent_year)
+
+    path = "replacement.parquet"
+    write_parquet(
+        Table.from_pydict({"id": Array([2], DataType.int64())}), tmp_path / path
+    )
+    add = AddAction(
+        path,
+        (tmp_path / path).stat().st_size,
+        {"Part": "it's", "year": "2024"},
+        _now_ms(),
+        True,
+        "{}",
+    )
+
+    with (
+        pytest.raises(CommitFailedError, match="concurrent transactions added new data")
+        if conflicts
+        else contextlib.nullcontext()
+    ):
+        stale.create_write_transaction(
+            [add],
+            mode="overwrite",
+            schema=stale.schema(),
+            partition_by=["Part", "year"],
+            partition_filters=[("Part", "=", "it's"), ("year", "=", "2024")],
+        )
+
+    assert _read_ids(DeltaTable(tmp_path)) == ([0, 1] if conflicts else [1, 2])
+
+
 def test_remove_action_constructor():
     minimal = RemoveAction("part-a.parquet", False, 123)
     assert minimal.path == "part-a.parquet"
