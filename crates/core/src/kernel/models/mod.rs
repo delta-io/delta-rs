@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod actions;
-pub(crate) mod fields;
 
 pub use actions::*;
 
