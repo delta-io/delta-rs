@@ -16,5 +16,5 @@
 # under the License.
 
 [toolchain]
-channel = "1.94.1"
-components = ["rustfmt", "clippy"]
+channel = "1.95.0"
+components = ["rustfmt", "clippy", "rust-analyzer", "llvm-tools-preview"]

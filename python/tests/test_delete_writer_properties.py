@@ -154,6 +154,15 @@ def test_delete_with_fallback_compression_issue_4579(tmp_path: pathlib.Path):
     assert len(df) == 5
     assert all(df["id"] <= 5)
 
+    # Rewritten files use the delta-rs SNAPPY default, like write/merge/update
+    import pyarrow.parquet as pq
+
+    for file_uri in table.file_uris():
+        metadata = pq.read_metadata(file_uri)
+        assert metadata.created_by.startswith("delta-rs")
+        for column in metadata.row_group(0).to_dict()["columns"]:
+            assert column["compression"] == "SNAPPY"
+
     print(
         "✓ Fallback compression test passed - delete works without custom writer_properties"
     )

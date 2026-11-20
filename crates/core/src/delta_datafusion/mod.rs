@@ -70,7 +70,9 @@ pub use self::table_provider::next::{
 pub(crate) use self::utils::*;
 pub use cdf::scan::DeltaCdfTableProvider;
 pub(crate) use column_mapping::ColumnMappingState;
-pub(crate) use data_validation::{DataValidationExec, constraints_to_exprs, validation_predicates};
+pub(crate) use data_validation::{
+    DataValidationExec, ValidationCheck, constraints_to_exprs, validation_predicates,
+};
 pub(crate) use find_files::*;
 pub(crate) use table_provider::next::RuntimeFileFilter;
 pub(crate) use table_provider::next::normalize_path_as_file_id;
@@ -1446,6 +1448,14 @@ mod tests {
 
         let actual = drain_recorded_ops(&mut operations).await;
 
+        // Parquet metadata reads (the footer probe, the footer fetch, and the
+        // metadata_size_hint prefetch) are always anchored at the end of the
+        // file, while column chunk reads never reach the trailing footer and
+        // magic bytes. Exclude tail-anchored reads so the assertions below only
+        // consider column data reads: with a metadata_size_hint larger than
+        // the file (e.g. datafusion's 512KiB default against this tiny test
+        // file) the prefetch spans the whole file, including the unselected
+        // column chunk, without that chunk being read as data.
         let data_ranges = actual
             .iter()
             .flat_map(|operation| match operation {
@@ -1453,6 +1463,7 @@ mod tests {
                 ObjectStoreOperation::GetRanges(PathKind::Data, ranges) => ranges.clone(),
                 _ => Vec::new(),
             })
+            .filter(|range| range.end < file_meta.size)
             .collect::<Vec<_>>();
 
         let overlaps = |left: &Range<u64>, right: &Range<u64>| {

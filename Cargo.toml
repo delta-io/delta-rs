@@ -5,7 +5,7 @@ resolver = "3"
 
 [workspace.package]
 authors = ["Qingping Hou <dave2008713@gmail.com>", "R Tyler Croy <rtyler@brokenco.de>"]
-rust-version = "1.94.1"
+rust-version = "1.95.0"
 keywords = ["deltalake", "delta", "datalake"]
 readme = "README.md"
 edition = "2024"
@@ -15,16 +15,20 @@ license = "Apache-2.0"
 documentation = "https://docs.rs/deltalake"
 repository = "https://github.com/delta-io/delta.rs"
 
+[workspace.lints.clippy]
+# Public enums must be #[non_exhaustive] so adding variants is not a breaking change.
+exhaustive_enums = "deny"
+
 [workspace.dependencies]
 #delta_kernel = { package = "buoyant_kernel", path = "../delta-kernel-rs/kernel", features = [
-#delta_kernel = { package = "buoyant_kernel", git = "https://github.com/buoyant-data/delta-kernel-rs", rev = "ab66589067127b81c87690370e9b2c6e5129bcdf", features = [
-delta_kernel = { package = "buoyant_kernel", version = "0.28.1,<0.28.100", features = [
+#delta_kernel = { package = "buoyant_kernel", git = "https://github.com/buoyant-data/delta-kernel-rs", rev = "e6b3ff5120149e22b19d9b5eb9213cb6cd4a0a41", features = [
+delta_kernel = { package = "buoyant_kernel", version = "0.30.1,<0.30.100", features = [
     "arrow-59",
     "internal-api",
 ] }
 #delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  path = "../delta-kernel-rs/default-engine", features = ["arrow-59", "rustls"], default-features = false }
-#delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  git = "https://github.com/buoyant-data/delta-kernel-rs", rev = "ab66589067127b81c87690370e9b2c6e5129bcdf", features = ["arrow-59", "rustls"], default-features = false }
-delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  version = "0.28.0,<0.28.100", features = ["arrow-59", "rustls"], default-features = false }
+#delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  git = "https://github.com/buoyant-data/delta-kernel-rs", rev = "e6b3ff5120149e22b19d9b5eb9213cb6cd4a0a41", features = ["arrow-59", "rustls"], default-features = false }
+delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  version = "0.30.0,<0.30.100", features = ["arrow-59", "rustls"], default-features = false }
 
 
 # arrow
@@ -42,12 +46,12 @@ arrow-select = { version = "59" }
 object_store = { version = "0.13.2" }
 parquet = { version = "59" }
 
-# datafusion 54
-datafusion = { version = "55" }
-datafusion-datasource = { version = "55" }
-datafusion-physical-expr-adapter = { version = "55" }
-datafusion-ffi = { version = "55" }
-datafusion-proto = { version = "55" }
+# datafusion 55
+datafusion = { version = "55.2" }
+datafusion-datasource = { version = "55.2" }
+datafusion-physical-expr-adapter = { version = "55.2" }
+datafusion-ffi = { version = "55.2" }
+datafusion-proto = { version = "55.2" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
@@ -77,6 +81,15 @@ opentelemetry = { version = "0.33" }
 opentelemetry-otlp = { version = "0.33", features = ["http-proto"] }
 opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Temporary pin to unbreak Windows CI. cc 1.9.0 routes MSVC compiles through
+# RUSTC_WRAPPER (https://github.com/rust-lang/cc-rs/pull/2022), and sccache's
+# MSVC argument handling then breaks the C++ build of libmimalloc-sys on
+# windows-latest runners ("/WX-" is consumed by cl.exe as a source file).
+# Cargo.lock is gitignored, so the pin must live here; it is referenced by
+# deltalake-python's build-dependencies to constrain workspace resolution.
+# Remove once sccache handles -Tp/-Tc arguments (https://github.com/mozilla/sccache/issues/2062).
+cc = "=1.11.1"
 
 [workspace.metadata.typos]
 files.extend-exclude = ["CHANGELOG.md", "crates/benchmarks/queries/tpcds/*.sql"]

@@ -21,6 +21,7 @@ use super::window::{SinkFactory, WriteWindow};
 use super::{DeltaWriter, DeltaWriterError, WriteMode, ensure_legacy_writer_supports_table};
 use crate::DeltaTable;
 use crate::datafile::writer::ArrowWriterOptions;
+use crate::datafile::{DeltaWriterProperties, WriterStatsConfig};
 use crate::errors::DeltaTableError;
 use crate::kernel::schema::cast::{cast_record_batch, normalize_for_delta};
 use crate::kernel::schema::merge_arrow_schema;
@@ -217,11 +218,9 @@ impl RecordBatchWriter {
         let factory = SinkFactory {
             storage,
             partition_columns,
-            writer_properties,
-            arrow_options: ArrowWriterOptions::default(),
-            target_file_size: None,
-            num_indexed_cols,
-            stats_columns,
+            props: DeltaWriterProperties::default()
+                .with_parquet_properties(writer_properties)
+                .with_stats_config(WriterStatsConfig::new(num_indexed_cols, stats_columns)),
         };
         Self {
             window: WriteWindow::new(factory, arrow_schema_ref),

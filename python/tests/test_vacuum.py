@@ -1,7 +1,6 @@
 import os
 import pathlib
 from datetime import datetime, timedelta
-from urllib.parse import urlparse
 
 import pytest
 from arro3.core import Table
@@ -314,7 +313,8 @@ def test_vacuum_full_keeps_recent_tombstones_readable_for_time_travel(
     assert original_file_uris
 
     old_ts = (datetime.now() - timedelta(days=10)).timestamp()
-    backdated_path = pathlib.Path(urlparse(original_file_uris[0]).path)
+    backdated_path = pathlib.Path(original_file_uris[0])
+    assert backdated_path.is_absolute()
     os.utime(backdated_path, (old_ts, old_ts))
 
     write_deltalake(tmp_path, sample_table, partition_by=["deleted"], mode="append")

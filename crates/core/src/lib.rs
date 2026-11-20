@@ -43,6 +43,12 @@
 //! };
 //! ```
 //!
+//! # API stability
+//!
+//! All public enums in this crate are marked `#[non_exhaustive]`. Downstream code must
+//! include a wildcard arm when matching on them: new variants may be added in any
+//! semver-compatible (minor or patch) 2.x release.
+//!
 //! # Optional cargo package features
 //!
 //! - `s3`, `gcs`, `azure` - enable the storage backends for AWS S3, Google Cloud Storage (GCS),

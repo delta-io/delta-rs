@@ -21,7 +21,7 @@ use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::{DataSkippingNumIndexedCols, TableProperties};
 use delta_kernel::transforms::{SchemaTransform, transform_output_type};
-use delta_kernel::{DeltaResult, ExpressionEvaluator};
+use delta_kernel::{ExpressionEvaluator, KernelResult as DeltaResult};
 
 use crate::errors::{DeltaResult as DeltaResultLocal, DeltaTableError};
 use crate::kernel::{SCAN_ROW_ARROW_SCHEMA, StatsProjection};
@@ -378,8 +378,8 @@ impl<'a> SchemaTransform<'a> for BaseStatsTransform {
     fn transform_struct_field(&mut self, field: &'a StructField) -> Option<Cow<'a, StructField>> {
         use Cow::*;
 
-        // Check if the number of columns is set and if the added columns exceed the limit
-        // In the constructor we assert this will always be None if column_names are specified
+        // Check if the number of columns is set and if the added columns exceed the limit.
+        // In the constructor we assert this will always be None if column_names are specified.
         if let Some(DataSkippingNumIndexedCols::NumColumns(n_cols)) = self.n_columns
             && self.added_columns >= n_cols
         {
@@ -410,7 +410,11 @@ impl<'a> SchemaTransform<'a> for BaseStatsTransform {
             self.added_columns += 1;
         }
 
-        let field = match self.transform(&field.data_type)? {
+        let transformed = self.transform(&field.data_type);
+        // Pop the path before potentially propagating a `None` result.
+        self.path.pop();
+
+        let field = match transformed? {
             Borrowed(_) if field.is_nullable() => Borrowed(field),
             data_type => Owned(StructField {
                 name: field.name.clone(),
@@ -419,8 +423,6 @@ impl<'a> SchemaTransform<'a> for BaseStatsTransform {
                 metadata: Default::default(),
             }),
         };
-
-        self.path.pop();
 
         // exclude struct fields with no children
         if matches!(field.data_type(), DataType::Struct(dt) if dt.num_fields() == 0) {
@@ -464,7 +466,7 @@ impl<'a> SchemaTransform<'a> for MinMaxStatsTransform {
 // Returns true if the column name is included in the list of column names
 // or if the column name is a prefix of any column name in the list
 // or if the column name is a child of any column name in the list
-fn should_include_column(column_name: &ColumnName, column_names: &[ColumnName]) -> bool {
+pub(crate) fn should_include_column(column_name: &ColumnName, column_names: &[ColumnName]) -> bool {
     column_names.iter().any(|name| {
         name.as_ref().starts_with(column_name) || column_name.as_ref().starts_with(name)
     })
@@ -739,6 +741,42 @@ mod tests {
             StructField::nullable("nullCount", null_count),
             StructField::nullable("minValues", expected_fields.clone()),
             StructField::nullable("maxValues", expected_fields.clone()),
+        ])
+        .unwrap();
+
+        assert_eq!(&expected, &stats_schema);
+    }
+
+    /// Fields listed in `dataSkippingStatsColumns` that follow a struct with no listed
+    /// leaves must still be included in the stats schema.
+    #[test]
+    fn test_stats_schema_col_names_after_excluded_struct() {
+        let properties: TableProperties = [(
+            "delta.dataSkippingStatsColumns".to_string(),
+            "a,b".to_string(),
+        )]
+        .into();
+
+        let st = StructType::try_new([StructField::nullable("x", DataType::LONG)]).unwrap();
+        let file_schema = StructType::try_new([
+            StructField::nullable("a", DataType::LONG),
+            StructField::nullable("st", DataType::Struct(Box::new(st))),
+            StructField::nullable("b", DataType::LONG),
+        ])
+        .unwrap();
+
+        let stats_schema = stats_schema(&file_schema, &properties);
+
+        let expected_fields = StructType::try_new([
+            StructField::nullable("a", DataType::LONG),
+            StructField::nullable("b", DataType::LONG),
+        ])
+        .unwrap();
+        let expected = StructType::try_new([
+            StructField::nullable("numRecords", DataType::LONG),
+            StructField::nullable("nullCount", expected_fields.clone()),
+            StructField::nullable("minValues", expected_fields.clone()),
+            StructField::nullable("maxValues", expected_fields),
         ])
         .unwrap();
 

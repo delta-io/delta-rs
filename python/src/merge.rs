@@ -1,4 +1,5 @@
 use deltalake::arrow::datatypes::Schema as ArrowSchema;
+use deltalake::datafile::properties::DEFAULT_PARQUET_PROPERTIES;
 use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::MemTable;
 use deltalake::datafusion::physical_plan::memory::LazyBatchGenerator;
@@ -101,7 +102,10 @@ impl PyMergeBuilder {
         cmd = cmd.with_merge_schema(merge_schema);
 
         if let Some(writer_props) = writer_properties {
-            cmd = cmd.with_writer_properties(set_writer_properties(writer_props)?);
+            cmd = cmd.with_writer_properties(set_writer_properties(
+                writer_props,
+                &DEFAULT_PARQUET_PROPERTIES,
+            )?);
         }
 
         if let Some(commit_properties) =

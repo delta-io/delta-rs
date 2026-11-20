@@ -1,10 +1,13 @@
+import datetime
 import pathlib
+import time
 
 import pytest
 from arro3.core import Array, DataType, Table
 from arro3.core import Field as ArrowField
 
 from deltalake import CommitProperties, DeltaTable, write_deltalake
+from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
 
 
@@ -215,7 +218,6 @@ def test_update_with_predicate_and_new_values(
             "deleted": True,
             "sold": 100,
             "price_float": 9999,
-            "items_in_bucket": ["item4", "item5", "item6"],
         },
         predicate="price > 3",
     )
@@ -246,6 +248,37 @@ def test_update_new_values_preserves_strings(tmp_path, value):
         QueryBuilder().register("tbl", dt).execute("SELECT name FROm tbl").read_all()
     )
     assert result.column("name")[0].as_py() == value
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("tz", ["UTC", "Asia/Seoul", "America/Los_Angeles"])
+def test_update_new_values_naive_datetime_is_utc(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, tz: str
+):
+    import pyarrow as pa
+
+    if not hasattr(time, "tzset"):
+        pytest.skip("time.tzset is not available on this platform")
+
+    data = pa.table(
+        {
+            "ts": pa.array(
+                [datetime.datetime(2026, 1, 1)], type=pa.timestamp("us", "UTC")
+            )
+        }
+    )
+    write_deltalake(tmp_path, data)
+    dt = DeltaTable(tmp_path)
+
+    monkeypatch.setenv("TZ", tz)
+    time.tzset()
+
+    dt.update(new_values={"ts": datetime.datetime(2026, 6, 1, 12, 30)})
+
+    result = QueryBuilder().register("tbl", dt).execute("SELECT ts FROM tbl").read_all()
+    assert result.column("ts")[0].as_py() == datetime.datetime(
+        2026, 6, 1, 12, 30, tzinfo=datetime.timezone.utc
+    )
 
 
 def test_update_no_inputs(tmp_path: pathlib.Path, sample_table: Table):
@@ -290,6 +323,16 @@ def test_update_with_incorrect_updates_input(
         str(excinfo.value)
         == "Invalid datatype provided in new_values, only int, float, bool, list, str or datetime or accepted."
     )
+
+
+def test_update_unknown_column(tmp_path: pathlib.Path, sample_table: Table):
+    write_deltalake(tmp_path, sample_table, mode="append")
+    dt = DeltaTable(tmp_path)
+
+    with pytest.raises(DeltaError, match="No field named"):
+        dt.update(updates={"Price": "0"}, predicate="id = '1'")
+
+    assert dt.version() == 0
 
 
 def test_update_stats_columns_stats_provided(tmp_path: pathlib.Path):

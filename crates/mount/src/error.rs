@@ -3,6 +3,7 @@ use deltalake_core::errors::DeltaTableError;
 pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     #[allow(dead_code)]
     #[error("failed to parse config: {0}")]

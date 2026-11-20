@@ -48,6 +48,7 @@ impl LakeFSConfig {
 
 /// Who writes to the branch of a commit. This decides which failed commits are retried.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BranchAccess {
     /// Only the caller, as on a transaction branch. Retried after every transient failure.
     /// "No changes" counts as committed: only an earlier attempt can have taken the staged changes.
@@ -59,6 +60,7 @@ pub enum BranchAccess {
 
 /// Why a merge was rejected.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum MergeError {
     /// The destination already contains a conflicting change (HTTP 409).
     Conflict(String),

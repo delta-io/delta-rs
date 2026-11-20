@@ -39,7 +39,6 @@ use datafusion::{
     physical_plan::ExecutionPlan,
 };
 use delta_kernel::{Engine, table_configuration::TableConfiguration, table_features::TableFeature};
-use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -65,6 +64,7 @@ pub(crate) use crate::delta_datafusion::file_id::FILE_ID_COLUMN_DEFAULT;
 
 /// Policy for selected files that are not active in a scan snapshot.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MissingSelectedFilePolicy {
     /// Return an error when a selected file is not active in the scan snapshot.
     #[default]
@@ -233,7 +233,7 @@ fn add_path_for_selection(add: Add) -> String {
         strip_url_sensitive_parts(&mut url);
         url.to_string()
     } else {
-        String::from(Path::from(path))
+        crate::kernel::models::actions::serde_path::encode_path(&path)
     }
 }
 
@@ -433,6 +433,7 @@ pub(crate) fn normalize_path_as_file_id(
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SnapshotWrapper {
     Snapshot(Arc<Snapshot>),
     EagerSnapshot(Arc<EagerSnapshot>),
@@ -1641,6 +1642,72 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::case_when("CASE WHEN p = 1 THEN true ELSE false END", &[1])]
+    #[case::not_coalesce("NOT coalesce(q > 'a', false)", &[0, 2])]
+    #[case::partition_and_null_comparison("p = 1 AND x = NULL", &[])]
+    #[case::not_in_with_null("x NOT IN (1, NULL)", &[])]
+    #[case::eq("p = 1", &[1])]
+    #[case::in_list("p IN (0, 1)", &[0, 1])]
+    #[case::is_null("p IS NULL", &[2])]
+    #[tokio::test]
+    async fn test_partition_filters_follow_sql_semantics(
+        #[case] filter: &str,
+        #[case] expected: &[i64],
+    ) -> TestResult {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int64, true),
+            ArrowField::new("x", ArrowDataType::Int64, true),
+            ArrowField::new("p", ArrowDataType::Int32, true),
+            ArrowField::new("q", ArrowDataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![0, 1, 2, 3])),
+                Arc::new(Int64Array::from(vec![Some(0), Some(1), Some(2), None])),
+                Arc::new(Int32Array::from(vec![Some(0), Some(1), None, Some(2)])),
+                Arc::new(StringArray::from(vec![
+                    Some("a"),
+                    Some("b"),
+                    None,
+                    Some("c"),
+                ])),
+            ],
+        )?;
+        let table = crate::DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_partition_columns(["p", "q"])
+            .await?;
+        let provider = DeltaScan::new(
+            table.snapshot()?.snapshot().snapshot().clone(),
+            DeltaScanConfig::default(),
+        )?
+        .with_log_store(table.log_store());
+        let session = Arc::new(create_session().into_inner());
+        session.register_table("delta_table", Arc::new(provider))?;
+
+        let batches = session
+            .sql(&format!("SELECT id FROM delta_table WHERE {filter}"))
+            .await?
+            .collect()
+            .await?;
+
+        let mut ids: Vec<i64> = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int64Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, expected);
         Ok(())
     }
 
@@ -3014,8 +3081,7 @@ mod tests {
         crate::DeltaTable,
         Arc<crate::delta_datafusion::table_provider::next::DeltaScan>,
     )> {
-        let mut table =
-            open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let mut table = open_fs_path("../test/tests/data/multi_partitioned");
         table.load().await?;
 
         let provider = crate::delta_datafusion::table_provider::next::DeltaScan::new(
@@ -3176,8 +3242,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delta_scan_provider_schema_keeps_configured_file_id_capability() -> TestResult {
-        let mut table =
-            open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let mut table = open_fs_path("../test/tests/data/multi_partitioned");
         table.load().await?;
         let provider = crate::delta_datafusion::table_provider::next::DeltaScan::new(
             table.snapshot()?.snapshot().clone(),
@@ -3191,8 +3256,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delta_scan_config_file_column_projection() -> TestResult {
-        let mut table =
-            open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let mut table = open_fs_path("../test/tests/data/multi_partitioned");
         table.load().await?;
         let provider = Arc::new(
             crate::delta_datafusion::table_provider::next::DeltaScan::new(

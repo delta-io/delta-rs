@@ -1,0 +1,17 @@
+deltalake-kernel-executor
+Copyright 2026 The delta-rs Authors
+Licensed under the Apache License, Version 2.0 (see LICENSE.txt)
+
+This crate includes software from the delta-kernel-rs project:
+
+The Delta Kernel Rust project
+https://github.com/delta-io/delta-kernel-rs
+Copyright 2023-2024 The Delta Kernel Rust Authors
+Licensed under the Apache License, Version 2.0
+
+Taken from its datafusion-executor crate (commit 04c2ec32):
+
+- datafusion-executor/src/{expression,predicate,scalar,utils}.rs
+  -> src/expressions/to_datafusion/{expression,predicate,scalar,utils}.rs
+- datafusion-executor/src/plan.rs -> src/query/mod.rs
+- datafusion-executor/src/operator.rs -> src/query/operator.rs

@@ -14,6 +14,7 @@ use crate::{DeltaResult, delta_datafusion::expr::parse_predicate_expression};
 
 /// Used to represent user input of either a Datafusion expression or string expression
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Expression {
     /// Datafusion Expression
     DataFusion(Expr),
@@ -31,7 +32,7 @@ impl Expression {
         let expr = coerce_predicate_literals(expr, schema.as_ref())?;
         let execution_props = session.execution_props();
         let context = SimplifyContext::builder()
-            .with_schema(schema)
+            .with_schema(schema.clone())
             .with_query_execution_start_time(execution_props.query_execution_start_time)
             .with_config_options(
                 execution_props
@@ -41,7 +42,10 @@ impl Expression {
             )
             .build();
         let simplifier = ExprSimplifier::new(context);
-        simplifier.simplify(expr)
+        let expr = simplifier.simplify(expr)?;
+        // Simplification folds constant expressions such as `CAST('...' AS TIMESTAMP)` into
+        // literals, so the literals that need coercing only show up after it has run.
+        coerce_predicate_literals(expr, schema.as_ref())
     }
 }
 

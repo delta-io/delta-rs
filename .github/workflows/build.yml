@@ -29,9 +29,6 @@ jobs:
         # <https://github.com/actions-rust-lang/rustfmt/releases/tag/v1.1.2>
         uses: actions-rust-lang/rustfmt@4066006ec54a31931b9b1fddfd38f2fdf2d27143
 
-      - name: build and lint with clippy
-        run: cargo clippy --profile=ci --features ${{ env.DEFAULT_FEATURES }} --tests
-
       - name: Run Machete to check for unused dependencies
         uses: bnjbvr/cargo-machete@aa070c61641e482bc2b5d41c97b496ee4755bf37
 
@@ -75,9 +72,6 @@ jobs:
       - name: Default build
         run: cargo build --profile=ci --package deltalake
 
-      - name: Default features with clippy
-        run: cargo clippy --profile=ci --features ${{ env.DEFAULT_FEATURES }} --tests
-
       - name: Spot-check build for native-tls features
         run: cargo build --profile=ci --package deltalake --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue
 
@@ -91,6 +85,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       DEFAULT_FEATURES: "datafusion"
+      CARGO_LLVM_COV_RUSTC_WRAPPER: "sccache"
+      NEXTEST_PROFILE: "ci"
+      # Merge profiles per binary to keep Windows coverage within runner disk space.
+      LLVM_PROFILE_FILE_NAME: ${{ matrix.os == 'windows-latest' && 'delta-rs-%m.profraw' || '' }}
 
     steps:
       # v6.0.2
@@ -115,14 +113,15 @@ jobs:
         with:
           python-version: 3.13
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: ./.github/actions/setup-coverage
 
       - name: Run tests
         shell: bash
         run: |
           make setup-dat
-          cargo llvm-cov --profile=ci --features ${{ env.DEFAULT_FEATURES }} \
+          # shortcut: remove the coverage workaround after https://github.com/taiki-e/cargo-llvm-cov/pull/533 is released.
+          cargo llvm-cov nextest --cargo-profile=ci --features ${{ env.DEFAULT_FEATURES }} \
+            ${{ runner.os == 'Windows' && '--no-rustc-wrapper' || '' }} \
             --workspace \
             --codecov \
             --output-path codecov.json \
@@ -142,7 +141,7 @@ jobs:
         run: |
           # Use the environment from llvm-cov and the same target dir and
           # package selection, to avoid recompilation.
-          eval "$(cargo llvm-cov show-env --sh)"
+          eval "$(cargo llvm-cov show-env --sh ${{ runner.os == 'Windows' && '--no-rustc-wrapper' || '' }})"
           cargo test --profile=ci --features ${{ env.DEFAULT_FEATURES }} \
             --target-dir target/llvm-cov-target \
             --workspace \

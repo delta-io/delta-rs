@@ -9,7 +9,9 @@ use arrow::record_batch::RecordBatch;
 use arrow_select::coalesce::BatchCoalescer;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::column_expr_ref;
+use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::{SchemaRef as KernelSchemaRef, StructField};
+use delta_kernel::table_features::TableFeature;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
 use futures::stream::BoxStream;
@@ -185,6 +187,9 @@ impl DeltaTableState {
     ///   (if available).
     /// * `partition.{partition column name}` (matches column type): value of
     ///   partition the file corresponds to.
+    /// * `deletion_vector.{field}`: the file's deletion vector descriptor, with
+    ///   `cardinality` (Int64) being the number of deleted rows. Only present when
+    ///   the table supports deletion vectors, and null for files without one.
     pub fn add_actions_table(
         &self,
         flatten: bool,
@@ -229,6 +234,9 @@ impl Snapshot {
     ///   (if available).
     /// * `partition.{partition column name}` (matches column type): value of
     ///   partition the file corresponds to.
+    /// * `deletion_vector.{field}`: the file's deletion vector descriptor, with
+    ///   `cardinality` (Int64) being the number of deleted rows. Only present when
+    ///   the table supports deletion vectors, and null for files without one.
     pub(crate) fn add_actions_table(
         &self,
         flatten: bool,
@@ -400,6 +408,21 @@ impl Snapshot {
             expressions.push(column_expr_ref!("partitionValues_parsed"));
         }
 
+        if self
+            .inner
+            .table_configuration()
+            .is_feature_supported(&TableFeature::DeletionVectors)
+        {
+            let deletion_vector_field = scan_row_schema()
+                .field("deletionVector")
+                .ok_or_else(|| DeltaTableError::SchemaMismatch {
+                    msg: "deletionVector field not found in scan row schema".to_string(),
+                })?
+                .with_name("deletion_vector");
+            expressions.push(column_expr_ref!("deletionVector"));
+            fields.push(deletion_vector_field);
+        }
+
         let expression = Expression::Struct(expressions, None);
         let table_schema = DataType::try_struct_type(fields)?;
         Ok((expression, table_schema))
@@ -520,7 +543,10 @@ mod tests {
     #[cfg(feature = "datafusion")]
     use crate::writer::test_utils::get_record_batch;
     use crate::{DeltaResult, DeltaTable};
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::Int64Type;
     use arrow_array::{Array, Int32Array};
+    use std::collections::HashMap;
 
     /// <https://github.com/delta-io/delta-rs/issues/3918>
     #[tokio::test]
@@ -548,6 +574,63 @@ mod tests {
         let snapshot = table.snapshot()?.snapshot();
         assert!(snapshot.add_actions_batches(false)?.is_empty());
         assert!(snapshot.add_actions_batches(true)?.is_empty());
+        Ok(())
+    }
+
+    async fn open_fixture_state(name: &str) -> DeltaResult<DeltaTableState> {
+        let path = std::fs::canonicalize(format!("../test/tests/data/{name}"))?;
+        let url = url::Url::from_directory_path(path).expect("fixture path is absolute");
+        let table = crate::open_table(url).await?;
+        Ok(table.snapshot()?.clone())
+    }
+
+    #[tokio::test]
+    async fn test_add_actions_deletion_vector_cardinality_matches_log() -> DeltaResult<()> {
+        for name in ["table-with-dv-small", "table_with_deletion_logs"] {
+            let state = open_fixture_state(name).await?;
+            let expected: HashMap<String, Option<i64>> = state
+                .log_data()
+                .iter()
+                .map(|file| {
+                    let cardinality = file.deletion_vector_descriptor().map(|dv| dv.cardinality);
+                    (file.path().to_string(), cardinality)
+                })
+                .collect();
+            assert!(expected.values().any(Option::is_some), "{name} has no DVs");
+
+            let actions = state.add_actions_table(true)?;
+            let paths = actions.column_by_name("path").unwrap().as_string::<i32>();
+            let cardinality = actions
+                .column_by_name("deletion_vector.cardinality")
+                .unwrap()
+                .as_primitive::<Int64Type>();
+            let actual: HashMap<String, Option<i64>> = paths
+                .iter()
+                .zip(cardinality.iter())
+                .map(|(path, cardinality)| (path.unwrap().to_string(), cardinality))
+                .collect();
+            assert_eq!(actual, expected, "{name}");
+
+            let nested = state.add_actions_table(false)?;
+            assert!(nested.column_by_name("deletion_vector").is_some(), "{name}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_add_actions_without_deletion_vector_feature_has_no_dv_column() -> DeltaResult<()>
+    {
+        let state = open_fixture_state("table-without-dv-small").await?;
+        for flatten in [true, false] {
+            let actions = state.add_actions_table(flatten)?;
+            assert!(
+                actions
+                    .schema()
+                    .fields()
+                    .iter()
+                    .all(|field| !field.name().starts_with("deletion_vector"))
+            );
+        }
         Ok(())
     }
 

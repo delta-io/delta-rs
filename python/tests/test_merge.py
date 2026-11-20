@@ -633,10 +633,6 @@ def test_merge_when_matched_update_all_wo_predicate(
                 [True, True],
                 ArrowField("deleted", type=DataType.bool(), nullable=True),
             ),
-            "weight": Array(
-                [10, 15],
-                ArrowField("weight", type=DataType.int64(), nullable=True),
-            ),
         },
     )
 
@@ -706,10 +702,6 @@ def test_merge_when_matched_update_all_with_exclude(
             "deleted": Array(
                 [True, True],
                 ArrowField("deleted", type=DataType.bool(), nullable=True),
-            ),
-            "weight": Array(
-                [10, 15],
-                ArrowField("weight", type=DataType.int64(), nullable=True),
             ),
         }
     )
@@ -2406,6 +2398,23 @@ def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: b
         get_value("null_count.bar")
 
 
+def test_merge_unknown_column(tmp_path: pathlib.Path, sample_table: Table):
+    write_deltalake(tmp_path, sample_table, mode="append")
+    dt = DeltaTable(tmp_path)
+
+    merger = dt.merge(
+        source=sample_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+    ).when_not_matched_insert({"id": "s.id", "Price": "s.price"})
+
+    with pytest.raises(DeltaError, match="No field named"):
+        merger.execute()
+
+    assert dt.version() == 0
+
+
 def test_merge_field_special_characters_delete_2438(tmp_path: pathlib.Path):
     ## See issue: https://github.com/delta-io/delta-rs/issues/2438
     data = Table(
@@ -3318,6 +3327,51 @@ def test_merge_schema_safe_cast_existing_column_failed_cast_becomes_null(
         "value": [None, None],
         "extra": ["matched", "inserted"],
     }
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("error_on_type_mismatch", (True, False))
+def test_merge_schema_struct_added_field(
+    tmp_path: pathlib.Path, error_on_type_mismatch: bool
+):
+    import pyarrow as pa
+
+    old = pa.struct([("x", pa.int64())])
+    new = pa.struct([("x", pa.int64()), ("y", pa.string())])
+    target = pa.table({"id": [1, 2], "s": pa.array([{"x": 1}, {"x": 2}], type=old)})
+    source = pa.table({"id": [1], "s": pa.array([{"x": 9, "y": "a"}], type=new)})
+    write_deltalake(
+        tmp_path, target, configuration={"delta.enableChangeDataFeed": "true"}
+    )
+
+    dt = DeltaTable(tmp_path)
+    (
+        dt.merge(
+            source=source,
+            predicate="t.id = s.id",
+            source_alias="s",
+            target_alias="t",
+            merge_schema=True,
+            error_on_type_mismatch=error_on_type_mismatch,
+        )
+        .when_matched_update_all()
+        .execute()
+    )
+
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")]).to_pydict()
+    assert result == {
+        "id": [1, 2],
+        "s": [{"x": 9, "y": "a"}, {"x": 2, "y": None}],
+    }
+
+    changes = dt.load_cdf(starting_version=1).read_all()
+    assert sorted(
+        zip(changes["_change_type"].to_pylist(), changes["s"].to_pylist()),
+        key=lambda c: c[0],
+    ) == [
+        ("update_postimage", {"x": 9, "y": "a"}),
+        ("update_preimage", {"x": 1, "y": None}),
+    ]
 
 
 @pytest.mark.pyarrow

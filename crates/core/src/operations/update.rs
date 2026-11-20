@@ -42,8 +42,8 @@ use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use tracing::log::*;
 
-use super::write::configs::WriteExecOptions;
 use super::write::execution::{write_execution_plan, write_execution_plan_cdc};
+use crate::datafile::DeltaWriterProperties;
 use crate::datafile::writer::ArrowWriterOptions;
 use crate::delta_datafusion::{
     DeltaScanConfig, Expression, scan_files_where_matches, update_datafusion_session,
@@ -67,7 +67,6 @@ use crate::{
         Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot,
         transaction::{CommitBuilder, CommitProperties, PROTOCOL},
     },
-    table::config::TablePropertiesExt,
 };
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated
@@ -94,10 +93,8 @@ pub struct UpdateBuilder {
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
     session_fallback_policy: SessionFallbackPolicy,
-    /// Properties passed to underlying parquet writer for when files are rewritten
-    writer_properties: Option<WriterProperties>,
-    /// Options passed to underlying arrow writer for when files are rewritten
-    arrow_options: Option<ArrowWriterOptions>,
+    /// How rewritten data files are encoded
+    writer_properties: DeltaWriterProperties,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// safe_cast determines how data types that do not match the underlying table are handled
@@ -132,8 +129,7 @@ impl UpdateBuilder {
             log_store,
             session: None,
             session_fallback_policy: SessionFallbackPolicy::default(),
-            writer_properties: None,
-            arrow_options: None,
+            writer_properties: DeltaWriterProperties::default(),
             commit_properties: CommitProperties::default(),
             safe_cast: false,
         }
@@ -185,13 +181,27 @@ impl UpdateBuilder {
 
     /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
+        self.writer_properties = self
+            .writer_properties
+            .with_parquet_properties(writer_properties);
         self
     }
 
     /// Arrow writer options passed to the parquet writer for when files are rewritten
     pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
-        self.arrow_options = Some(arrow_options);
+        self.writer_properties = self.writer_properties.with_arrow_options(arrow_options);
+        self
+    }
+
+    /// How the rewritten data files are encoded. Fields set on `writer_properties`
+    /// replace what the builder holds so far, unset fields keep it, so this composes
+    /// with the other setters in any order. An unset target file size or stats
+    /// config falls back to the table's.
+    pub fn with_delta_writer_properties(
+        mut self,
+        writer_properties: DeltaWriterProperties,
+    ) -> Self {
+        self.writer_properties = self.writer_properties.merge(writer_properties);
         self
     }
 
@@ -270,8 +280,7 @@ async fn execute(
     log_store: LogStoreRef,
     snapshot: &EagerSnapshot,
     session: &dyn Session,
-    writer_properties: Option<WriterProperties>,
-    arrow_options: Option<ArrowWriterOptions>,
+    writer_properties: DeltaWriterProperties,
     safe_cast: bool,
 ) -> DeltaResult<(Vec<Action>, UpdateMetrics)> {
     let eager_snapshot = snapshot;
@@ -295,7 +304,11 @@ async fn execute(
         .to_dfschema_ref()?;
     let updates: HashMap<_, _> = updates
         .into_iter()
-        .map(|(key, expr)| expr.resolve(session, schema.clone()).map(|e| (key.name, e)))
+        .map(|(key, expr)| {
+            // An assignment to a column the table lacks would be dropped
+            schema.field_with_unqualified_name(&key.name)?;
+            expr.resolve(session, schema.clone()).map(|e| (key.name, e))
+        })
         .try_collect()?;
 
     let scan_start = Instant::now();
@@ -369,12 +382,9 @@ async fn execute(
         session,
         physical_plan.clone(),
         log_store.object_store(),
-        WriteExecOptions {
-            target_file_size: Some(snapshot.table_properties().target_file_size()),
-            write_batch_size: None,
-            writer_properties: writer_properties.clone(),
-            arrow_options: arrow_options.clone(),
-        },
+        writer_properties
+            .clone()
+            .apply_table_defaults(snapshot.table_configuration()),
     )
     .await?;
 
@@ -426,12 +436,7 @@ async fn execute(
                     session,
                     cdc_exec,
                     log_store.object_store(),
-                    WriteExecOptions {
-                        target_file_size: Some(snapshot.table_properties().target_file_size()),
-                        write_batch_size: None,
-                        writer_properties,
-                        arrow_options,
-                    },
+                    writer_properties.apply_table_defaults(snapshot.table_configuration()),
                 )
                 .await?;
                 actions.extend(cdc_actions);
@@ -502,7 +507,6 @@ impl std::future::IntoFuture for UpdateBuilder {
                     &snapshot,
                     &state,
                     this.writer_properties,
-                    this.arrow_options,
                     this.safe_cast,
                 )
                 .await?;

@@ -17,7 +17,7 @@
 //! Two main abstractions govern the file operations [`LogStore`] and [`ObjectStore`].
 //!
 //! [`LogStore`]s are scoped to individual tables and are responsible for maintaining proper
-//! behaviours and ensuring consistency during the metadata phase. The correctness is predicated
+//! behaviors and ensuring consistency during the metadata phase. The correctness is predicated
 //! on the atomicity and durability guarantees of the implementation of this interface.
 //!
 //! - Atomic visibility: Partial writes must not be visible to readers.
@@ -56,7 +56,7 @@ use bytes::Bytes;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use delta_kernel::log_segment::LogSegment;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
-use delta_kernel::{AsAny, Engine};
+use delta_kernel::{AsAny, Engine, LogPath};
 use delta_kernel_default_engine::DefaultEngineBuilder;
 use delta_kernel_default_engine::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
@@ -315,11 +315,21 @@ pub fn logstore_with(
 
 /// Holder whether it's tmp_commit path or commit bytes
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum CommitOrBytes {
     /// Path of the tmp commit, to be used by logstores which use CopyIfNotExists
     TmpCommit(Path),
     /// Bytes of the log, to be used by logstoers which use Conditional Put
     LogBytes(Bytes),
+}
+
+/// The logtail for a catalog managed table
+#[derive(Clone)]
+pub struct CatalogLogTail {
+    /// The tail log paths
+    pub log_tail: Vec<LogPath>,
+    /// The table's latest version
+    pub max_version: Version,
 }
 
 /// Configuration parameters for a log store
@@ -398,6 +408,23 @@ pub trait LogStore: Send + Sync + AsAny {
 
     /// Find latest version currently stored in the delta log.
     async fn get_latest_version(&self, start_version: Version) -> DeltaResult<Version>;
+
+    /// Return catalog-provided commits for a catalog-managed table, or `None` for
+    /// filesystem-managed tables (the default).
+    async fn catalog_log_tail(&self) -> DeltaResult<Option<CatalogLogTail>> {
+        Ok(None)
+    }
+
+    /// Whether commits to this table are ratified by a catalog.
+    fn is_catalog_managed(&self) -> bool {
+        false
+    }
+
+    /// Publish catalog-ratified commits up to `up_to` to the delta log.
+    async fn publish_logs(&self, up_to: Version) -> DeltaResult<()> {
+        let _ = up_to;
+        Ok(())
+    }
 
     /// Get the object store rooted at the table root (`_delta_log/` is a child).
     fn object_store(&self) -> Arc<dyn ObjectStore>;
@@ -543,6 +570,18 @@ impl<T: LogStore + ?Sized> LogStore for Arc<T> {
         T::get_latest_version(self, start_version).await
     }
 
+    async fn catalog_log_tail(&self) -> DeltaResult<Option<CatalogLogTail>> {
+        T::catalog_log_tail(self).await
+    }
+
+    fn is_catalog_managed(&self) -> bool {
+        T::is_catalog_managed(self)
+    }
+
+    async fn publish_logs(&self, up_to: Version) -> DeltaResult<()> {
+        T::publish_logs(self, up_to).await
+    }
+
     fn object_store(&self) -> Arc<dyn ObjectStore> {
         T::object_store(self)
     }
@@ -645,21 +684,11 @@ pub(crate) fn object_store_path(table_root: &Url) -> DeltaResult<Path> {
 pub fn to_uri(root: &Url, location: &Path) -> String {
     match root.scheme() {
         "file" => {
+            let root = root.to_file_path().expect("Invalid local table URL");
+            let root = root.to_string_lossy();
             #[cfg(windows)]
-            let uri = format!(
-                "{}/{}",
-                root.as_ref().trim_end_matches('/'),
-                location.as_ref()
-            )
-            .replace("file:///", "");
-            #[cfg(unix)]
-            let uri = format!(
-                "{}/{}",
-                root.as_ref().trim_end_matches('/'),
-                location.as_ref()
-            )
-            .replace("file://", "");
-            uri
+            let root = root.replace('\\', "/");
+            format!("{}/{}", root.trim_end_matches('/'), location.as_ref())
         }
         #[cfg(target_os = "windows")]
         DELTA_UNC_SCHEME => {
@@ -796,14 +825,11 @@ pub async fn get_latest_version(
     })
     .await
     .map_err(|e| DeltaTableError::Generic(e.to_string()))?
-    .map_err(|e| {
-        if e.to_string()
-            .contains(&format!("to have version {current_version}"))
-        {
+    .map_err(|e| match e {
+        delta_kernel::KernelError::EmptyLog | delta_kernel::KernelError::MissingVersion(_) => {
             DeltaTableError::InvalidVersion(current_version)
-        } else {
-            DeltaTableError::Generic(e.to_string())
         }
+        other => DeltaTableError::Generic(other.to_string()),
     })?;
 
     Ok(segment.end_version)
@@ -935,6 +961,41 @@ pub(crate) mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[test]
+    fn to_uri_local_paths() {
+        let (url_prefix, path_prefix) = if cfg!(windows) {
+            ("file:///C:/", "C:/")
+        } else {
+            ("file:///", "/")
+        };
+        for (encoded, decoded, relative) in [
+            ("table", "table", "part.parquet"),
+            ("with%20space", "with space", "part.parquet"),
+            ("%E4%B8%AD%E6%96%87", "中文", "part.parquet"),
+            ("literal%2520", "literal%20", "part.parquet"),
+            ("hash%23tag", "hash#tag", "part.parquet"),
+            ("with%20space", "with space", ""),
+            ("with%20space", "with space", "p=a%2Fb/part%20file.parquet"),
+        ] {
+            let root = Url::parse(&format!("{url_prefix}{encoded}/")).unwrap();
+            let location = Path::parse(relative).unwrap();
+            assert_eq!(
+                to_uri(&root, &location),
+                format!("{path_prefix}{decoded}/{relative}")
+            );
+        }
+    }
+
+    #[test]
+    fn to_uri_remote_paths_remain_encoded() {
+        let root = Url::parse("s3://bucket/with%20space/").unwrap();
+        let location = Path::parse("p=a%2Fb/part.parquet").unwrap();
+        assert_eq!(
+            to_uri(&root, &location),
+            "s3://bucket/with%20space/p=a%2Fb/part.parquet"
+        );
+    }
 
     #[test]
     fn test_logstore_config_ctor() {

@@ -23,6 +23,8 @@ use arrow::datatypes::{DataType as ArrowDataType, SchemaRef};
 use delta_kernel::actions::{Remove, Sidecar};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
+use delta_kernel::history_manager::error::{LogHistoryError, NearestTimestamp};
+use delta_kernel::history_manager::{HistoryCommitType, get_earliest_commit, latest_version_as_of};
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::derive_macro_utils::ToDataType;
@@ -45,7 +47,7 @@ use super::{Action, CommitInfo, Metadata, Protocol};
 use crate::checkpoints::parse_last_checkpoint_hint;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, rb_from_scan_meta};
 use crate::kernel::{ARROW_HANDLER, StructType, spawn_blocking_with_span};
-use crate::logstore::{LogStore, LogStoreExt};
+use crate::logstore::{CatalogLogTail, LogStore, LogStoreExt};
 use crate::{DeltaResult, DeltaTableError};
 
 pub use self::log_data::*;
@@ -210,10 +212,30 @@ impl Snapshot {
         table_root: Url,
         version: Option<Version>,
     ) -> DeltaResult<Self> {
+        Self::try_new_with_engine_and_catalog(engine, table_root, version, None).await
+    }
+
+    /// Build a snapshot like [`Snapshot::try_new_with_engine`], additionally feeding the kernel a
+    /// catalog-provided log tail for catalog-managed tables.
+    ///
+    /// When `catalog_log_tail` is `Some`, the catalog is the source of truth: the ratified
+    /// commits are passed via `with_log_tail` and the kernel is capped at `max_version` via
+    /// `with_max_catalog_version`, so filesystem commits beyond that version are ignored.
+    pub async fn try_new_with_engine_and_catalog(
+        engine: Arc<dyn Engine>,
+        table_root: Url,
+        version: Option<Version>,
+        catalog_log_tail: Option<CatalogLogTail>,
+    ) -> DeltaResult<Self> {
         let snapshot = match spawn_blocking_with_span(move || {
             let mut builder = KernelSnapshot::builder_for(table_root);
             if let Some(version) = version {
                 builder = builder.at_version(version);
+            }
+            if let Some(tail) = catalog_log_tail {
+                builder = builder
+                    .with_log_tail(tail.log_tail)
+                    .with_max_catalog_version(tail.max_version);
             }
             builder.build(engine.as_ref())
         })
@@ -223,7 +245,7 @@ impl Snapshot {
             Ok(snapshot) => snapshot,
             Err(e) => {
                 // TODO: we should have more handling-friendly errors upstream in kernel.
-                if e.to_string().contains("No files in log segment") {
+                if matches!(e, delta_kernel::KernelError::EmptyLog) {
                     return Err(DeltaTableError::NotATable(e.to_string()));
                 } else {
                     return Err(e.into());
@@ -249,7 +271,25 @@ impl Snapshot {
             table_root.set_path(&format!("{}/", table_root.path()));
         }
 
-        Self::try_new_with_engine(engine, table_root, version).await
+        // For catalog-managed tables the log store fronts a commit coordinator and supplies the
+        // ratified log tail; filesystem-managed stores return `None` here.
+        let catalog_log_tail = log_store.catalog_log_tail().await?;
+
+        let snapshot =
+            Self::try_new_with_engine_and_catalog(engine, table_root, version, catalog_log_tail)
+                .await?;
+
+        if !log_store.is_catalog_managed() && snapshot.table_configuration().is_catalog_managed() {
+            return Err(DeltaTableError::Generic(
+                "table requires catalog-managed (coordinated) commits but was opened without a \
+                 catalog coordinator; open it through its catalog with catalog-managed commits \
+                 enabled (for Unity Catalog: `uc://catalog.schema.table` with \
+                 `catalog_managed=true`)"
+                    .to_string(),
+            ));
+        }
+
+        Ok(snapshot)
     }
 
     /// Create a [`ScanBuilder`] borrowing this snapshot to configure a read of the table.
@@ -1018,7 +1058,7 @@ impl Snapshot {
         {
             Ok(data) => data,
             Err(err) => {
-                return Box::pin(once(ready(Err(DeltaTableError::KernelError(err)))));
+                return Box::pin(once(ready(Err(err.into()))));
             }
         };
 
@@ -1068,6 +1108,19 @@ impl Snapshot {
         Ok(None)
     }
 
+    pub(crate) async fn in_commit_timestamp(
+        &self,
+        log_store: &dyn LogStore,
+    ) -> DeltaResult<Option<i64>> {
+        let engine = log_store.engine();
+        let inner = self.inner.clone();
+        Ok(
+            spawn_blocking_with_span(move || inner.get_in_commit_timestamp(engine.as_ref()))
+                .await
+                .map_err(|e| DeltaTableError::GenericError { source: e.into() })??,
+        )
+    }
+
     /// Fetch the [domainMetadata] for a specific domain in this snapshot.
     ///
     /// This returns the latest configuration for the domain, or None if the domain does not exist.
@@ -1086,6 +1139,50 @@ impl Snapshot {
                 .await
                 .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
         Ok(metadata)
+    }
+
+    /// The latest version committed at or before `timestamp` (milliseconds since the Unix epoch).
+    ///
+    /// Commits made while in-commit timestamps are enabled are compared by their
+    /// `inCommitTimestamp`, earlier commits by the modification time of their log file. A
+    /// timestamp before the earliest available commit resolves to that commit.
+    pub(crate) async fn version_at_timestamp(
+        &self,
+        log_store: &dyn LogStore,
+        timestamp: i64,
+    ) -> DeltaResult<Version> {
+        let engine = log_store.engine();
+        let inner = self.inner.clone();
+        let version = spawn_blocking_with_span(move || {
+            match latest_version_as_of(
+                &inner,
+                engine.as_ref(),
+                timestamp,
+                HistoryCommitType::Published,
+            ) {
+                Ok(commit) => Ok(commit.version),
+                Err(delta_kernel::KernelError::LogHistory(err))
+                    if matches!(
+                        *err,
+                        LogHistoryError::TimestampOutOfRange {
+                            nearest_timestamp: NearestTimestamp::Earliest(_),
+                            ..
+                        }
+                    ) =>
+                {
+                    get_earliest_commit(
+                        engine.as_ref(),
+                        &inner.log_segment().log_root,
+                        None,
+                        HistoryCommitType::Published,
+                    )
+                }
+                Err(err) => Err(err),
+            }
+        })
+        .await
+        .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
+        Ok(version)
     }
 }
 
@@ -1230,7 +1327,7 @@ async fn read_last_checkpoint_version(
             .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
         match storage.read_files(vec![(checkpoint_path, None)])?.next() {
             Some(Ok(data)) => Ok(parse_last_checkpoint_hint(&data).map(|hint| hint.version)),
-            Some(Err(delta_kernel::Error::FileNotFound(_))) => Ok(None),
+            Some(Err(delta_kernel::KernelError::FileNotFound(_))) => Ok(None),
             Some(Err(err)) => Err(err.into()),
             None => {
                 tracing::warn!("empty _last_checkpoint file");
@@ -1291,6 +1388,16 @@ impl EagerSnapshot {
         log_store: &dyn LogStore,
         target_version: Option<Version>,
     ) -> DeltaResult<()> {
+        // Catalog-managed tables: the incremental (filesystem-only) update path below can't see
+        // ratified-but-unpublished commits, and the catalog — not the filesystem — decides the
+        // latest version. Rebuild from the catalog-provided log tail instead.
+        // TODO(catalog-commits): make this incremental once kernel `builder_from` is wired with a
+        // refreshed catalog log tail.
+        if log_store.catalog_log_tail().await?.is_some() {
+            *self = EagerSnapshot::try_new(log_store, target_version).await?;
+            return Ok(());
+        }
+
         let previous_snapshot = self.snapshot.clone();
         let updated_snapshot = previous_snapshot
             .clone()

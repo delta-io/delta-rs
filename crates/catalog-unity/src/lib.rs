@@ -12,6 +12,7 @@ use deltalake_core::logstore::{
     LogStore, LogStoreFactory, StorageConfig, default_logstore, logstore_factories,
     object_store::RetryConfig,
 };
+use futures::TryFutureExt as _;
 use reqwest::Url;
 use reqwest::header::{AUTHORIZATION, HeaderValue, InvalidHeaderValue};
 use std::collections::HashMap;
@@ -38,10 +39,17 @@ use deltalake_core::{
     ObjectStoreError, Path, ensure_table_uri,
 };
 
+use crate::catalog_managed::{CatalogManagedLogStore, UnityCommitCoordinator};
 use crate::client::retry::*;
 use deltalake_core::logstore::{
     ObjectStoreFactory, ObjectStoreRef, config::str_is_truthy, object_store_factories,
 };
+use unity_catalog_delta_client_api::{LoadTableResponse, Operation, StorageCredential};
+use unity_catalog_delta_rest_client::{
+    ClientConfig, Error, UCDeltaTableClient, UCUpdateTableRestClient,
+};
+
+pub mod catalog_managed;
 pub mod client;
 pub mod credential;
 
@@ -53,6 +61,7 @@ pub mod prelude;
 
 /// Possible errors from the unity-catalog/tables API call
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum UnityCatalogError {
     #[error("GET request error: {source}")]
     /// Error from reqwest library
@@ -137,6 +146,12 @@ pub enum UnityCatalogError {
 
     #[error("{0} is not a table and doesn't have an included storage location. Type: {1}")]
     NotATable(String, TableType),
+
+    #[error("Error received from Unity Catalog: {0}")]
+    UnityCatalogClientError(#[from] Error),
+
+    #[error("Error received from Unity Catalog: {0}")]
+    UnityCatalogApiError(#[from] unity_catalog_delta_client_api::Error),
 }
 
 impl From<ErrorResponse> for UnityCatalogError {
@@ -174,6 +189,7 @@ impl From<UnityCatalogError> for DeltaTableError {
 }
 
 /// Configuration options for unity catalog client
+#[non_exhaustive]
 pub enum UnityCatalogConfigKey {
     /// Url of a Databricks workspace
     ///
@@ -450,7 +466,7 @@ impl UnityCatalogBuilder {
 
     /// Hydrate builder from key value pairs.
     ///
-    /// Keys that are not recognised as Unity Catalog options are skipped, so
+    /// Keys that are not recognized as Unity Catalog options are skipped, so
     /// callers can pass a mixed config map that also contains object store
     /// options (e.g. `aws_region`, `timeout`) destined for downstream
     /// consumers. Use [`Self::try_with_option`] to fail on unknown keys.
@@ -663,8 +679,24 @@ impl UnityCatalogBuilder {
         }
         let client = client_options.client()?;
 
+        let (cc_client, update_client) =
+            if let CredentialProvider::BearerToken(ref token) = credential {
+                let config = ClientConfig::build(workspace_url.clone(), token)
+                    .build()
+                    .map_err(UnityCatalogError::from)?;
+
+                (
+                    UCDeltaTableClient::new(config.clone()).map(Arc::new).ok(),
+                    UCUpdateTableRestClient::new(config).map(Arc::new).ok(),
+                )
+            } else {
+                (None, None)
+            };
+
         Ok(UnityCatalog {
             client,
+            cc_client,
+            update_client,
             workspace_url,
             credential,
             table_cache: DashMap::new(),
@@ -675,6 +707,8 @@ impl UnityCatalogBuilder {
 /// Databricks Unity Catalog
 pub struct UnityCatalog {
     client: reqwest_middleware::ClientWithMiddleware,
+    cc_client: Option<Arc<UCDeltaTableClient>>,
+    update_client: Option<Arc<UCUpdateTableRestClient>>,
     credential: CredentialProvider,
     workspace_url: String,
     table_cache: DashMap<String, GetTableResponse>,
@@ -873,6 +907,14 @@ impl UnityCatalog {
         Ok(table)
     }
 
+    pub fn delta_rest_client(&self) -> Option<Arc<UCDeltaTableClient>> {
+        self.cc_client.as_ref().cloned()
+    }
+
+    pub fn delta_update_client(&self) -> Option<Arc<UCUpdateTableRestClient>> {
+        self.update_client.as_ref().cloned()
+    }
+
     pub async fn get_temp_table_credentials<S>(
         &self,
         catalog_id: S,
@@ -933,36 +975,80 @@ impl UnityCatalog {
 #[derive(Clone, Default, Debug)]
 pub struct UnityCatalogFactory {}
 
+impl UnityCatalogFactory {
+    pub fn new_delta_client(config: &StorageConfig) -> DeltaResult<UnityCatalog> {
+        Ok(UnityCatalogBuilder::from_env()
+            .try_with_options(config.raw.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .and_then(UnityCatalogBuilder::build)
+            .map_err(UnityCatalogError::from)?)
+    }
+}
+
 impl ObjectStoreFactory for UnityCatalogFactory {
     fn parse_url_opts(
         &self,
         table_uri: &Url,
         config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let (table_path, temp_creds) = UnityCatalogBuilder::execute_uc_future(
-            UnityCatalogBuilder::get_uc_location_and_token(table_uri.as_str(), Some(&config.raw)),
-        )??;
+        let store = if let Some(managed) = resolve_managed_table(config, table_uri)?
+            && is_table_managed(&managed)
+            && let Some(client) = managed.uc.delta_rest_client()
+        {
+            let credentials = |operation| {
+                client.get_table_credentials(
+                    &managed.catalog,
+                    &managed.schema,
+                    &managed.table,
+                    operation,
+                )
+            };
+            let creds = UnityCatalogBuilder::execute_uc_future(
+                credentials(Operation::ReadWrite).or_else(|_| credentials(Operation::Read)),
+            )?
+            .map_err(UnityCatalogError::from)?;
 
-        let mut storage_options = config.raw.clone();
-        storage_options.extend(temp_creds);
+            build_object_store(
+                &managed.loaded.metadata.location,
+                storage_credentials_to_options(&creds.storage_credentials),
+                config,
+            )?
+        } else {
+            let (location, temp_creds) = UnityCatalogBuilder::execute_uc_future(
+                UnityCatalogBuilder::get_uc_location_and_token(
+                    table_uri.as_str(),
+                    Some(&config.raw),
+                ),
+            )??;
+            build_object_store(&location, temp_creds, config)?
+        };
 
-        // TODO(roeap): we should not have to go through the table here.
-        // ideally we just create the right storage ...
-        let table_url = ensure_table_uri(&table_path)?;
-        let mut builder = DeltaTableBuilder::from_url(table_url)?;
-
-        if let Some(runtime) = &config.runtime {
-            builder = builder.with_io_runtime(runtime.clone());
-        }
-
-        if !storage_options.is_empty() {
-            builder = builder.with_storage_options(storage_options.clone());
-        }
         let prefix = Path::parse(table_uri.path())?;
-        let store = builder.build_storage()?.object_store();
 
         Ok((store, prefix))
     }
+}
+
+/// Build an object store rooted at `location` (a physical storage URL such as `s3://…`),
+/// merging the caller's vended credential `cred_options` on top of the base storage config.
+fn build_object_store(
+    location: &str,
+    cred_options: HashMap<String, String>,
+    config: &StorageConfig,
+) -> DeltaResult<ObjectStoreRef> {
+    let mut storage_options = config.raw.clone();
+    storage_options.extend(cred_options);
+
+    // TODO(roeap): we should not have to go through the table here.
+    // ideally we just create the right storage ...
+    let table_url = ensure_table_uri(location)?;
+    let mut builder = DeltaTableBuilder::from_url(table_url)?;
+    if let Some(runtime) = &config.runtime {
+        builder = builder.with_io_runtime(runtime.clone());
+    }
+    if !storage_options.is_empty() {
+        builder = builder.with_storage_options(storage_options);
+    }
+    Ok(builder.build_storage()?.object_store())
 }
 
 impl LogStoreFactory for UnityCatalogFactory {
@@ -973,12 +1059,123 @@ impl LogStoreFactory for UnityCatalogFactory {
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
+        if let Some(managed) = resolve_managed_table(options, location)?
+            && is_table_managed(&managed)
+            && let Some(rc) = managed.uc.delta_rest_client()
+            && let Some(uc) = managed.uc.delta_update_client()
+        {
+            let coordinator = Arc::new(UnityCommitCoordinator::new(
+                rc,
+                uc,
+                managed.catalog,
+                managed.schema,
+                managed.table,
+                managed.loaded.metadata.table_uuid,
+                prefixed_store.clone(),
+            ));
+            return Ok(Arc::new(CatalogManagedLogStore::new(
+                prefixed_store,
+                root_store,
+                deltalake_core::logstore::LogStoreConfig::new(location, options.clone()),
+                coordinator,
+            )));
+        }
+
         Ok(default_logstore(
             prefixed_store,
             root_store,
             location,
             options,
         ))
+    }
+}
+
+pub(crate) fn is_table_managed(table: &ManagedTable) -> bool {
+    table
+        .loaded
+        .metadata
+        .properties
+        .get("delta.feature.catalogManaged")
+        .map(|feat| feat == "supported")
+        .unwrap_or(false)
+}
+
+pub(crate) fn storage_credentials_to_options(
+    creds: &[StorageCredential],
+) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    if creds.len() > 1 {
+        tracing::warn!(
+            "UC returned {} storage credentials; only the first will be used",
+            creds.len()
+        );
+    }
+    let Some(cred) = creds.first() else {
+        return out;
+    };
+    for (key, value) in &cred.config {
+        let mapped = match key.as_str() {
+            "s3.access-key-id" => "aws_access_key_id",
+            "s3.secret-access-key" => "aws_secret_access_key",
+            "s3.session-token" => "aws_session_token",
+            "azure.sas-token" => "azure_storage_sas_key",
+            // `google_application_credentials` expects a *file path* to a service-account JSON
+            // key, not a raw OAuth bearer token. UC credential vending returns a bearer token,
+            // so this mapping would silently fail or expose the token in error messages.
+            // Skip until object-store gains a dedicated pre-fetched-token option for GCS.
+            "gcs.oauth-token" => continue,
+            _ => continue,
+        };
+        out.insert(mapped.to_string(), value.clone());
+    }
+    out
+}
+
+struct ManagedTable {
+    uc: UnityCatalog,
+    catalog: String,
+    schema: String,
+    table: String,
+    loaded: LoadTableResponse,
+}
+
+fn resolve_managed_table(
+    options: &StorageConfig,
+    location: &Url,
+) -> DeltaResult<Option<ManagedTable>> {
+    let (catalog, schema, table) = parse_uc_identity(location).ok_or_else(|| {
+        DeltaTableError::Generic(format!(
+            "`catalog_managed` requires a `uc://catalog.schema.table` identity, got `{location}`"
+        ))
+    })?;
+    let uc = UnityCatalogFactory::new_delta_client(options)?;
+    if let Some(client) = uc.delta_rest_client()
+        && let Ok(Ok(loaded)) =
+            UnityCatalogBuilder::execute_uc_future(client.load_table(&catalog, &schema, &table))
+    {
+        return Ok(Some(ManagedTable {
+            uc,
+            catalog,
+            schema,
+            table,
+            loaded,
+        }));
+    }
+    Ok(None)
+}
+
+fn parse_uc_identity(location: &Url) -> Option<(String, String, String)> {
+    let parts: Vec<&str> = location
+        .as_str()
+        .strip_prefix("uc://")?
+        .splitn(3, '.')
+        .collect();
+    match parts.as_slice() {
+        [cat, schema, table] => Some((cat.to_string(), schema.to_string(), table.to_string())),
+        _ => {
+            tracing::warn!("Invalid UC table path provided: {location:?}");
+            None
+        }
     }
 }
 

@@ -46,6 +46,7 @@ use crate::kernel::{
 use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
+use crate::protocol::checkpoints::catalog_managed_maintenance_error;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 
@@ -188,6 +189,7 @@ pub trait Clock: Debug + Send + Sync {
 
 /// Type of Vacuum operation to perform
 #[derive(Debug, Default, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum VacuumMode {
     /// The `lite` mode will only remove files which are referenced in the `_delta_log` associated
     /// with `remove` action
@@ -575,6 +577,10 @@ impl std::future::IntoFuture for VacuumBuilder {
                     DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot)),
                     Default::default(),
                 ));
+            }
+
+            if this.log_store.is_catalog_managed() {
+                return Err(catalog_managed_maintenance_error("VACUUM"));
             }
 
             // Both vacuum commits and the deletes between them share one write scope.

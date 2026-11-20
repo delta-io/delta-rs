@@ -560,7 +560,7 @@ async fn column_mapping_cdf_write_is_kernel_readable() -> TestResult {
         StructField::nullable("id", KernelDataType::INTEGER),
         StructField::nullable("value", KernelDataType::STRING),
     ])?);
-    let _ = create_table(table_url.as_str(), schema, "delta-rs-test/1.0")
+    let _ = create_table(table_url.as_str(), schema, "delta-rs-test/1.0", true)
         .with_table_properties([
             ("delta.columnMapping.mode", "name"),
             ("delta.enableChangeDataFeed", "true"),
@@ -656,7 +656,7 @@ async fn create_kernel_cm_table(properties: &[(&str, &str)]) -> TestResult<(Temp
         StructField::nullable("id", KernelDataType::INTEGER),
         StructField::nullable("value", KernelDataType::STRING),
     ])?);
-    let _ = create_table(url.as_str(), schema, "delta-rs-test/1.0")
+    let _ = create_table(url.as_str(), schema, "delta-rs-test/1.0", true)
         .with_table_properties(properties.iter().copied())
         .build(&engine, Box::new(FileSystemCommitter::new()))?
         .commit(&engine)?;

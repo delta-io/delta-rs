@@ -11,6 +11,7 @@
 //! let df = ctx.read_table(provider).await?;
 
 use crate::DeltaTableError;
+use crate::datafile::ReaderProperties;
 use crate::delta_datafusion::{
     DataFusionMixins, DeltaSessionExt, extract_partition_only_predicate,
 };
@@ -26,7 +27,6 @@ use chrono::{DateTime, Utc};
 use datafusion::catalog::Session;
 use datafusion::common::DFSchema;
 use datafusion::common::ScalarValue;
-use datafusion::config::TableParquetOptions;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
@@ -40,6 +40,7 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion_datasource::PartitionedFile;
 use delta_kernel::table_features::ColumnMappingMode;
+use object_store::path::Path;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -507,8 +508,9 @@ impl CdfLoadBuilder {
 
                 let mut new_part_values = spec_partition_values.clone();
                 new_part_values.extend(partition_values);
-                let mut part_file = PartitionedFile::new(action.path(), action.size()? as u64)
-                    .with_partition_values(new_part_values.clone());
+                let mut part_file =
+                    partitioned_file(Path::parse(action.path())?, action.size()? as u64)
+                        .with_partition_values(new_part_values.clone());
 
                 if let Some(access_plan) = create_file_scan_plan(
                     Arc::clone(&self.log_store.engine()),
@@ -607,10 +609,8 @@ impl CdfLoadBuilder {
         let remove_table_schema = TableSchema::builder(Arc::clone(&add_remove_file_schema))
             .with_table_partition_cols(add_remove_partition_fields)
             .build();
-        let parquet_options = TableParquetOptions {
-            global: session.config().options().execution.parquet.clone(),
-            ..Default::default()
-        };
+        let parquet_options = ReaderProperties::default().to_table_parquet_options(session);
+        let metadata_size_hint = parquet_options.global.metadata_size_hint;
 
         let mut cdc_source = ParquetSource::new(cdc_table_schema)
             .with_table_parquet_options(parquet_options.clone())
@@ -621,6 +621,11 @@ impl CdfLoadBuilder {
         let mut remove_source = ParquetSource::new(remove_table_schema)
             .with_table_parquet_options(parquet_options)
             .with_parquet_file_reader_factory(self.parquet_metadata_cache.clone());
+        if let Some(hint) = metadata_size_hint {
+            cdc_source = cdc_source.with_metadata_size_hint(hint);
+            add_source = add_source.with_metadata_size_hint(hint);
+            remove_source = remove_source.with_metadata_size_hint(hint);
+        }
 
         // Set up the partition to physical file mapping, this is a mostly unmodified version of what is done in load
         let engine = self.log_store.engine();
@@ -836,6 +841,52 @@ pub(crate) mod tests {
         let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri).await?;
         Ok((temp_dir, table))
+    }
+
+    #[tokio::test]
+    async fn test_load_int96_timestamps_outside_nanosecond_range() -> TestResult {
+        let temp_dir = tempfile::tempdir()?;
+        fs_extra::dir::copy(
+            "../test/tests/data/table_with_edge_timestamps",
+            temp_dir.path(),
+            &Default::default(),
+        )?;
+        let table_path = temp_dir.path().join("table_with_edge_timestamps");
+        std::fs::remove_file(table_path.join("_delta_log/00000000000000000000.crc"))?;
+        let log_path = table_path.join("_delta_log/00000000000000000000.json");
+        let log = std::fs::read_to_string(&log_path)?;
+        let updated_log = log
+            .replace("\"minWriterVersion\":2", "\"minWriterVersion\":4")
+            .replace(
+                "\"configuration\":{}",
+                "\"configuration\":{\"delta.enableChangeDataFeed\":\"true\"}",
+            );
+        assert_ne!(log, updated_log);
+        std::fs::write(log_path, updated_log)?;
+
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+        let ctx = SessionContext::new();
+        let provider = DeltaCdfTableProvider::try_new(table.scan_cdf().with_starting_version(0))?;
+        ctx.register_table("cdf", Arc::new(provider))?;
+        let batches = ctx
+            .sql("SELECT \"BIG_DATE\", \"SOME_VALUE\", _change_type FROM cdf")
+            .await?
+            .collect()
+            .await?;
+
+        assert_batches_sorted_eq! {
+            [
+                "+----------------------+------------+--------------+",
+                "| BIG_DATE             | SOME_VALUE | _change_type |",
+                "+----------------------+------------+--------------+",
+                "| 9999-12-30T00:00:00Z | 2          | insert       |",
+                "| 9999-12-31T00:00:00Z | 1          | insert       |",
+                "+----------------------+------------+--------------+",
+            ],
+            &batches
+        }
+        Ok(())
     }
 
     #[tokio::test]
@@ -1619,6 +1670,345 @@ pub(crate) mod tests {
             .filter(|action| matches!(action, &&Action::Cdc(_)))
             .collect_vec();
         assert!(cdc_actions.is_empty());
+        Ok(())
+    }
+
+    /// The fixture's only data file has three row groups of 100 rows each. Version 2 deletes
+    /// rows 5, 150 and 299 with a deletion vector and version 3 deletes rows 99, 100 and 200,
+    /// so every row group and both edges of each row group boundary are covered. The expected
+    /// rows match Spark's `table_changes` for the same versions.
+    #[tokio::test]
+    async fn test_cdf_with_dv_on_multi_row_group_file() -> TestResult {
+        let ctx = SessionContext::new();
+        let table_path = Path::new("../test/tests/data/cdf-table-dv-multi-row-group");
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+        let builder = table.scan_cdf().with_starting_version(2);
+        ctx.register_table("cdf", Arc::new(DeltaCdfTableProvider::try_new(builder)?))?;
+
+        let batches = ctx
+            .sql("SELECT id, _change_type, _commit_version FROM cdf")
+            .await?
+            .collect()
+            .await?;
+
+        assert_batches_sorted_eq! {[
+            "+-----+--------------+-----------------+",
+            "| id  | _change_type | _commit_version |",
+            "+-----+--------------+-----------------+",
+            "| 100 | delete       | 3               |",
+            "| 150 | delete       | 2               |",
+            "| 200 | delete       | 3               |",
+            "| 299 | delete       | 2               |",
+            "| 5   | delete       | 2               |",
+            "| 99  | delete       | 3               |",
+            "+-----+--------------+-----------------+",
+        ], &batches }
+        Ok(())
+    }
+
+    /// Regression test for <https://github.com/delta-io/delta-rs/issues/4864>:
+    /// the CDF scan must apply the DataFusion session's
+    /// `datafusion.execution.parquet.metadata_size_hint` to its `ParquetSource`s so
+    /// the parquet reader prefetches the footer with a single hint-sized range read
+    /// instead of first probing the footer length with a small (8-byte) request.
+    #[tokio::test]
+    async fn test_cdf_applies_parquet_metadata_size_hint() -> TestResult {
+        use crate::delta_datafusion::DeltaSessionContext;
+        use crate::test_utils::object_store::{
+            RecordedObjectStoreOperation, RecordedPathKind, drain_recorded_object_store_operations,
+            recording_log_store,
+        };
+        use futures::TryStreamExt as _;
+
+        const METADATA_SIZE_HINT: u64 = 4321;
+
+        let delta_schema = TestSchemas::simple();
+        let table: DeltaTable = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(delta_schema.fields().cloned())
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await?;
+
+        let schema: Arc<Schema> = Arc::new(delta_schema.try_into_arrow()?);
+        let num_rows = 50_000i32;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from_iter_values(
+                    (0..num_rows).map(|i| i.to_string()),
+                )),
+                Arc::new(Int32Array::from_iter_values(0..num_rows)),
+                Arc::new(StringArray::from_iter_values((0..num_rows).map(|_| "yes"))),
+            ],
+        )?;
+        let table = table.write(vec![batch]).await?;
+        let table = table
+            .write(vec![RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(StringArray::from_iter_values(
+                        (0..num_rows).map(|i| i.to_string()),
+                    )),
+                    Arc::new(Int32Array::from_iter_values(0..num_rows)),
+                    Arc::new(StringArray::from_iter_values((0..num_rows).map(|_| "no"))),
+                ],
+            )?])
+            .with_save_mode(crate::protocol::SaveMode::Overwrite)
+            .await?;
+
+        let (log_store, mut operations) = recording_log_store(table.log_store());
+        let table = DeltaTable {
+            state: table.state,
+            log_store: log_store.clone(),
+        };
+
+        let session =
+            DeltaSessionContext::new_with_session_overrides(&std::collections::HashMap::from([(
+                "datafusion.execution.parquet.metadata_size_hint".to_string(),
+                METADATA_SIZE_HINT.to_string(),
+            )]))?
+            .into_inner();
+
+        let cdf_scan = table
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&session.state(), None)
+            .await
+            .expect("Failed to load CDF");
+        let batches = collect(cdf_scan, session.task_ctx())
+            .await
+            .expect("Failed to collect CDF batches");
+        assert!(
+            batches.iter().map(|batch| batch.num_rows()).sum::<usize>() > 0,
+            "expected CDF rows"
+        );
+
+        // Sanity: every written parquet file must be larger than the hint, so a hinted
+        // reader issues a bounded prefetch read of exactly `metadata_size_hint` bytes
+        // ending at the end of the file.
+        let parquet_sizes: Vec<u64> = log_store
+            .object_store()
+            .list(None)
+            .try_filter_map(|meta| async move {
+                Ok(meta
+                    .location
+                    .as_ref()
+                    .ends_with(".parquet")
+                    .then_some(meta.size))
+            })
+            .try_collect()
+            .await?;
+        assert!(!parquet_sizes.is_empty(), "expected written parquet files");
+        assert!(
+            parquet_sizes.iter().all(|&size| size > METADATA_SIZE_HINT),
+            "test precondition: parquet files must be larger than the metadata size hint, got {parquet_sizes:?}"
+        );
+        // Sanity: delta-rs's parquet footer cache would need to read the last
+        // `max(footer+8, 16KB)` bytes, so the files must be larger than that to keep the
+        // prefetch-read assertion below unambiguous.
+        const FOOTER_CACHE_MIN_TAIL_BYTES: u64 = 16 * 1024;
+        assert!(
+            parquet_sizes
+                .iter()
+                .all(|&size| size > FOOTER_CACHE_MIN_TAIL_BYTES),
+            "test precondition: parquet files must be larger than the footer cache's \
+             minimum tail read, got {parquet_sizes:?}"
+        );
+
+        let operations = drain_recorded_object_store_operations(&mut operations).await;
+        let has_prefetch_read = operations.iter().any(|op| {
+            let is_prefetch = |range: &std::ops::Range<u64>| {
+                range.end - range.start == METADATA_SIZE_HINT && parquet_sizes.contains(&range.end)
+            };
+            match op {
+                RecordedObjectStoreOperation::GetRange(
+                    RecordedPathKind::Data | RecordedPathKind::Other,
+                    range,
+                ) => is_prefetch(range),
+                RecordedObjectStoreOperation::GetRanges(
+                    RecordedPathKind::Data | RecordedPathKind::Other,
+                    ranges,
+                ) => ranges.iter().any(is_prefetch),
+                _ => false,
+            }
+        });
+        assert!(
+            has_prefetch_read,
+            "CDF scans must propagate datafusion.execution.parquet.metadata_size_hint to the \
+             ParquetSource (https://github.com/delta-io/delta-rs/issues/4864); recorded operations: {operations:?}"
+        );
+
+        Ok(())
+    }
+
+    /// Version 1 deletes ids 2 and 3 of the only file with a deletion vector. Version 2 removes
+    /// that file and version 3 re-adds it, both without change data files, as Spark does for a
+    /// partition DELETE and a RESTORE, so their change rows are the eight live ids.
+    #[tokio::test]
+    async fn test_cdf_unpaired_actions_with_deletion_vector() -> TestResult {
+        use delta_kernel::actions::deletion_vector_writer::{
+            KernelDeletionVector, StreamingDeletionVectorWriter,
+        };
+        use parquet::arrow::ArrowWriter;
+        use serde_json::json;
+
+        let dir = tempfile::tempdir()?;
+        std::fs::create_dir(dir.path().join("_delta_log"))?;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let data_file = std::fs::File::create(dir.path().join("part-0.parquet"))?;
+        let mut writer = ArrowWriter::try_new(data_file, Arc::clone(&schema), None)?;
+        writer.write(&RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from_iter_values(0..10))],
+        )?)?;
+        writer.close()?;
+
+        let dv_path = dir.path().join("dv.bin");
+        let mut dv_file = std::fs::File::create(&dv_path)?;
+        let mut dv_writer = StreamingDeletionVectorWriter::new(&mut dv_file);
+        let mut dv = KernelDeletionVector::new();
+        dv.add_deleted_row_indexes([2, 3]);
+        let written = dv_writer.write_deletion_vector(dv)?;
+        dv_writer.finalize()?;
+
+        let file = json!({
+            "path": "part-0.parquet",
+            "partitionValues": {},
+            "size": std::fs::metadata(dir.path().join("part-0.parquet"))?.len(),
+            "modificationTime": 0,
+            "dataChange": true,
+        });
+        let mut file_with_dv = file.clone();
+        file_with_dv["deletionVector"] = json!({
+            "storageType": "p",
+            "pathOrInlineDv": Url::from_file_path(dv_path).unwrap().as_str(),
+            "offset": written.offset,
+            "sizeInBytes": written.size_in_bytes,
+            "cardinality": 2,
+        });
+        let table_schema = json!({"type": "struct", "fields": [
+            {"name": "id", "type": "integer", "nullable": false, "metadata": {}}
+        ]});
+        let commits = [
+            vec![
+                json!({"protocol": {"minReaderVersion": 3, "minWriterVersion": 7,
+                    "readerFeatures": ["deletionVectors"],
+                    "writerFeatures": ["deletionVectors", "changeDataFeed"]}}),
+                json!({"metaData": {"id": "5f4b3c8e-2d1a-4e6f-9b7c-0a1b2c3d4e5f",
+                    "format": {"provider": "parquet", "options": {}},
+                    "schemaString": table_schema.to_string(), "partitionColumns": [],
+                    "configuration": {"delta.enableChangeDataFeed": "true",
+                        "delta.enableDeletionVectors": "true"}}}),
+                json!({"add": file}),
+            ],
+            vec![json!({"add": file_with_dv}), json!({"remove": file})],
+            vec![json!({"remove": file_with_dv})],
+            vec![json!({"add": file_with_dv})],
+        ];
+        for (version, actions) in commits.iter().enumerate() {
+            let commit_info = json!({"commitInfo": {"timestamp": version}});
+            std::fs::write(
+                dir.path().join(format!("_delta_log/{version:020}.json")),
+                std::iter::once(&commit_info)
+                    .chain(actions)
+                    .map(serde_json::Value::to_string)
+                    .join(
+                        "
+",
+                    ),
+            )?;
+        }
+
+        let table_uri = Url::from_directory_path(dir.path()).unwrap();
+        let builder = DeltaTable::try_from_url(table_uri)
+            .await?
+            .scan_cdf()
+            .with_starting_version(1);
+        let ctx = SessionContext::new();
+        ctx.register_table("cdf", Arc::new(DeltaCdfTableProvider::try_new(builder)?))?;
+        let batches = ctx
+            .sql("SELECT id, _change_type, _commit_version FROM cdf")
+            .await?
+            .collect()
+            .await?;
+
+        assert_batches_sorted_eq! {[
+            "+----+--------------+-----------------+",
+            "| id | _change_type | _commit_version |",
+            "+----+--------------+-----------------+",
+            "| 0  | delete       | 2               |",
+            "| 0  | insert       | 3               |",
+            "| 1  | delete       | 2               |",
+            "| 1  | insert       | 3               |",
+            "| 2  | delete       | 1               |",
+            "| 3  | delete       | 1               |",
+            "| 4  | delete       | 2               |",
+            "| 4  | insert       | 3               |",
+            "| 5  | delete       | 2               |",
+            "| 5  | insert       | 3               |",
+            "| 6  | delete       | 2               |",
+            "| 6  | insert       | 3               |",
+            "| 7  | delete       | 2               |",
+            "| 7  | insert       | 3               |",
+            "| 8  | delete       | 2               |",
+            "| 8  | insert       | 3               |",
+            "| 9  | delete       | 2               |",
+            "| 9  | insert       | 3               |",
+            "+----+--------------+-----------------+",
+        ], &batches }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_cdf_with_escaped_partition_values() -> TestResult {
+        let delta_schema = TestSchemas::simple();
+        let table: DeltaTable = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(delta_schema.fields().cloned())
+            .with_partition_columns(["modified"])
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await?;
+
+        let schema: Arc<Schema> = Arc::new(delta_schema.try_into_arrow()?);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("1"), Some("2"), Some("3")])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+                Arc::new(StringArray::from(vec![
+                    Some("a b"),
+                    Some("a b"),
+                    Some("2024-01-01 12:00:00"),
+                ])),
+            ],
+        )?;
+        let table = table.write(vec![batch]).await?;
+        let (table, _) = table.delete().with_predicate("value = 1").await?;
+
+        let ctx = SessionContext::new();
+        let cdf_scan = table
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&ctx.state(), None)
+            .await?;
+        let mut batches = collect(cdf_scan, ctx.task_ctx()).await?;
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();
+
+        assert_batches_sorted_eq! {[
+            "+----+-------+---------------------+--------------+-----------------+",
+            "| id | value | modified            | _change_type | _commit_version |",
+            "+----+-------+---------------------+--------------+-----------------+",
+            "| 1  | 1     | a b                 | delete       | 2               |",
+            "| 1  | 1     | a b                 | insert       | 1               |",
+            "| 2  | 2     | a b                 | insert       | 1               |",
+            "| 3  | 3     | 2024-01-01 12:00:00 | insert       | 1               |",
+            "+----+-------+---------------------+--------------+-----------------+",
+        ], &batches }
         Ok(())
     }
 

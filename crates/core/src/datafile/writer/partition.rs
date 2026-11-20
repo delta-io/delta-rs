@@ -1,35 +1,27 @@
 //! File tier: [`PartitionWriter`] writes the data files of one partition. It starts a new
 //! file when the current one reaches the target file size.
 
-use std::num::NonZeroU64;
 use std::sync::OnceLock;
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
 use delta_kernel::expressions::Scalar;
-use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use object_store::path::Path;
-use parquet::basic::Compression;
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::WriterProperties;
 use tokio::task::JoinSet;
 use tracing::*;
 
-use crate::datafile::DataFileWriter;
 use crate::datafile::writer::WriteError;
 use crate::datafile::writer::file::LazyArrowWriter;
-use crate::datafile::writer::parallel::ArrowWriterOptions;
-
 use crate::datafile::writer::upload_budget::UploadBudget;
+use crate::datafile::{DEFAULT_WRITE_BATCH_SIZE, DataFileWriter, DeltaWriterProperties};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
-use crate::parquet_utils::default_writer_properties;
 use crate::writer::stats::create_add;
 use crate::writer::utils::next_data_path;
 
-pub(super) const DEFAULT_WRITE_BATCH_SIZE: usize = 8192;
 const DEFAULT_MAX_CONCURRENCY_TASKS: usize = 10;
 
 fn get_max_concurrency_tasks() -> usize {
@@ -64,13 +56,8 @@ pub struct PartitionWriterConfig {
     prefix: Path,
     /// Values for all partition columns
     partition_values: IndexMap<String, Scalar>,
-    /// Properties passed to underlying parquet writer
-    pub(super) writer_properties: WriterProperties,
-    /// Options passed to the underlying arrow writer
-    pub(super) arrow_options: ArrowWriterOptions,
-    /// Size above which we will write a buffered parquet file to disk.
-    /// If None, the writer will not create a new file until the writer is closed.
-    target_file_size: Option<NonZeroU64>,
+    /// Properties of the delta writer (parquet, arrow, etc)
+    pub(super) writer_properties: DeltaWriterProperties,
     /// Row chunks passed to parquet writer. This and the internal parquet writer settings
     /// determine how fine granular we can track / control the size of resulting files.
     write_batch_size: usize,
@@ -87,14 +74,10 @@ pub struct PartitionWriterConfig {
 
 impl PartitionWriterConfig {
     /// Create a new instance of [PartitionWriterConfig]
-    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         file_schema: ArrowSchemaRef,
         partition_values: IndexMap<String, Scalar>,
-        writer_properties: Option<WriterProperties>,
-        arrow_options: Option<ArrowWriterOptions>,
-        target_file_size: Option<NonZeroU64>,
-        write_batch_size: Option<usize>,
+        writer_properties: DeltaWriterProperties,
         max_concurrency_tasks: Option<usize>,
         prefix_override: Option<Path>,
     ) -> DeltaResult<Self> {
@@ -102,27 +85,36 @@ impl PartitionWriterConfig {
             Some(prefix) => prefix,
             None => Path::parse(partition_values.hive_partition_path())?,
         };
-        let writer_properties =
-            writer_properties.unwrap_or_else(|| default_writer_properties(Compression::SNAPPY));
-        if write_batch_size == Some(0) {
+        if writer_properties.write_batch_size() == Some(0) {
             return Err(DeltaTableError::generic(
                 "write_batch_size must be greater than 0",
             ));
         }
-        let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
+        let write_batch_size = writer_properties
+            .write_batch_size()
+            .unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
 
         Ok(Self {
             file_schema,
             prefix,
             partition_values,
-            writer_properties,
-            arrow_options: arrow_options.unwrap_or_default(),
-            target_file_size,
             write_batch_size,
             max_concurrency_tasks: max_concurrency_tasks.unwrap_or_else(get_max_concurrency_tasks),
             roll_on_row_group_boundary: roll_on_row_group_boundary_default(),
-            upload_budget: UploadBudget::for_write(target_file_size),
+            upload_budget: UploadBudget::for_write(writer_properties.target_file_size()),
+            writer_properties,
         })
+    }
+
+    /// Write below `prefix` under the table root, ahead of the partition path, so the
+    /// returned paths stay table-relative (e.g. `_change_data`). `None` leaves the
+    /// prefix as resolved by [`Self::try_new`]. Additive, unlike the other `with_`
+    /// setters: each call goes in front of the prefix built so far, so two calls nest.
+    pub fn with_path_prefix(mut self, prefix: Option<Path>) -> Self {
+        if let Some(prefix) = prefix {
+            self.prefix = prefix.parts().chain(self.prefix.parts()).collect();
+        }
+        self
     }
 
     /// Draw on `budget` instead of the fresh one [`Self::try_new`] makes, so
@@ -162,10 +154,6 @@ pub struct PartitionWriter {
     pub(super) config: PartitionWriterConfig,
     writer: LazyArrowWriter,
     part_counter: usize,
-    /// Num index cols to collect stats for
-    num_indexed_cols: DataSkippingNumIndexedCols,
-    /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
-    stats_columns: Option<Vec<String>>,
     in_flight_writers: JoinSet<DeltaResult<(Path, usize, ParquetMetaData)>>,
     /// Approximate encoded size of files already rolled to background upload;
     /// keeps `buffered_size` monotonic across rolls.
@@ -177,11 +165,14 @@ impl PartitionWriter {
     pub fn try_with_config(
         object_store: ObjectStoreRef,
         config: PartitionWriterConfig,
-        num_indexed_cols: DataSkippingNumIndexedCols,
-        stats_columns: Option<Vec<String>>,
     ) -> DeltaResult<Self> {
         let writer_id = uuid::Uuid::new_v4();
-        let first_path = next_data_path(&config.prefix, 0, &writer_id, &config.writer_properties);
+        let first_path = next_data_path(
+            &config.prefix,
+            0,
+            &writer_id,
+            config.writer_properties.parquet_properties_or_default(),
+        );
         let writer = Self::create_writer(object_store.clone(), first_path.clone(), &config);
 
         Ok(Self {
@@ -190,8 +181,6 @@ impl PartitionWriter {
             config,
             writer,
             part_counter: 0,
-            num_indexed_cols,
-            stats_columns,
             in_flight_writers: JoinSet::new(),
             rolled_bytes: 0,
         })
@@ -219,7 +208,9 @@ impl PartitionWriter {
             &self.config.prefix,
             self.part_counter,
             &self.writer_id,
-            &self.config.writer_properties,
+            self.config
+                .writer_properties
+                .parquet_properties_or_default(),
         )
     }
 
@@ -259,15 +250,14 @@ impl PartitionWriter {
         if !self.config.roll_on_row_group_boundary {
             return None;
         }
-        if self
+        let writer_properties = self
             .config
             .writer_properties
-            .max_row_group_bytes()
-            .is_some()
-        {
+            .parquet_properties_or_default();
+        if writer_properties.max_row_group_bytes().is_some() {
             return None;
         }
-        let max_rows = self.config.writer_properties.max_row_group_row_count()?;
+        let max_rows = writer_properties.max_row_group_row_count()?;
         Some(max_rows - (self.writer.in_progress_rows() % max_rows))
     }
 
@@ -291,7 +281,7 @@ impl PartitionWriter {
             return Ok(());
         }
 
-        let Some(target_file_size) = self.config.target_file_size else {
+        let Some(target_file_size) = self.config.writer_properties.target_file_size() else {
             // No size target means no file rolling, but still slice at row-group
             // boundaries: the async writer only uploads as row groups complete
             // within a `write_batch` call, so one huge call would buffer every
@@ -299,6 +289,7 @@ impl PartitionWriter {
             let step = self
                 .config
                 .writer_properties
+                .parquet_properties_or_default()
                 .max_row_group_row_count()
                 .unwrap_or(self.config.write_batch_size)
                 .max(1);
@@ -388,8 +379,8 @@ impl PartitionWriter {
                     path.to_string(),
                     file_size as i64,
                     &metadata,
-                    self.num_indexed_cols,
-                    &self.stats_columns,
+                    self.config.writer_properties.stats().num_indexed_cols,
+                    &self.config.writer_properties.stats().stats_columns,
                 )
                 .map_err(|err| WriteError::CreateAdd {
                     source: Box::new(err),
@@ -433,16 +424,22 @@ impl DataFileWriter for PartitionWriter {
 mod tests {
     use super::*;
     use crate::DeltaTableBuilder;
-    use crate::datafile::writer::test_utils::assert_default_created_by;
+    use crate::datafile::writer::test_utils::{assert_default_created_by, test_props};
     use crate::logstore::tests::flatten_list_stream as list;
-    use crate::table::config::DEFAULT_NUM_INDEX_COLS;
     use crate::writer::test_utils::get_record_batch;
-    use arrow::array::{Int32Array, StringArray};
+    use arrow::array::{Array, ArrayRef, Int32Array, Int64Array, StringArray, StringViewArray};
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+    use bytes::Bytes;
     use object_store::ObjectStoreExt as _;
+    use parquet::basic::Compression;
+    use parquet::file::metadata::RowGroupMetaData;
+    use parquet::file::properties::WriterProperties;
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use parquet::schema::types::ColumnPath;
+    use std::num::NonZeroU64;
     use std::sync::Arc;
+
+    use crate::datafile::writer::ArrowWriterOptions;
 
     fn get_partition_writer(
         object_store: ObjectStoreRef,
@@ -476,10 +473,7 @@ mod tests {
         let mut config = PartitionWriterConfig::try_new(
             batch.schema(),
             IndexMap::new(),
-            writer_properties,
-            None,
-            target_file_size,
-            write_batch_size,
+            test_props(writer_properties, None, target_file_size, write_batch_size),
             None,
             prefix,
         )
@@ -487,13 +481,7 @@ mod tests {
         if let Some(budget) = budget {
             config = config.with_upload_budget(budget.clone());
         }
-        PartitionWriter::try_with_config(
-            object_store,
-            config,
-            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
-            None,
-        )
-        .unwrap()
+        PartitionWriter::try_with_config(object_store, config).unwrap()
     }
 
     #[tokio::test]
@@ -527,21 +515,12 @@ mod tests {
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
             IndexMap::new(),
-            Some(props),
-            None,
-            None,
-            None,
+            test_props(Some(props), None, None, None),
             None,
             None,
         )
         .unwrap();
-        let mut writer = PartitionWriter::try_with_config(
-            store,
-            config,
-            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
-            None,
-        )
-        .unwrap();
+        let mut writer = PartitionWriter::try_with_config(store, config).unwrap();
 
         let result = writer.write(&batch).await;
         assert!(result.is_err(), "injected multipart failure must surface");
@@ -560,20 +539,16 @@ mod tests {
         let config = PartitionWriterConfig::try_new(
             schema,
             IndexMap::new(),
-            None,
-            None,
-            None,
-            None,
+            DeltaWriterProperties::default(),
             None,
             None,
         )
         .unwrap();
 
-        assert_default_created_by(&config.writer_properties);
+        let writer_properties = config.writer_properties.parquet_properties_or_default();
+        assert_default_created_by(writer_properties);
         assert_eq!(
-            config
-                .writer_properties
-                .compression(&ColumnPath::from("id")),
+            writer_properties.compression(&ColumnPath::from("id")),
             Compression::SNAPPY
         );
     }
@@ -622,21 +597,17 @@ mod tests {
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
             IndexMap::new(),
-            Some(properties),
-            Some(ArrowWriterOptions::new().with_enable_parallel_encoding(parallel)),
+            test_props(
+                Some(properties),
+                Some(ArrowWriterOptions::new().with_enable_parallel_encoding(parallel)),
+                None,
+                Some(2),
+            ),
             None,
-            Some(2),
-            None,
-            None,
-        )
-        .unwrap();
-        let mut writer = PartitionWriter::try_with_config(
-            object_store.clone(),
-            config,
-            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
             None,
         )
         .unwrap();
+        let mut writer = PartitionWriter::try_with_config(object_store.clone(), config).unwrap();
         writer.write(&batch).await.unwrap();
         let adds = writer.close().await.unwrap();
         assert_eq!(adds.len(), 1);
@@ -653,6 +624,68 @@ mod tests {
         let read: Vec<RecordBatch> = reader.build().unwrap().map(Result::unwrap).collect();
         let read = arrow::compute::concat_batches(&batch.schema(), &read).unwrap();
         assert_eq!(read, batch);
+    }
+
+    /// The one call site of [`DeltaWriterProperties::resolve`]: a layer sees the file's
+    /// table-relative path, prefix included, and its schema, and the properties it
+    /// builds are what the file is written with.
+    #[tokio::test]
+    async fn test_layer_resolves_per_file_at_open() {
+        use crate::datafile::{FileContext, WriterPropertiesLayer};
+        use parquet::file::properties::WriterPropertiesBuilder;
+
+        /// Stamps `created_by` with what the layer was shown.
+        #[derive(Debug)]
+        struct Stamp;
+
+        #[async_trait::async_trait]
+        impl WriterPropertiesLayer for Stamp {
+            async fn apply(
+                &self,
+                builder: WriterPropertiesBuilder,
+                file: FileContext<'_>,
+            ) -> DeltaResult<WriterPropertiesBuilder> {
+                Ok(builder.set_created_by(format!(
+                    "stamp {} {}",
+                    file.path,
+                    file.schema.fields().len()
+                )))
+            }
+        }
+
+        let batch = get_record_batch(None, false);
+        let object_store: ObjectStoreRef = Arc::new(object_store::memory::InMemory::new());
+        let config = PartitionWriterConfig::try_new(
+            batch.schema(),
+            IndexMap::new(),
+            test_props(None, None, None, None).with_layer(Stamp),
+            None,
+            None,
+        )
+        .unwrap()
+        .with_path_prefix(Some(Path::from("_change_data")));
+        let mut writer = PartitionWriter::try_with_config(object_store.clone(), config).unwrap();
+        writer.write(&batch).await.unwrap();
+        let adds = writer.close().await.unwrap();
+        assert_eq!(adds.len(), 1);
+        assert!(
+            adds[0].path.starts_with("_change_data/"),
+            "{}",
+            adds[0].path
+        );
+
+        let bytes = object_store
+            .get(&Path::from(adds[0].path.clone()))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let reader = SerializedFileReader::new(bytes).unwrap();
+        assert_eq!(
+            reader.metadata().file_metadata().created_by(),
+            Some(format!("stamp {} {}", adds[0].path, batch.schema().fields().len()).as_str())
+        );
     }
 
     /// A batch may not straddle the row-group limit: the rows that fit complete the open group
@@ -690,21 +723,17 @@ mod tests {
         let config = PartitionWriterConfig::try_new(
             schema,
             IndexMap::new(),
-            Some(properties),
-            Some(ArrowWriterOptions::new().with_enable_parallel_encoding(parallel)),
-            target_file_size.and_then(NonZeroU64::new),
-            Some(8),
+            test_props(
+                Some(properties),
+                Some(ArrowWriterOptions::new().with_enable_parallel_encoding(parallel)),
+                target_file_size.and_then(NonZeroU64::new),
+                Some(8),
+            ),
             None,
             None,
         )
         .unwrap();
-        let mut writer = PartitionWriter::try_with_config(
-            object_store.clone(),
-            config,
-            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
-            None,
-        )
-        .unwrap();
+        let mut writer = PartitionWriter::try_with_config(object_store.clone(), config).unwrap();
         writer.write(&batch).await.unwrap();
         writer.write(&batch).await.unwrap();
         let adds = writer.close().await.unwrap();
@@ -725,6 +754,371 @@ mod tests {
             .map(|rg| rg.num_rows())
             .collect();
         assert_eq!(group_sizes, [3, 3, 3, 3, 3, 3, 2]);
+    }
+
+    /// A batch of one non-null column, `value`.
+    fn one_column_batch(values: impl Array + 'static) -> RecordBatch {
+        RecordBatch::try_from_iter([("value", Arc::new(values) as ArrayRef)]).unwrap()
+    }
+
+    /// Write `batch` with `properties`, and return the one file that gives.
+    async fn write_one_file(
+        batch: &RecordBatch,
+        properties: WriterProperties,
+        parallel: bool,
+        write_batch_size: Option<usize>,
+    ) -> Bytes {
+        let object_store: ObjectStoreRef = Arc::new(object_store::memory::InMemory::new());
+        let config = PartitionWriterConfig::try_new(
+            batch.schema(),
+            IndexMap::new(),
+            test_props(
+                Some(properties),
+                Some(ArrowWriterOptions::new().with_enable_parallel_encoding(parallel)),
+                None,
+                write_batch_size,
+            ),
+            None,
+            None,
+        )
+        .unwrap();
+        let mut writer = PartitionWriter::try_with_config(object_store.clone(), config).unwrap();
+        writer.write(batch).await.unwrap();
+        let adds = writer.close().await.unwrap();
+        assert_eq!(adds.len(), 1);
+
+        object_store
+            .get(&Path::from(adds[0].path.clone()))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+    }
+
+    /// The row groups of a parquet file.
+    fn row_groups(file: Bytes) -> Vec<RowGroupMetaData> {
+        let reader = SerializedFileReader::new(file).unwrap();
+        reader.metadata().row_groups().to_vec()
+    }
+
+    /// With both bounds set, neither is exceeded. The byte bound is the binding one here
+    /// (8 KiB is far under 100_000 rows of int32), so groups are checked in bytes too;
+    /// `test_row_group_bytes_smaller_row_bound_wins` covers the row bound binding instead.
+    /// Only the parallel writer is covered — arrow-rs's serial writer splits a batch on
+    /// bytes only once a row group already holds rows (apache/arrow-rs #1213, #9357).
+    #[tokio::test]
+    async fn test_row_groups_respect_both_bounds() {
+        let batch = one_column_batch(Int32Array::from_iter_values(0..10_000));
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_max_row_group_row_count(Some(100_000))
+            .set_max_row_group_bytes(Some(8 * 1024))
+            .build();
+        let groups = row_groups(write_one_file(&batch, properties, true, None).await);
+
+        let group_sizes: Vec<i64> = groups.iter().map(|group| group.num_rows()).collect();
+        assert!(
+            group_sizes.iter().all(|&n| n < 8192),
+            "byte bound (8 KiB) should bind well below the 100_000-row bound: {group_sizes:?}"
+        );
+        assert!(
+            group_sizes.len() > 1,
+            "expected multiple row groups, got {group_sizes:?}"
+        );
+        assert_eq!(group_sizes.iter().sum::<i64>(), 10_000);
+        for group in &groups {
+            assert!(
+                group.total_byte_size() <= 2 * 8192,
+                "row group of {} uncompressed bytes for an 8 KiB bound",
+                group.total_byte_size()
+            );
+        }
+    }
+
+    /// Byte-bounded row groups round-trip their data on both encodings, and the
+    /// rows are neither dropped nor duplicated.
+    #[rstest::rstest]
+    #[case::parallel(true)]
+    #[case::serial(false)]
+    #[tokio::test]
+    async fn test_row_group_bytes_roundtrip(#[case] parallel: bool) {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let rows = 50_000;
+        let batch = RecordBatch::try_from_iter([
+            (
+                "id",
+                Arc::new(Int64Array::from_iter_values(0..rows)) as ArrayRef,
+            ),
+            (
+                "name",
+                Arc::new(StringArray::from_iter_values(
+                    (0..rows).map(|i| format!("name-{i:06}")),
+                )) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(4 * 1024))
+            .build();
+        let file = write_one_file(&batch, properties, parallel, Some(1024)).await;
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let groups = reader.metadata().row_groups();
+        assert!(groups.len() > 1, "expected byte-bounded groups");
+        assert_eq!(
+            groups.iter().map(|group| group.num_rows()).sum::<i64>(),
+            rows
+        );
+        let read: Vec<RecordBatch> = reader.build().unwrap().map(Result::unwrap).collect();
+        let read = arrow::compute::concat_batches(&batch.schema(), &read).unwrap();
+        assert_eq!(read, batch);
+    }
+
+    /// When the row-count bound is the smaller of the two it still decides the
+    /// row-group size, even though the byte bound is huge.
+    #[rstest::rstest]
+    #[case::parallel(true)]
+    #[case::serial(false)]
+    #[tokio::test]
+    async fn test_row_group_bytes_smaller_row_bound_wins(#[case] parallel: bool) {
+        let batch = one_column_batch(Int32Array::from_iter_values(0..5_000));
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_max_row_group_row_count(Some(100))
+            .set_max_row_group_bytes(Some(1024 * 1024))
+            .build();
+        let groups = row_groups(write_one_file(&batch, properties, parallel, None).await);
+
+        let group_sizes: Vec<i64> = groups.iter().map(|group| group.num_rows()).collect();
+        assert!(group_sizes.len() > 1);
+        assert!(
+            group_sizes.iter().all(|&n| n <= 100),
+            "row bound exceeded: {group_sizes:?}"
+        );
+        assert_eq!(group_sizes.iter().sum::<i64>(), 5_000);
+    }
+
+    /// A byte bound far below one write batch must terminate and keep every row,
+    /// closing a row group per handful of rows. Only the parallel writer is covered:
+    /// arrow-rs's serial writer cannot honour a bound below `write_batch_size`, since
+    /// it splits a batch on bytes only once a group holds rows (apache/arrow-rs #1213).
+    #[tokio::test]
+    async fn test_row_group_bytes_tiny_bound() {
+        let batch = one_column_batch(Int32Array::from_iter_values(0..2_000));
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(512))
+            .build();
+        let groups = row_groups(write_one_file(&batch, properties, true, Some(1024)).await);
+
+        assert!(
+            groups.len() > 1,
+            "expected many byte-bounded groups, got {}",
+            groups.len()
+        );
+        assert_eq!(
+            groups.iter().map(|group| group.num_rows()).sum::<i64>(),
+            2_000
+        );
+        // The bound is far below one `write_batch_size` slice, so groups have to be
+        // closed mid-slice: the cap is derived, not the caller's slice size.
+        for group in &groups {
+            assert!(
+                group.total_byte_size() <= 1024,
+                "row group of {} uncompressed bytes for a 512-byte bound",
+                group.total_byte_size()
+            );
+        }
+    }
+
+    /// The bound is on the estimated encoded size, as in arrow-rs: a finished page counts at
+    /// its compressed size. With data that compresses well, both writers fill a row group to
+    /// about the bound in compressed bytes, which is far over the bound in uncompressed bytes.
+    #[rstest::rstest]
+    #[case::parallel(true)]
+    #[case::serial(false)]
+    #[tokio::test]
+    async fn test_row_group_bytes_measures_encoded_size(#[case] parallel: bool) {
+        let bound: i64 = 256 * 1024;
+        let suffix = "abcdefghij".repeat(10);
+        let batch = one_column_batch(StringArray::from_iter_values(
+            (0..100_000).map(|i| format!("{i:08}-{suffix}")),
+        ));
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            // Plain pages, and small ones, so that most of a row group is in
+            // finished pages when its size is read.
+            .set_dictionary_enabled(false)
+            .set_data_page_size_limit(16 * 1024)
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(bound as usize))
+            .build();
+        let groups = row_groups(write_one_file(&batch, properties, parallel, Some(1024)).await);
+
+        assert!(
+            groups.len() > 2,
+            "expected several groups, got {}",
+            groups.len()
+        );
+        // The last row group holds the remainder.
+        for group in &groups[..groups.len() - 1] {
+            let compressed = group.compressed_size();
+            assert!(
+                (bound / 2..=2 * bound).contains(&compressed),
+                "row group of {compressed} compressed bytes for a {bound} byte bound"
+            );
+            let uncompressed = group.total_byte_size();
+            assert!(
+                uncompressed > 2 * bound,
+                "row group of {uncompressed} uncompressed bytes: the data did not compress, \
+                 or the bound was held against the uncompressed size"
+            );
+        }
+    }
+
+    /// An upstream gap, kept as documentation: with both a row-count bound and a byte bound
+    /// the serial writer still ignores the byte bound, because a batch that opens a row group
+    /// is written whole (`if in_progress.buffered_rows > 0`), so one row group holds every row.
+    /// The parallel writer honours both bounds; `test_row_groups_respect_both_bounds` pins it.
+    #[tokio::test]
+    async fn test_row_group_bytes_serial_ignores_bytes_under_row_bound() {
+        let batch = one_column_batch(Int32Array::from_iter_values(0..10_000));
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_max_row_group_row_count(Some(100_000))
+            .set_max_row_group_bytes(Some(8 * 1024))
+            .build();
+        let groups = row_groups(write_one_file(&batch, properties, false, None).await);
+
+        let group_sizes: Vec<i64> = groups.iter().map(|group| group.num_rows()).collect();
+        assert_eq!(group_sizes, [10_000]);
+    }
+
+    /// A byte bound has to bound a file's *first* row group too. It has no row group before it
+    /// to go by, so the writer measures it.
+    #[tokio::test]
+    async fn test_row_group_bytes_bounds_first_group() {
+        let bound = 256 * 1024;
+        let batch = one_column_batch(Int32Array::from_iter_values(0..100_000));
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(bound))
+            .build();
+        let groups = row_groups(write_one_file(&batch, properties, true, Some(8192)).await);
+
+        let first = groups[0].total_byte_size() as usize;
+        assert!(
+            (bound / 2..=2 * bound).contains(&first),
+            "first row group of {first} bytes for a {bound}-byte bound"
+        );
+    }
+
+    /// Groups after the first track the *measured* group size. For low-cardinality strings
+    /// the encoded page is far smaller than the in-memory estimate (dictionary plus RLE),
+    /// so seeding every group from that estimate would close them ~70x early.
+    #[tokio::test]
+    async fn test_row_group_bytes_tracks_measured_size() {
+        let bound = 8 * 1024;
+        let batch = one_column_batch(StringArray::from_iter_values(
+            (0..200_000).map(|i| format!("{:02}", i % 64)),
+        ));
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(bound))
+            .build();
+        let groups = row_groups(write_one_file(&batch, properties, true, Some(8192)).await);
+
+        assert!(
+            groups.len() > 2,
+            "expected several groups, got {}",
+            groups.len()
+        );
+        // The largest group is a bound-limited one; the last is the remainder.
+        let biggest = groups
+            .iter()
+            .map(|group| group.total_byte_size() as usize)
+            .max()
+            .unwrap();
+        assert!(
+            (bound / 2..=2 * bound).contains(&biggest),
+            "largest row group of {biggest} bytes for a {bound}-byte bound"
+        );
+    }
+
+    /// A bound below one row's worth of data still has to make progress: one row per group,
+    /// rather than a zero-length slice looping forever.
+    #[tokio::test]
+    async fn test_row_group_bytes_bound_below_one_row() {
+        let batch = one_column_batch(Int32Array::from_iter_values(0..300));
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(1))
+            .build();
+        let groups = row_groups(write_one_file(&batch, properties, true, Some(8192)).await);
+
+        let group_sizes: Vec<i64> = groups.iter().map(|group| group.num_rows()).collect();
+        assert_eq!(group_sizes, [1; 300]);
+    }
+
+    /// The first row group of a view column is bounded too. The views of a batch do not tell
+    /// how long its strings are, so the writer has to go by what the column encodes to.
+    #[tokio::test]
+    async fn test_row_group_bytes_bounds_first_group_of_view_column() {
+        let bound = 256 * 1024;
+        let batch = one_column_batch(StringViewArray::from_iter_values(
+            (0..4_000).map(|i| format!("{i:0>1024}")),
+        ));
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(bound))
+            .build();
+        let groups = row_groups(write_one_file(&batch, properties, true, Some(1024)).await);
+
+        let first = groups[0].total_byte_size() as usize;
+        assert!(
+            (bound / 2..=2 * bound).contains(&first),
+            "first row group of {first} bytes for a {bound}-byte bound"
+        );
+    }
+
+    /// A row group assumes the row size of the row group before it. When its rows are much
+    /// larger, it has to close soon after, and not take all the rows it planned to take.
+    #[tokio::test]
+    async fn test_row_group_bytes_closes_when_rows_grow() {
+        let bound = 256 * 1024;
+        // About 19_000 of the short rows fit under the bound. The second row group then
+        // starts in the short rows, and would take some 9_000 of the long rows: 9 times
+        // the bound.
+        let batch = one_column_batch(StringArray::from_iter_values(
+            (0..28_000)
+                .map(|i| format!("{i:08}"))
+                .chain((0..12_000).map(|i| format!("{i:0>256}"))),
+        ));
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_max_row_group_row_count(None)
+            .set_max_row_group_bytes(Some(bound))
+            .build();
+        let groups = row_groups(write_one_file(&batch, properties, true, Some(256)).await);
+
+        // How far a row group gets past the bound depends on how many slices the workers
+        // still had to encode, a few at most.
+        for group in &groups {
+            let size = group.total_byte_size() as usize;
+            assert!(
+                size <= 4 * bound,
+                "row group of {size} bytes for a {bound}-byte bound"
+            );
+        }
     }
 
     #[tokio::test]
@@ -788,22 +1182,18 @@ mod tests {
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
             IndexMap::new(),
-            Some(properties),
-            None,
-            Some(NonZeroU64::new(10_000).unwrap()),
-            Some(700),
+            test_props(
+                Some(properties),
+                None,
+                Some(NonZeroU64::new(10_000).unwrap()),
+                Some(700),
+            ),
             None,
             None,
         )
         .unwrap()
         .with_roll_on_row_group_boundary(roll_on_row_group_boundary);
-        let mut writer = PartitionWriter::try_with_config(
-            object_store.clone(),
-            config,
-            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
-            None,
-        )
-        .unwrap();
+        let mut writer = PartitionWriter::try_with_config(object_store.clone(), config).unwrap();
         writer.write(&batch).await.unwrap();
         let adds = writer.close().await.unwrap();
         // the byte target still splits the write into multiple files
@@ -853,10 +1243,7 @@ mod tests {
         let result = PartitionWriterConfig::try_new(
             schema,
             IndexMap::new(),
-            None,
-            None,
-            None,
-            Some(0),
+            test_props(None, None, None, Some(0)),
             None,
             None,
         );

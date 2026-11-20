@@ -1,5 +1,6 @@
 # Core library crates
 crates/core          @ethan-tyler @rtyler @roeap @ion-elgreco
+crates/kernel-executor @ethan-tyler @rtyler @hntd187 @roeap @ion-elgreco
 crates/aws           @rtyler @roeap
 crates/azure         @rtyler
 crates/gcp           @rtyler
