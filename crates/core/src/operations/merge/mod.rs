@@ -1831,14 +1831,16 @@ fn modify_schema<'a>(
         .flat_map(|ops| ops.operations.paths())
     {
         let column = key[0].as_str();
+        // A key changes the schema only if the source has its column or struct field. If not,
+        // the column or field is in the target.
+        let Ok(source_field) = source_schema.field_with_unqualified_name(column) else {
+            continue;
+        };
         let source_field = if key.len() == 1 {
-            // This assume that all the columns in the MERGE operations of UPDATE and INSERT at least exists in the source table
-            source_schema.field_with_unqualified_name(column)?.clone()
+            source_field.clone()
         } else {
-            // A key that names a struct field adds only that field, and only if the source has
-            // it. If not, the field is in the target and the schema does not change.
-            let source_field = source_schema.field_with_unqualified_name(column).ok();
-            match source_field.and_then(|field| field_with_path_only(field, &key[1..])) {
+            // A key that names a struct field adds only that field
+            match field_with_path_only(source_field, &key[1..]) {
                 Some(field) => Arc::new(field),
                 None => continue,
             }
@@ -5828,6 +5830,54 @@ mod tests {
             "| D  | 100   | 2021-02-02 |        |",
             "| X  | 7     | 2023-07-06 | manual |",
             "+----+-------+------------+--------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    /// With schema evolution, a key can name a target column that the source does not have
+    #[tokio::test]
+    async fn test_merge_with_schema_merge_sets_target_column_that_source_lacks() {
+        let (table, _) = setup().await;
+
+        // The source has no column `value`. Its column `inserted_by` is new to the table.
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "id",
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])) as ArrayRef,
+            ),
+            (
+                "inserted_by",
+                Arc::new(arrow::array::StringArray::from(vec!["B1", "C1", "X1"])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let source = SessionContext::new().read_batch(batch).unwrap();
+
+        let (table, metrics) = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .when_matched_update(|update| {
+                update
+                    .update("value", lit(0))
+                    .update("inserted_by", col("source.inserted_by"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+        assert_eq!(metrics.num_target_rows_updated, 2);
+
+        let expected = [
+            "+----+-------+------------+-------------+",
+            "| id | value | modified   | inserted_by |",
+            "+----+-------+------------+-------------+",
+            "| A  | 1     | 2021-02-01 |             |",
+            "| B  | 0     | 2021-02-01 | B1          |",
+            "| C  | 0     | 2021-02-02 | C1          |",
+            "| D  | 100   | 2021-02-02 |             |",
+            "+----+-------+------------+-------------+",
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
