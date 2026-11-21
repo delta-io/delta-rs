@@ -1020,6 +1020,76 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)]
+    async fn test_find_files_scan_preserves_internal_alias_urls() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let root = url::Url::from_directory_path(directory.path()).unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("id", ArrowDataType::Utf8, false),
+                Field::new("price", ArrowDataType::Int64, false),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["real"])),
+                Arc::new(Int64Array::from(vec![10])),
+            ],
+        )?;
+        let mut table = DeltaTable::try_from_url(root)
+            .await?
+            .write(vec![batch])
+            .with_partition_columns(["id"])
+            .await?;
+        std::os::unix::fs::symlink(
+            directory.path().join("id=real"),
+            directory.path().join("alias"),
+        )?;
+        let original = table
+            .get_active_add_actions_by_partitions(&[])
+            .try_collect::<Vec<_>>()
+            .await?;
+        assert_eq!(original.len(), 1);
+        let version = table.version().unwrap();
+        let bytes = table.log_store().read_commit_entry(version).await?.unwrap();
+        let mut add = crate::logstore::get_actions(version, &bytes)?
+            .into_iter()
+            .find_map(|action| match action {
+                Action::Add(add) => Some(add),
+                _ => None,
+            })
+            .unwrap();
+        add.path = add.path.replacen("id=real/", "alias/", 1);
+        let snapshot_path = add.path.clone();
+        crate::kernel::transaction::CommitBuilder::default()
+            .with_actions(vec![
+                Action::Remove(original[0].remove_action(true)),
+                Action::Add(add),
+            ])
+            .build(
+                Some(table.snapshot()?),
+                table.log_store(),
+                crate::protocol::DeltaOperation::Write {
+                    mode: SaveMode::Overwrite,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+        table.update_state().await?;
+        let snapshot = lazy_snapshot(&table).await?;
+        let session = create_session().into_inner().state();
+        let matches = find_files_scan(
+            &snapshot,
+            table.log_store(),
+            &session,
+            col("price").eq(lit(10i64)),
+        )
+        .await?;
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].path, snapshot_path);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_find_files_scan_matches_encoded_partition_paths_for_data_predicates() -> TestResult
     {
         let tmp_dir = tempfile::tempdir()?;

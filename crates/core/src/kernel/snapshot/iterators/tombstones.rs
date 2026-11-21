@@ -7,7 +7,8 @@ use arrow::{
 use delta_kernel::{actions::Remove, schema::ToSchema};
 use percent_encoding::percent_decode_str;
 
-use crate::kernel::snapshot::iterators::get_string_value;
+use super::{DeletionVectorView, get_string_value};
+use crate::kernel::DeletionVectorDescriptor;
 
 /// A lightweight, cloneable view over a single tombstone (`Remove` action) row.
 ///
@@ -27,11 +28,13 @@ impl TombstoneView {
 
     /// Returns the file path with URL decoding applied.
     pub fn path(&self) -> Cow<'_, str> {
+        percent_decode_str(self.path_raw()).decode_utf8_lossy()
+    }
+
+    pub(crate) fn path_raw(&self) -> &str {
         static FIELD_INDEX: LazyLock<usize> =
             LazyLock::new(|| Remove::to_schema().field_with_index("path").unwrap().0);
-        let raw = get_string_value(self.data.column(*FIELD_INDEX), self.index)
-            .expect("valid string field");
-        percent_decode_str(raw).decode_utf8_lossy()
+        get_string_value(self.data.column(*FIELD_INDEX), self.index).expect("valid string field")
     }
 
     /// Returns the deletion timestamp (milliseconds since epoch), if recorded.
@@ -46,6 +49,15 @@ impl TombstoneView {
             .column(*FIELD_INDEX)
             .as_primitive_opt::<Int64Type>()
             .map(|a| a.value(self.index))
+    }
+
+    /// Returns the deletion vector retired by this Remove action, if present.
+    pub(crate) fn deletion_vector_descriptor(&self) -> Option<DeletionVectorDescriptor> {
+        let data = self
+            .data
+            .column_by_name("deletionVector")?
+            .as_struct_opt()?;
+        DeletionVectorView::new(data, self.index).map(|view| view.descriptor())
     }
 
     /// Returns whether removing this file represents a data change (vs. a compaction-style rewrite).

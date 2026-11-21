@@ -66,6 +66,8 @@ pub(crate) struct ProjectedScanContract {
     pub(crate) row_index_field: Option<FieldRef>,
     /// Whether scan output includes row index.
     pub(crate) retain_row_index: bool,
+    /// Retain zero-based Parquet positions rather than numbering surviving rows.
+    pub(crate) physical_row_index: bool,
 }
 
 impl ProjectedScanContract {
@@ -211,6 +213,7 @@ impl ProjectedScanContract {
             retain_file_id,
             row_index_field,
             retain_row_index,
+            physical_row_index: false,
         })
     }
 }
@@ -1512,6 +1515,7 @@ mod tests {
             retain_file_id: false,
             row_index_field: None,
             retain_row_index: true,
+            physical_row_index: false,
         };
 
         assert!(contract.retained_row_index_field().is_none());

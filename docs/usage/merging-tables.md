@@ -33,6 +33,64 @@ In the syntax above:
 
 Note that executing a `MERGE` operation automatically writes the changes to your Delta table in a single transaction.
 
+## Persistent deletion vectors (Rust)
+
+Rust callers can opt into `.with_deletion_vectors(true)` on `MergeBuilder` when the
+target table enables `delta.enableDeletionVectors`. The default remains file rewriting.
+Requesting this mode on a table that disables DV writing returns
+`DeltaTableError::DeletionVectorsNotEnabled`; there is no automatic rewrite fallback.
+Tables with multiple active logical files referring to the same physical path are
+not supported by this mode.
+Untouched Add actions outside the physical table root are retained and do not block
+updates to in-root files. Selecting an external file for a DV mutation is still rejected.
+
+In this mode, MERGE preserves the original Parquet files and hides changed target rows
+with persistent deletion vectors, including any previously deleted rows. Only inserted
+and updated rows are written to new data files. When Change Data Feed is enabled, the
+existing CDC writer emits the corresponding change records. New data, CDC files and
+the logical file remove/add pairs are published in one transaction.
+DV mode streams batches through duplicate validation and output filtering instead of
+buffering untouched rows in the file-rewrite barrier. Matched no-op rows are discarded
+without materializing per-row copies; duplicate-action validation remains enabled.
+Ignored unmatched source rows are also discarded before constraint validation and CDF
+projection. Accepted inserts and updates still enforce NOT NULL and other constraints.
+Query execution, duplicate
+validation and accumulated deletion vectors still require memory.
+
+A commit conflict requires rerunning MERGE against a fresh table snapshot. Physical row
+locations and prepared deletion vectors must not be reused after a conflict. File
+compaction and vacuum remain separate maintenance operations.
+FULL VACUUM retains replaced deletion-vector files until their Remove actions have
+expired, even when the DV files themselves are older than the retention period.
+Both FULL and LITE VACUUM reclaim tracked retired DV files after all removals referencing
+the file expire. Active files and explicitly kept versions remain protected, including
+when several vectors share one DV file.
+FULL and LITE VACUUM retain a removed Parquet file until its newest removal expires,
+including when compaction retires a file that was previously updated using DVs.
+Both modes use the same table-relative physical-path identity for relative and absolute
+Add/Remove paths, including explicitly kept snapshots. Local file aliases and listed
+objects are canonicalized in bounded batches on the blocking pool before containment
+and retention checks. References outside the physical table root are not VACUUM
+deletion candidates, including paths reached through directory symlinks.
+Scan file IDs retain their snapshot URLs, including symlink aliases, so rewrite MERGE
+and predicate-based UPDATE/DELETE remove the original logical Add actions. Physical
+path normalization for file selection, DV preparation and VACUUM is separate from
+this snapshot identity.
+LITE fetches whole retired-DV file sizes with bounded HEAD concurrency. FULL reuses
+storage-listing sizes without issuing a HEAD request for each retired vector. Both
+paths continue to use removal timestamps, rather than blob age, for tracked-DV retention.
+
+MERGE uploads data and DV files before committing. Failed or cancelled attempts can
+leave unreferenced files. FULL VACUUM reclaims these orphans after the retention
+period; LITE VACUUM does not discover untracked outputs. Do not delete output files
+solely because MERGE returned an error: an error during post-commit work can occur
+after the commit has already been published.
+
+`num_target_files_added` counts logical Add actions in both MERGE modes, including
+DV replacement Adds and excluding CDC files and metadata actions.
+
+This option is currently exposed by the Rust builder, not the Python or .NET bindings.
+
 ## Update
 
 Use [`when_matched_update`][deltalake.table.TableMerger.when_matched_update] to perform an UPDATE operation.
