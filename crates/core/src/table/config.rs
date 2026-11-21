@@ -257,10 +257,8 @@ impl TablePropertiesExt for TableProperties {
     }
 
     fn log_retention_duration(&self) -> Duration {
-        static DEFAULT_DURATION: LazyLock<Duration> =
-            LazyLock::new(|| parse_interval("interval 30 days").unwrap());
         self.log_retention_duration
-            .unwrap_or(DEFAULT_DURATION.to_owned())
+            .unwrap_or(Duration::from_secs(30 * SECONDS_PER_DAY))
     }
 
     fn enable_expired_log_cleanup(&self) -> bool {
@@ -288,10 +286,8 @@ impl TablePropertiesExt for TableProperties {
     }
 
     fn deleted_file_retention_duration(&self) -> Duration {
-        static DEFAULT_DURATION: LazyLock<Duration> =
-            LazyLock::new(|| parse_interval("interval 1 weeks").unwrap());
         self.deleted_file_retention_duration
-            .unwrap_or(DEFAULT_DURATION.to_owned())
+            .unwrap_or(Duration::from_secs(SECONDS_PER_WEEK))
     }
 
     fn isolation_level(&self) -> IsolationLevel {
@@ -312,168 +308,20 @@ const SECONDS_PER_HOUR: u64 = 60 * SECONDS_PER_MINUTE;
 const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
 const SECONDS_PER_WEEK: u64 = 7 * SECONDS_PER_DAY;
 
-fn parse_interval(value: &str) -> Result<Duration, DeltaConfigError> {
-    let not_an_interval = || DeltaConfigError::Validation(format!("'{value}' is not an interval"));
-
-    if !value.starts_with("interval ") {
-        return Err(not_an_interval());
-    }
-    let mut it = value.split_whitespace();
-    let _ = it.next(); // skip "interval"
-    let number = parse_int(it.next().ok_or_else(not_an_interval)?)?;
-    if number < 0 {
-        return Err(DeltaConfigError::Validation(format!(
-            "interval '{value}' cannot be negative"
-        )));
-    }
-    let number = number as u64;
-
-    let duration = match it.next().ok_or_else(not_an_interval)? {
-        "nanosecond" | "nanoseconds" => Duration::from_nanos(number),
-        "microsecond" | "microseconds" => Duration::from_micros(number),
-        "millisecond" | "milliseconds" => Duration::from_millis(number),
-        "second" | "seconds" => Duration::from_secs(number),
-        "minute" | "minutes" => Duration::from_secs(number * SECONDS_PER_MINUTE),
-        "hour" | "hours" => Duration::from_secs(number * SECONDS_PER_HOUR),
-        "day" | "days" => Duration::from_secs(number * SECONDS_PER_DAY),
-        "week" | "weeks" => Duration::from_secs(number * SECONDS_PER_WEEK),
-        unit => {
-            return Err(DeltaConfigError::Validation(format!(
-                "Unknown unit '{unit}'"
-            )));
-        }
-    };
-
-    Ok(duration)
-}
-
-fn parse_int(value: &str) -> Result<i64, DeltaConfigError> {
-    value.parse().map_err(|e| {
-        DeltaConfigError::Validation(format!("Cannot parse '{value}' as integer: {e}"))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn parse_interval_test() {
+    fn retention_durations_default_to_30_days_and_1_week() {
+        let properties = TableProperties::default();
         assert_eq!(
-            parse_interval("interval 123 nanosecond").unwrap(),
-            Duration::from_nanos(123)
+            properties.log_retention_duration(),
+            Duration::from_secs(2_592_000)
         );
-
         assert_eq!(
-            parse_interval("interval 123 nanoseconds").unwrap(),
-            Duration::from_nanos(123)
-        );
-
-        assert_eq!(
-            parse_interval("interval 123 microsecond").unwrap(),
-            Duration::from_micros(123)
-        );
-
-        assert_eq!(
-            parse_interval("interval 123 microseconds").unwrap(),
-            Duration::from_micros(123)
-        );
-
-        assert_eq!(
-            parse_interval("interval 123 millisecond").unwrap(),
-            Duration::from_millis(123)
-        );
-
-        assert_eq!(
-            parse_interval("interval 123 milliseconds").unwrap(),
-            Duration::from_millis(123)
-        );
-
-        assert_eq!(
-            parse_interval("interval 123 second").unwrap(),
-            Duration::from_secs(123)
-        );
-
-        assert_eq!(
-            parse_interval("interval 123 seconds").unwrap(),
-            Duration::from_secs(123)
-        );
-
-        assert_eq!(
-            parse_interval("interval 123 minute").unwrap(),
-            Duration::from_secs(123 * 60)
-        );
-
-        assert_eq!(
-            parse_interval("interval 123 minutes").unwrap(),
-            Duration::from_secs(123 * 60)
-        );
-
-        assert_eq!(
-            parse_interval("interval 123 hour").unwrap(),
-            Duration::from_secs(123 * 3600)
-        );
-
-        assert_eq!(
-            parse_interval("interval 123 hours").unwrap(),
-            Duration::from_secs(123 * 3600)
-        );
-
-        assert_eq!(
-            parse_interval("interval 123 day").unwrap(),
-            Duration::from_secs(123 * 86400)
-        );
-
-        assert_eq!(
-            parse_interval("interval 123 days").unwrap(),
-            Duration::from_secs(123 * 86400)
-        );
-
-        assert_eq!(
-            parse_interval("interval 123 week").unwrap(),
-            Duration::from_secs(123 * 604800)
-        );
-
-        assert_eq!(
-            parse_interval("interval 123 week").unwrap(),
-            Duration::from_secs(123 * 604800)
-        );
-    }
-
-    #[test]
-    fn parse_interval_invalid_test() {
-        assert_eq!(
-            parse_interval("whatever").err().unwrap(),
-            DeltaConfigError::Validation("'whatever' is not an interval".to_string())
-        );
-
-        assert_eq!(
-            parse_interval("interval").err().unwrap(),
-            DeltaConfigError::Validation("'interval' is not an interval".to_string())
-        );
-
-        assert_eq!(
-            parse_interval("interval 2").err().unwrap(),
-            DeltaConfigError::Validation("'interval 2' is not an interval".to_string())
-        );
-
-        assert_eq!(
-            parse_interval("interval 2 years").err().unwrap(),
-            DeltaConfigError::Validation("Unknown unit 'years'".to_string())
-        );
-
-        assert_eq!(
-            parse_interval("interval two years").err().unwrap(),
-            DeltaConfigError::Validation(
-                "Cannot parse 'two' as integer: invalid digit found in string".to_string()
-            )
-        );
-
-        assert_eq!(
-            parse_interval("interval -25 hours").err().unwrap(),
-            DeltaConfigError::Validation(
-                "interval 'interval -25 hours' cannot be negative".to_string()
-            )
+            properties.deleted_file_retention_duration(),
+            Duration::from_secs(604_800)
         );
     }
 }
