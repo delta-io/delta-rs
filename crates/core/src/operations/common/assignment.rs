@@ -386,19 +386,27 @@ pub(crate) mod tests {
     use crate::delta_datafusion::create_session;
 
     /// The columns that the keys in the tests name. Each struct column has the field `a` and the
-    /// struct `inner`, which has the field `x`.
+    /// struct `inner`, which has the field `x`. The map `m` and the list `l` hold such structs.
     fn key_columns() -> Schema {
         let inner = Fields::from(vec![Field::new("x", DataType::Int32, true)]);
         let fields = Fields::from(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("inner", DataType::Struct(inner), true),
         ]);
+        let entries = Fields::from(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Struct(fields.clone()), true),
+        ]);
+        let entries = Field::new("entries", DataType::Struct(entries), false);
+        let item = Field::new_list_field(DataType::Struct(fields.clone()), true);
         Schema::new(vec![
             Field::new("id", DataType::Int32, true),
             Field::new("Value", DataType::Int32, true),
             Field::new("s", DataType::Struct(fields.clone()), true),
             Field::new("my.col", DataType::Struct(fields.clone()), true),
             Field::new("my col", DataType::Struct(fields), true),
+            Field::new("m", DataType::Map(Arc::new(entries), false), true),
+            Field::new("l", DataType::List(Arc::new(item)), true),
         ])
     }
 
@@ -431,7 +439,20 @@ pub(crate) mod tests {
         }
 
         for key in [
-            "value", "other.id", "s.b", "id.a", "my.col", "s['a']", "id + 1",
+            "value",
+            "other.id",
+            "s.b",
+            "id.a",
+            "my.col",
+            "s['a']",
+            "id + 1",
+            // The names of struct fields are case sensitive, as the names of columns are
+            "s.A",
+            // A key cannot name a value in a map or in a list
+            "m.key",
+            "m.value.a",
+            "l.a",
+            "l.item.a",
         ] {
             let key = DeltaColumn::from(key);
             let resolved = resolve_assignment_key(&key, &key_schema, &session);
