@@ -32,6 +32,7 @@ use crate::models::{
     ListTableSummariesResponse, Table, TableTempCredentialsResponse, TableType,
     TemporaryTableCredentialsRequest, TokenErrorResponse,
 };
+use crate::sorted_listing::SortedListingStore;
 
 use deltalake_core::data_catalog::DataCatalogResult;
 use deltalake_core::{
@@ -58,6 +59,7 @@ const STORE_NAME: &str = "UnityCatalogObjectStore";
 pub mod datafusion;
 pub mod models;
 pub mod prelude;
+mod sorted_listing;
 
 /// Possible errors from the unity-catalog/tables API call
 #[derive(thiserror::Error, Debug)]
@@ -1041,6 +1043,7 @@ fn build_object_store(
     // TODO(roeap): we should not have to go through the table here.
     // ideally we just create the right storage ...
     let table_url = ensure_table_uri(location)?;
+    let is_local = table_url.scheme() == "file";
     let mut builder = DeltaTableBuilder::from_url(table_url)?;
     if let Some(runtime) = &config.runtime {
         builder = builder.with_io_runtime(runtime.clone());
@@ -1048,7 +1051,11 @@ fn build_object_store(
     if !storage_options.is_empty() {
         builder = builder.with_storage_options(storage_options);
     }
-    Ok(builder.build_storage()?.object_store())
+    let mut store = builder.build_storage()?.object_store();
+    if is_local {
+        store = Arc::new(SortedListingStore::new(store));
+    }
+    Ok(store)
 }
 
 impl LogStoreFactory for UnityCatalogFactory {
