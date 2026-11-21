@@ -2062,7 +2062,7 @@ mod tests {
     use crate::kernel::{Action, DataType, PrimitiveType, StructField};
     use crate::operations::common::assignment::Assignments;
     use crate::operations::common::assignment::tests::{
-        batch_from_json, not_null_field_table, struct_table,
+        batch_from_json, not_null_field_table, struct_batch, struct_table,
     };
     use crate::operations::merge::filter::generalize_filter;
     use crate::protocol::*;
@@ -5520,6 +5520,81 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_struct_field_key_evolves_schema_cdf() {
+        use crate::kernel::ProtocolInner;
+
+        let batch = struct_batch();
+        let schema: StructType = batch.schema().try_into_kernel().unwrap();
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(schema.fields().cloned())
+            .with_actions(vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())])
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap()
+            .write(vec![batch])
+            .await
+            .unwrap();
+
+        // The source column `s` has the field `c`, which the target column `s` does not have
+        let fields = vec![
+            Field::new("a", ArrowDataType::Int32, true),
+            Field::new("c", ArrowDataType::Int32, true),
+        ];
+        let schema = ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Int32, true),
+            Field::new("s", ArrowDataType::Struct(fields.into()), true),
+        ]);
+        let batch = batch_from_json(
+            schema,
+            r#"{"id": 1, "s": {"a": 7, "c": 70}}
+               {"id": 4, "s": {"a": 8, "c": 80}}"#,
+        );
+        let source = SessionContext::new().read_batch(batch).unwrap();
+
+        let (table, _) = table
+            .merge(source, "t.id = src.id")
+            .with_source_alias("src")
+            .with_target_alias("t")
+            .with_merge_schema(true)
+            .when_matched_update(|update| update.update("s.a", "src.s.a").update("s.c", "src.s.c"))
+            .unwrap()
+            .when_not_matched_insert(|insert| insert.set("id", "src.id").set("s.c", "src.s.c"))
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update.predicate("t.id >= 2").update("s.b", lit("gone"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let cdf = table
+            .scan_cdf()
+            .with_starting_version(2)
+            .build(&ctx.state(), None)
+            .await
+            .unwrap();
+        let mut batches = collect(cdf, ctx.task_ctx()).await.unwrap();
+        // drop _commit_timestamp
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();
+        assert_batches_sorted_eq! {[
+            "+----+-----+----------------------------------------------+------------------+-----------------+",
+            "| id | a   | s                                            | _change_type     | _commit_version |",
+            "+----+-----+----------------------------------------------+------------------+-----------------+",
+            "| 1  | 100 | {a: 1, b: one, inner: {x: 10, y: 11}, c: }   | update_preimage  | 2               |",
+            "| 1  | 100 | {a: 7, b: one, inner: {x: 10, y: 11}, c: 70} | update_postimage | 2               |",
+            "| 2  | 200 | {a: 2, b: two, inner: , c: }                 | update_preimage  | 2               |",
+            "| 2  | 200 | {a: 2, b: gone, inner: , c: }                | update_postimage | 2               |",
+            // In the existing row `s` is NULL. The update builds the struct.
+            "| 3  | 300 |                                              | update_preimage  | 2               |",
+            "| 3  | 300 | {a: , b: gone, inner: , c: }                 | update_postimage | 2               |",
+            "| 4  |     | {a: , b: , inner: , c: 80}                   | insert           | 2               |",
+            "+----+-----+----------------------------------------------+------------------+-----------------+",
+        ], &batches }
     }
 
     #[tokio::test]
