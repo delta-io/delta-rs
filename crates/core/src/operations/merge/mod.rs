@@ -5469,6 +5469,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_merge_struct_field_key_ignores_other_source_fields() {
+        // The source structs `s` and `new` have fields that no key names, and a Delta table
+        // accepts none of them: `A` differs from `a` only in case, and Delta has no duration
+        // type. They stay out of the table, as a source column that no clause assigns does.
+        let duration = ArrowDataType::Duration(arrow_schema::TimeUnit::Second);
+        let s = vec![
+            Field::new("a", ArrowDataType::Int32, true),
+            Field::new("A", ArrowDataType::Int32, true),
+            Field::new("d", duration.clone(), true),
+        ];
+        let new = vec![
+            Field::new("c", ArrowDataType::Int32, true),
+            Field::new("d", duration, true),
+        ];
+        let schema = ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Int32, true),
+            Field::new("s", ArrowDataType::Struct(s.into()), true),
+            Field::new("new", ArrowDataType::Struct(new.into()), true),
+        ]);
+        let batch = batch_from_json(
+            schema,
+            r#"{"id": 1, "s": {"a": 7, "A": 8, "d": 9}, "new": {"c": 7, "d": 9}}"#,
+        );
+        let source = SessionContext::new().read_batch(batch).unwrap();
+
+        let (table, _) = struct_table()
+            .await
+            .merge(source, "t.id = src.id")
+            .with_source_alias("src")
+            .with_target_alias("t")
+            .with_merge_schema(true)
+            .when_matched_update(|update| {
+                update.update("s.a", "src.s.a").update("new.c", "src.new.c")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = [
+            "+----+-----+---------------------------------------+--------+",
+            "| id | a   | s                                     | new    |",
+            "+----+-----+---------------------------------------+--------+",
+            "| 1  | 100 | {a: 7, b: one, inner: {x: 10, y: 11}} | {c: 7} |",
+            "| 2  | 200 | {a: 2, b: two, inner: }               |        |",
+            "| 3  | 300 |                                       |        |",
+            "+----+-----+---------------------------------------+--------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
     async fn test_merge_duplicate_key_error_shows_keys_as_written() {
         let (table, source) = setup().await;
         let res = table
