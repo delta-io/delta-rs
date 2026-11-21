@@ -144,6 +144,7 @@ async fn unity_client() {
     let location = server
         .register_table("partitioned", TestTables::Delta0_8_0Partitioned)
         .await;
+    server.register_table("simple", TestTables::Simple).await;
     let client = server.client();
 
     let ListCatalogsResponse::Success { catalogs, .. } = client.list_catalogs().await.unwrap()
@@ -190,6 +191,26 @@ async fn unity_client() {
         panic!("expected an error");
     };
     assert_eq!(error.error_code, "TABLE_NOT_FOUND");
+
+    // The server has no table summaries: they come from the list of tables.
+    let ListTableSummariesResponse::Success { tables, .. } =
+        client.list_table_summaries(CATALOG, SCHEMA).await.unwrap()
+    else {
+        panic!("expected the table summaries");
+    };
+    let mut names: Vec<_> = tables.iter().map(|t| t.full_name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["unity.default.partitioned", "unity.default.simple"]);
+    assert!(tables.iter().all(|t| t.table_type == TableType::External));
+
+    let ListTableSummariesResponse::Error(error) = client
+        .list_table_summaries("missing", SCHEMA)
+        .await
+        .unwrap()
+    else {
+        panic!("expected an error");
+    };
+    assert_eq!(error.error_code, "CATALOG_NOT_FOUND");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -209,4 +230,40 @@ async fn read_table_on_local_file_system() {
     let table = server.load_table("simple").await;
     assert_eq!(table.version(), Some(4));
     assert_eq!(table.get_file_uris().unwrap().count(), 5);
+}
+
+#[cfg(feature = "datafusion")]
+#[tokio::test(flavor = "multi_thread")]
+async fn datafusion_catalog() {
+    use std::sync::Arc;
+
+    use datafusion::catalog::CatalogProvider;
+    use datafusion::common::TableReference;
+    use datafusion::prelude::SessionContext;
+    use deltalake_catalog_unity::datafusion::UnityCatalogProvider;
+
+    let server = UnityCatalogServer::start().await;
+    server
+        .register_table("partitioned", TestTables::Delta0_8_0Partitioned)
+        .await;
+
+    let catalog = UnityCatalogProvider::try_new(Arc::new(server.client()), CATALOG)
+        .await
+        .unwrap();
+    assert_eq!(catalog.schema_names(), [SCHEMA]);
+    assert_eq!(
+        catalog.schema(SCHEMA).unwrap().table_names(),
+        ["partitioned"]
+    );
+
+    let ctx = SessionContext::new();
+    ctx.register_catalog(CATALOG, Arc::new(catalog));
+    let rows = ctx
+        .table(TableReference::full(CATALOG, SCHEMA, "partitioned"))
+        .await
+        .unwrap()
+        .count()
+        .await
+        .unwrap();
+    assert_eq!(rows, 7);
 }
