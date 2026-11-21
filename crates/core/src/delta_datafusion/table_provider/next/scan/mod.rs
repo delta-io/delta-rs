@@ -30,12 +30,13 @@ use dashmap::DashMap;
 use datafusion::{
     catalog::Session,
     common::{
-        ColumnStatistics, HashMap, Result, Statistics, ToDFSchema, internal_datafusion_err,
-        plan_err, stats::Precision,
+        ColumnStatistics, HashMap, Result, ScalarValue, Statistics, ToDFSchema,
+        internal_datafusion_err, plan_err, stats::Precision,
     },
     datasource::physical_plan::{
         ParquetSource,
         parquet::{CachedParquetFileReaderFactory, metadata::DFParquetMetadata},
+        wrap_partition_type_in_dict, wrap_partition_value_in_dict,
     },
     error::DataFusionError,
     execution::{
@@ -1092,6 +1093,7 @@ async fn get_read_plan(
 }
 
 // Small helper to reuse some code between exec and exec_meta
+// `batch` must hold one file's rows: partition values are read from the first row.
 fn finalize_transformed_batch(
     batch: RecordBatch,
     scan_plan: &KernelScanPlan,
@@ -1108,6 +1110,29 @@ fn finalize_transformed_batch(
     let result = if result.schema_ref().eq(&scan_plan.contract.result_schema) {
         result
     } else {
+        // One value per file: wrap it once instead of casting every row.
+        let partition_columns = scan_plan.snapshot.metadata().partition_columns();
+        let mut fields = result.schema_ref().fields().to_vec();
+        let mut columns = result.columns().to_vec();
+        let mut wrapped = false;
+        for (field, column) in fields.iter_mut().zip(columns.iter_mut()) {
+            if !column.is_empty()
+                && partition_columns.contains(field.name())
+                && let Some((_, target)) =
+                    scan_plan.contract.result_schema.fields().find(field.name())
+                && target.data_type() == &wrap_partition_type_in_dict(column.data_type().clone())
+            {
+                let value = ScalarValue::try_from_array(column, 0)?;
+                *column = wrap_partition_value_in_dict(value).to_array_of_size(column.len())?;
+                *field = Arc::clone(target);
+                wrapped = true;
+            }
+        }
+        let result = if wrapped {
+            RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?
+        } else {
+            result
+        };
         let adapted = schema_adapter.adapt(result)?;
         if adapted.schema_ref().eq(&scan_plan.contract.result_schema) {
             adapted
