@@ -6,6 +6,7 @@ use crate::delta_datafusion::cdf::{CHANGE_TYPE_COL, CdcDataSpec, FileAction, Res
 use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
 use arrow_array::{Array, BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use chrono::{TimeZone, Utc};
 use datafusion::common::ScalarValue;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::ParquetFileReaderFactory;
@@ -17,6 +18,7 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use delta_kernel::Engine;
 use delta_kernel::actions::deletion_vector::DeletionVectorDescriptor;
+use object_store::ObjectMeta;
 use object_store::path::Path;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, RowSelection, RowSelector};
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData};
@@ -165,6 +167,7 @@ async fn push_pair_selection(
     }
     let access_plan = access_plan_for_selection(
         selection,
+        true,
         &pair.add.path,
         pair.add.size as u64,
         Arc::clone(&cache),
@@ -179,11 +182,26 @@ async fn push_pair_selection(
     ];
     part_values.extend_from_slice(table_partition_values);
 
-    let part_file = PartitionedFile::new(&pair.add.path, pair.add.size as u64)
+    let part_file = partitioned_file(Path::parse(&pair.add.path)?, pair.add.size as u64)
         .with_partition_values(part_values.clone())
         .with_extension(access_plan);
     groups.entry(part_values).or_default().push(part_file);
     Ok(())
+}
+
+/// Build a [`PartitionedFile`] from an object store [`Path`].
+///
+/// [`PartitionedFile::new`] re-encodes the path, which breaks paths that contain
+/// escaped partition values.
+pub fn partitioned_file(location: Path, size: u64) -> PartitionedFile {
+    ObjectMeta {
+        location,
+        last_modified: Utc.timestamp_nanos(0),
+        size,
+        e_tag: None,
+        version: None,
+    }
+    .into()
 }
 
 pub fn create_cdc_schema(mut schema_fields: Vec<Arc<Field>>, include_type: bool) -> SchemaRef {
@@ -328,7 +346,9 @@ fn row_group_access(
     let rg_end = rg_start + num_rows as u64;
     let mut selectors = Vec::new();
     let mut cursor = rg_start;
-    for idx in marked.iter() {
+    let mut marked_rows = marked.iter();
+    marked_rows.advance_to(rg_start);
+    for idx in marked_rows.take_while(|&idx| idx < rg_end) {
         selectors.push(RowSelector {
             row_count: (idx - cursor) as usize,
             skip: keep_marked,
@@ -354,7 +374,7 @@ async fn read_parquet_metadata(
 ) -> DeltaResult<Arc<ParquetMetaData>> {
     let arrow_reader = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional);
     Ok(cache
-        .create_reader(0, PartitionedFile::new(file_path, file_size), None, metrics)?
+        .create_reader(0, partitioned_file(file_path, file_size), None, metrics)?
         .get_metadata(Some(&arrow_reader))
         .await?)
 }
@@ -406,6 +426,7 @@ fn access_plan_from_treemap(
 
 async fn access_plan_for_selection(
     selection: roaring::RoaringTreemap,
+    keep_marked: bool,
     file_path_str: &str,
     file_size: u64,
     cache: Arc<CachedParquetFileReaderFactory>,
@@ -416,12 +437,14 @@ async fn access_plan_for_selection(
     Ok(access_plan_from_treemap(
         &selection,
         &parquet_metadata,
-        true,
+        keep_marked,
     ))
 }
 
 /// This function is a side effect of having 2 separate types of data at points in the scan
 /// process, but this exists for any actions that aren't paired up add/remove actions.
+/// The deletion vector of such an action marks the rows that are not part of the file, so the
+/// plan reads the unmarked rows.
 pub async fn create_file_scan_plan<F: FileAction>(
     engine: Arc<dyn Engine>,
     file_action: F,
@@ -434,6 +457,7 @@ pub async fn create_file_scan_plan<F: FileAction>(
         return Ok(Some(
             access_plan_for_selection(
                 tree_map,
+                false,
                 &file_action.path(),
                 file_action.size()? as u64,
                 cache,
@@ -701,6 +725,92 @@ mod tests {
         assert!(
             kept.is_empty(),
             "constant `false` must prune even a Remove without partition metadata: {kept:?}"
+        );
+    }
+
+    /// Row offsets that a row group's access plan reads, plus the number of rows it covers.
+    fn selected_offsets(access: RowGroupAccess) -> (usize, Vec<usize>) {
+        let RowGroupAccess::Selection(selection) = access else {
+            panic!("expected a row selection");
+        };
+        let mut covered = 0;
+        let mut selected = Vec::new();
+        for selector in selection.iter() {
+            if !selector.skip {
+                selected.extend(covered..covered + selector.row_count);
+            }
+            covered += selector.row_count;
+        }
+        (covered, selected)
+    }
+
+    /// Three row groups of 100 rows: [0, 100), [100, 200) and [200, 300).
+    fn three_row_group_offsets(
+        marked: &roaring::RoaringTreemap,
+        keep_marked: bool,
+    ) -> Vec<(usize, Vec<usize>)> {
+        [0, 100, 200]
+            .into_iter()
+            .map(|rg_start| selected_offsets(row_group_access(marked, rg_start, 100, keep_marked)))
+            .collect()
+    }
+
+    fn unmarked_rows(marked_offsets: &[usize]) -> Vec<usize> {
+        (0..100)
+            .filter(|row| !marked_offsets.contains(row))
+            .collect()
+    }
+
+    #[test]
+    fn row_group_access_keeps_marked_rows_of_each_row_group() {
+        let marked: roaring::RoaringTreemap =
+            [0, 5, 99, 100, 150, 199, 200, 299].into_iter().collect();
+        assert_eq!(
+            three_row_group_offsets(&marked, true),
+            vec![
+                (100, vec![0, 5, 99]),
+                (100, vec![0, 50, 99]),
+                (100, vec![0, 99]),
+            ]
+        );
+    }
+
+    #[test]
+    fn row_group_access_skips_marked_rows_of_each_row_group() {
+        let marked: roaring::RoaringTreemap = [99, 100, 299].into_iter().collect();
+        assert_eq!(
+            three_row_group_offsets(&marked, false),
+            vec![
+                (100, unmarked_rows(&[99])),
+                (100, unmarked_rows(&[0])),
+                (100, unmarked_rows(&[99])),
+            ]
+        );
+    }
+
+    #[test]
+    fn row_group_access_for_row_groups_without_marked_rows() {
+        let empty = roaring::RoaringTreemap::new();
+        let only_middle: roaring::RoaringTreemap = [150].into_iter().collect();
+        assert_eq!(
+            three_row_group_offsets(&empty, true),
+            vec![(100, vec![]); 3]
+        );
+        assert_eq!(
+            three_row_group_offsets(&only_middle, true),
+            vec![(100, vec![]), (100, vec![50]), (100, vec![])]
+        );
+        assert_eq!(
+            three_row_group_offsets(&empty, false),
+            vec![(100, unmarked_rows(&[])); 3]
+        );
+        assert_eq!(
+            three_row_group_offsets(&only_middle, false),
+            vec![
+                (100, unmarked_rows(&[])),
+                (100, unmarked_rows(&[50])),
+                (100, unmarked_rows(&[])),
+            ]
         );
     }
 }

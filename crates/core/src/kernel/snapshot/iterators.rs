@@ -27,7 +27,7 @@ use crate::kernel::scalars::ScalarExt;
 use crate::kernel::{Add, DeletionVectorDescriptor, Remove};
 use crate::{DeltaResult, DeltaTableError};
 
-pub(crate) use self::scan_row::{ScanRowOutStream, scan_row_in_eval};
+pub(crate) use self::scan_row::{ScanRowOutStream, scan_row_in_eval_for_schema};
 
 mod scan_row;
 mod tombstones;
@@ -57,20 +57,16 @@ const DV_FIELD_SIZE_IN_BYTES: &str = "sizeInBytes";
 const DV_FIELD_CARDINALITY: &str = "cardinality";
 const DV_FIELD_OFFSET: &str = "offset";
 
-static FIELD_INDICES: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| {
-    let schema = scan_row_schema();
-    let mut indices = HashMap::new();
+static PATH_INDEX: LazyLock<usize> =
+    LazyLock::new(|| scan_row_schema().index_of(FIELD_NAME_PATH).unwrap());
 
-    let path_idx = schema.index_of(FIELD_NAME_PATH).unwrap();
-    indices.insert(FIELD_NAME_PATH, path_idx);
+static SIZE_INDEX: LazyLock<usize> =
+    LazyLock::new(|| scan_row_schema().index_of(FIELD_NAME_SIZE).unwrap());
 
-    let size_idx = schema.index_of(FIELD_NAME_SIZE).unwrap();
-    indices.insert(FIELD_NAME_SIZE, size_idx);
-
-    let modification_time_idx = schema.index_of(FIELD_NAME_MODIFICATION_TIME).unwrap();
-    indices.insert(FIELD_NAME_MODIFICATION_TIME, modification_time_idx);
-
-    indices
+static MODIFICATION_TIME_INDEX: LazyLock<usize> = LazyLock::new(|| {
+    scan_row_schema()
+        .index_of(FIELD_NAME_MODIFICATION_TIME)
+        .unwrap()
 });
 
 static DV_FIELD_INDICES: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| {
@@ -117,24 +113,14 @@ impl LogicalFileView {
 
     /// Returns the file path with URL decoding applied.
     pub fn path(&self) -> Cow<'_, str> {
-        let raw = get_string_value(
-            self.files
-                .column(*FIELD_INDICES.get(FIELD_NAME_PATH).unwrap()),
-            self.index,
-        )
-        .unwrap();
+        let raw = get_string_value(self.files.column(*PATH_INDEX), self.index).unwrap();
         percent_decode_str(raw).decode_utf8_lossy()
     }
 
     /// Returns the raw file path as stored in the log, without URL decoding.
     #[cfg(any(test, feature = "datafusion"))]
     pub(crate) fn path_raw(&self) -> &str {
-        get_string_value(
-            self.files
-                .column(*FIELD_INDICES.get(FIELD_NAME_PATH).unwrap()),
-            self.index,
-        )
-        .unwrap()
+        get_string_value(self.files.column(*PATH_INDEX), self.index).unwrap()
     }
 
     /// An object store [`Path`] to the file.
@@ -153,7 +139,7 @@ impl LogicalFileView {
     /// Returns the file size in bytes.
     pub fn size(&self) -> i64 {
         self.files
-            .column(*FIELD_INDICES.get(FIELD_NAME_SIZE).unwrap())
+            .column(*SIZE_INDEX)
             .as_primitive::<Int64Type>()
             .value(self.index)
     }
@@ -161,19 +147,19 @@ impl LogicalFileView {
     /// Returns the file modification time in milliseconds since Unix epoch.
     pub fn modification_time(&self) -> i64 {
         self.files
-            .column(*FIELD_INDICES.get(FIELD_NAME_MODIFICATION_TIME).unwrap())
+            .column(*MODIFICATION_TIME_INDEX)
             .as_primitive::<Int64Type>()
             .value(self.index)
     }
 
     /// Returns the file modification time as a UTC DateTime.
     pub fn modification_datetime(&self) -> DeltaResult<chrono::DateTime<Utc>> {
-        DateTime::from_timestamp_millis(self.modification_time()).ok_or(
+        DateTime::from_timestamp_millis(self.modification_time()).ok_or_else(|| {
             DeltaTableError::MetadataError(format!(
                 "invalid modification_time: {:?}",
                 self.modification_time()
-            )),
-        )
+            ))
+        })
     }
 
     /// Returns the raw JSON statistics string for this file, if available.

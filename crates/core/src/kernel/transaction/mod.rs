@@ -95,7 +95,8 @@ use serde::{Deserialize, Serialize};
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::errors::DeltaTableError;
 use crate::kernel::{
-    Action, CommitInfo, EagerSnapshot, IsolationLevel, Metadata, Protocol, Transaction, Version,
+    Action, Add, CommitInfo, EagerSnapshot, IsolationLevel, Metadata, Protocol, Transaction,
+    Version,
 };
 use crate::logstore::ObjectStoreRef;
 use crate::logstore::{CommitOrBytes, LogStoreRef};
@@ -632,6 +633,7 @@ pub struct CommitBuilder {
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    read_files: Option<Arc<[Add]>>,
 }
 
 impl Default for CommitBuilder {
@@ -644,6 +646,7 @@ impl Default for CommitBuilder {
             post_commit_hook: None,
             post_commit_hook_handler: None,
             operation_id: Uuid::new_v4(),
+            read_files: None,
         }
     }
 }
@@ -688,6 +691,17 @@ impl<'a> CommitBuilder {
         self
     }
 
+    /// Files read by the transaction, checked against files removed by concurrent commits.
+    ///
+    /// If not set, all files matching the operation's read predicate are treated as read, or all
+    /// files in the table if there is none. Concurrently added files are still checked against
+    /// the read predicate. Files not listed are not checked, so an incomplete list can let a
+    /// conflicting commit through.
+    pub fn with_read_files(mut self, read_files: impl Into<Arc<[Add]>>) -> Self {
+        self.read_files = Some(read_files.into());
+        self
+    }
+
     /// Prepare a Commit operation using the configured builder
     pub fn build(
         self,
@@ -709,6 +723,7 @@ impl<'a> CommitBuilder {
             post_commit_hook: self.post_commit_hook,
             post_commit_hook_handler: self.post_commit_hook_handler,
             operation_id: self.operation_id,
+            read_files: self.read_files,
         }
     }
 }
@@ -722,6 +737,7 @@ pub struct PreCommit<'a> {
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    read_files: Option<Arc<[Add]>>,
 }
 
 impl<'a> std::future::IntoFuture for PreCommit<'a> {
@@ -779,6 +795,7 @@ impl<'a> PreCommit<'a> {
                 post_commit: this.post_commit_hook,
                 post_commit_hook_handler: this.post_commit_hook_handler,
                 operation_id: this.operation_id,
+                read_files: this.read_files,
             })
         })
     }
@@ -794,6 +811,7 @@ pub struct PreparedCommit<'a> {
     post_commit: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    read_files: Option<Arc<[Add]>>,
 }
 
 impl PreparedCommit<'_> {
@@ -813,6 +831,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
         Box::pin(async move {
             let commit_or_bytes = this.commit_or_bytes;
 
+            let read_files = this.read_files;
             let mut attempt_number: usize = 1;
 
             // Handle the case where table doesn't exist yet (initial table creation)
@@ -912,7 +931,8 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 this.data.operation.read_predicate(),
                                 &this.data.actions,
                                 this.data.operation.read_whole_table(),
-                            )?;
+                            )?
+                            .with_read_files(read_files.as_deref());
                             let conflict_checker = ConflictChecker::new(
                                 transaction_info,
                                 summary,

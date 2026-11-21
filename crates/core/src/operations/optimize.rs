@@ -828,6 +828,20 @@ impl MergePlan {
         handle: Option<&Arc<dyn CustomExecuteHandler>>,
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
+        // Every commit depends on all files in the plan, so a file removed concurrently before
+        // a later commit is still detected when there are multiple commits
+        let read_files: Arc<[Add]> = match &operations {
+            OptimizeOperations::Compact(bins) => bins
+                .values()
+                .flat_map(|(_, bins)| bins.iter().flat_map(MergeBin::iter))
+                .cloned()
+                .collect(),
+            OptimizeOperations::ZOrder(_, bins) => bins
+                .values()
+                .flat_map(|(_, bin)| bin.iter())
+                .cloned()
+                .collect(),
+        };
         let read_session = self.read_session.clone();
         info!("starting optimize execution");
         let object_store = log_store.object_store(Some(operation_id));
@@ -985,6 +999,7 @@ impl MergePlan {
                     .with_actions(actions)
                     .with_operation_id(operation_id)
                     .with_post_commit_hook_handler(handle.cloned())
+                    .with_read_files(read_files.clone())
                     .with_max_retries(DEFAULT_RETRIES + commits_made)
                     .build(
                         Some(&snapshot),

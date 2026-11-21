@@ -116,13 +116,6 @@ impl MountFileStorageBackend {
             inner: Arc::new(LocalFileSystem::new()),
         })
     }
-
-    /// Return an absolute filesystem path of the given location
-    fn path_to_filesystem(&self, location: &ObjectStorePath) -> String {
-        let mut url = url::Url::parse("file:///").unwrap();
-        url.set_path(location.as_ref());
-        url.to_file_path().unwrap().to_str().unwrap().to_owned()
-    }
 }
 
 impl std::fmt::Display for MountFileStorageBackend {
@@ -208,9 +201,9 @@ impl ObjectStore for MountFileStorageBackend {
         match options.target_mode {
             RenameTargetMode::Overwrite => self.inner.rename_opts(from, to, options).await,
             RenameTargetMode::Create => {
-                let path_from = self.path_to_filesystem(from);
-                let path_to = self.path_to_filesystem(to);
-                Ok(regular_rename(path_from.as_ref(), path_to.as_ref()).await?)
+                let path_from = self.inner.path_to_filesystem(from)?;
+                let path_to = self.inner.path_to_filesystem(to)?;
+                Ok(regular_rename(path_from.to_str().unwrap(), path_to.to_str().unwrap()).await?)
             }
         }
     }
@@ -304,6 +297,29 @@ mod tests {
         }
         assert!(b.exists());
         assert_eq!(std::fs::read_to_string(c).unwrap(), "a");
+    }
+
+    #[tokio::test]
+    async fn test_rename_preserves_percent_encoded_names() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let from = create_file(tmp_dir.path(), "from%20");
+        let to = tmp_dir.path().join("to%2F");
+        let store = MountFileStorageBackend::try_new().unwrap();
+
+        store
+            .rename_opts(
+                &ObjectStorePath::from_absolute_path(&from).unwrap(),
+                &ObjectStorePath::from_absolute_path(&to).unwrap(),
+                RenameOptions {
+                    target_mode: RenameTargetMode::Create,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(!from.exists());
+        assert_eq!(std::fs::read_to_string(to).unwrap(), "from%20");
     }
 
     fn create_file(dir: &Path, name: &str) -> PathBuf {

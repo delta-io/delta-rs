@@ -23,6 +23,8 @@ use arrow::datatypes::{DataType as ArrowDataType, SchemaRef};
 use delta_kernel::actions::{Remove, Sidecar};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
+use delta_kernel::history_manager::error::{LogHistoryError, NearestTimestamp};
+use delta_kernel::history_manager::{HistoryCommitType, get_earliest_commit, latest_version_as_of};
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::derive_macro_utils::ToDataType;
@@ -303,20 +305,19 @@ impl Snapshot {
             inner: snapshot,
             materialized_files: None,
         });
-        if snapshot.version() as u64 == current_version {
-            // `target_version` was `None`, but there were no new commits.
-            // We may still need to pick up a checkpoint written for the current version.
-            self.refresh_same_version_checkpoint_if_needed(engine, current_version)
-                .await
-        } else {
-            match self.materialized_files() {
-                Some(materialized_files) => {
-                    snapshot
-                        .materialize_files_with_engine(engine, Some(materialized_files))
-                        .await
-                }
-                None => Ok(snapshot),
+        // The kernel adopts late checkpoints, so compare checkpoints too.
+        if snapshot.version() == current_version
+            && snapshot.checkpoint_version() == self.checkpoint_version()
+        {
+            return Ok(self);
+        }
+        match self.materialized_files() {
+            Some(materialized_files) => {
+                snapshot
+                    .materialize_files_with_engine(engine, Some(materialized_files))
+                    .await
             }
+            None => Ok(snapshot),
         }
     }
 
@@ -1087,6 +1088,50 @@ impl Snapshot {
                 .await
                 .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
         Ok(metadata)
+    }
+
+    /// The latest version committed at or before `timestamp` (milliseconds since the Unix epoch).
+    ///
+    /// Commits made while in-commit timestamps are enabled are compared by their
+    /// `inCommitTimestamp`, earlier commits by the modification time of their log file. A
+    /// timestamp before the earliest available commit resolves to that commit.
+    pub(crate) async fn version_at_timestamp(
+        &self,
+        log_store: &dyn LogStore,
+        timestamp: i64,
+    ) -> DeltaResult<Version> {
+        let engine = log_store.engine(None);
+        let inner = self.inner.clone();
+        let version = spawn_blocking_with_span(move || {
+            match latest_version_as_of(
+                &inner,
+                engine.as_ref(),
+                timestamp,
+                HistoryCommitType::Published,
+            ) {
+                Ok(commit) => Ok(commit.version),
+                Err(delta_kernel::Error::LogHistory(err))
+                    if matches!(
+                        *err,
+                        LogHistoryError::TimestampOutOfRange {
+                            nearest_timestamp: NearestTimestamp::Earliest(_),
+                            ..
+                        }
+                    ) =>
+                {
+                    get_earliest_commit(
+                        engine.as_ref(),
+                        &inner.log_segment().log_root,
+                        None,
+                        HistoryCommitType::Published,
+                    )
+                }
+                Err(err) => Err(err),
+            }
+        })
+        .await
+        .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
+        Ok(version)
     }
 }
 

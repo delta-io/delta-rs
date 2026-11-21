@@ -62,13 +62,14 @@ SUPPORTED_WRITER_FEATURES = {
     "appendOnly",
     "invariants",
     "timestampNtz",
+    "v2Checkpoint",
     "variantType",
     "variantType-preview",
 }
 
 MAX_SUPPORTED_READER_VERSION = 3
 NOT_SUPPORTED_READER_VERSION = -1
-SUPPORTED_READER_FEATURES = {"timestampNtz", "variantType", "variantType-preview"}
+SUPPORTED_READER_FEATURES = {"timestampNtz", "v2Checkpoint", "variantType", "variantType-preview"}
 
 FSCK_METRICS_FILES_REMOVED_LABEL = "files_removed"
 
@@ -897,6 +898,7 @@ class DeltaTable:
     ) -> dict[str, Any]:
         """`UPDATE` records in the Delta Table that matches an optional predicate. Either updates or new_values needs
         to be passed for it to execute.
+        If a datetime object without a timezone is passed in `new_values`, the UTC timezone will be assumed.
 
         Args:
             updates: a mapping of column name to update SQL expression.
@@ -964,6 +966,8 @@ class DeltaTable:
                 elif isinstance(value, str):
                     value = "'" + value.replace("'", "''") + "'"
                 elif isinstance(value, datetime):
+                    if value.tzinfo is None:
+                        value = value.replace(tzinfo=timezone.utc)
                     value = str(
                         int(value.timestamp() * 1000 * 1000)
                     )  # convert to microseconds
@@ -1224,7 +1228,14 @@ class DeltaTable:
                     "but these are not yet supported by the deltalake reader."
                 )
 
-        if (
+        # minReaderVersion 2 tables carry column mapping without a
+        # reader_features list, so the feature check alone misses them and the
+        # scanner reads logical column names against physical parquet columns,
+        # returning all nulls. Check the table configuration directly.
+        column_mapping_mode = self.metadata().configuration.get(
+            "delta.columnMapping.mode", "none"
+        )
+        if column_mapping_mode not in ("none",) or (
             table_protocol.reader_features
             and "columnMapping" in table_protocol.reader_features
         ):

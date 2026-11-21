@@ -17,7 +17,9 @@ use datafusion::prelude::SessionContext;
 use deltalake_core::delta_datafusion::DeltaSessionContext;
 use deltalake_core::ensure_table_uri;
 use deltalake_core::errors::DeltaTableError;
-use deltalake_core::kernel::transaction::{CommitBuilder, CommitProperties, TransactionError};
+use deltalake_core::kernel::transaction::{
+    CommitBuilder, CommitConflictError, CommitProperties, TransactionError,
+};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::{
     CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef, ObjectStoreRef, get_actions,
@@ -649,6 +651,46 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
+async fn test_optimize_preserves_int96_timestamps_outside_nanosecond_range()
+-> Result<(), Box<dyn Error>> {
+    let tmp_dir = tempfile::tempdir()?;
+    fs_extra::dir::copy(
+        "../test/tests/data/table_with_edge_timestamps",
+        tmp_dir.path(),
+        &Default::default(),
+    )?;
+    let table_dir = tmp_dir.path().join("table_with_edge_timestamps");
+    let table_url = url::Url::from_directory_path(table_dir.canonicalize()?).unwrap();
+    let table = open_table(table_url).await?;
+
+    let (table, metrics) = table.optimize().await?;
+    assert_eq!(metrics.num_files_added, 1);
+
+    let ctx: SessionContext = DeltaSessionContext::default().into();
+    table.update_datafusion_session(&ctx.state())?;
+    ctx.register_table("demo", table.table_provider().await?)?;
+    let batches = ctx
+        .sql("SELECT \"BIG_DATE\", \"SOME_VALUE\" FROM demo")
+        .await?
+        .collect()
+        .await?;
+
+    datafusion::assert_batches_sorted_eq!(
+        [
+            "+----------------------+------------+",
+            "| BIG_DATE             | SOME_VALUE |",
+            "+----------------------+------------+",
+            "| 9999-12-30T00:00:00Z | 2          |",
+            "| 9999-12-31T00:00:00Z | 1          |",
+            "+----------------------+------------+",
+        ],
+        &batches
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_write_default_writer_properties_include_delta_rs_created_by()
 -> Result<(), Box<dyn Error>> {
     let context = setup_test(false).await?;
@@ -1197,6 +1239,71 @@ async fn test_no_conflict_for_remove_actions_in_other_partition() -> Result<(), 
     dt.update_state().await.unwrap();
     assert_eq!(dt.version().unwrap(), version + 2);
 
+    Ok(())
+}
+
+#[tokio::test]
+/// Validate that optimize with multiple commits fails when files of a later commit are removed
+async fn test_conflict_for_remove_actions_with_commit_interval() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    for partition in ["2022-05-22", "2022-05-23"] {
+        for _i in 0..2 {
+            write(
+                &mut writer,
+                &mut dt,
+                tuples_to_batch(vec![(1, 2), (1, 3), (1, 4)], partition)?,
+            )
+            .await?;
+        }
+    }
+
+    let version = dt.version().unwrap();
+
+    let df_context: SessionContext = DeltaSessionContext::default().into();
+
+    let plan = create_merge_plan(
+        &dt.log_store(),
+        OptimizeType::Compact,
+        dt.snapshot()?.snapshot(),
+        &[],
+        None,
+        WriterProperties::builder().build(),
+        df_context.state(),
+    )
+    .await?;
+
+    let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
+    let table_url = ensure_table_uri(uri).unwrap();
+    let other_dt = deltalake_core::open_table(table_url).await?;
+    other_dt
+        .delete()
+        .with_predicate("date = '2022-05-23'")
+        .await?;
+
+    // whichever partition commits first, it must see the concurrent delete
+    let result = plan
+        .execute(
+            dt.log_store(),
+            dt.snapshot()?.snapshot(),
+            1,
+            Some(Duration::from_secs(0)),
+            CommitProperties::default(),
+            Uuid::new_v4(),
+            None,
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(DeltaTableError::Transaction {
+            source: TransactionError::CommitConflict(CommitConflictError::ConcurrentDeleteRead)
+        })
+    ));
+    dt.update_state().await?;
+    assert_eq!(dt.version().unwrap(), version + 1);
     Ok(())
 }
 

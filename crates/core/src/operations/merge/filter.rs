@@ -404,7 +404,7 @@ pub(crate) fn filter_from_placeholder_values(
         .iter()
         .map(|f| f.name().to_owned())
         .collect_vec();
-    let expr = (0..items.num_rows())
+    let terms = (0..items.num_rows())
         .map(|i| {
             let replacements = placeholder_names
                 .iter()
@@ -416,10 +416,31 @@ pub(crate) fn filter_from_placeholder_values(
                 .try_collect::<_, _, DeltaTableError>()?;
             Ok(replace_placeholders(filter.clone(), &replacements))
         })
-        .collect::<DeltaResult<Vec<_>>>()?
-        .into_iter()
-        .reduce(Expr::or);
-    Ok(expr)
+        .collect::<DeltaResult<Vec<_>>>()?;
+    Ok(disjunction(terms))
+}
+
+/// Disjunctions up to this many terms keep the left-deep shape a hand-written chain has.
+const BALANCED_DISJUNCTION_THRESHOLD: usize = 256;
+
+/// Combines `terms` with `OR`, pairwise past [`BALANCED_DISJUNCTION_THRESHOLD`] so tree depth is
+/// O(log n): a left-deep tree of thousands of terms overflows the stack when walked.
+fn disjunction(mut terms: Vec<Expr>) -> Option<Expr> {
+    if terms.len() <= BALANCED_DISJUNCTION_THRESHOLD {
+        return terms.into_iter().reduce(Expr::or);
+    }
+    while terms.len() > 1 {
+        let mut next = Vec::with_capacity(terms.len().div_ceil(2));
+        let mut iter = terms.into_iter();
+        while let Some(a) = iter.next() {
+            next.push(match iter.next() {
+                Some(b) => a.or(b),
+                None => a,
+            });
+        }
+        terms = next;
+    }
+    terms.pop()
 }
 
 /// Default additional buffer of batches in flight between a streaming source and the aggregation of its
