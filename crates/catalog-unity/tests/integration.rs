@@ -198,9 +198,15 @@ async fn read_table_on_local_file_system() {
     server
         .register_table("partitioned", TestTables::Delta0_8_0Partitioned)
         .await;
+    server.register_table("simple", TestTables::Simple).await;
 
     // The server gives no credentials for a local table.
     let table = server.load_table("partitioned").await;
     assert_eq!(table.version(), Some(0));
     assert_eq!(table.get_file_uris().unwrap().count(), 6);
+
+    // This table has five commits, which the local file system lists in no fixed order.
+    let table = server.load_table("simple").await;
+    assert_eq!(table.version(), Some(4));
+    assert_eq!(table.get_file_uris().unwrap().count(), 5);
 }
