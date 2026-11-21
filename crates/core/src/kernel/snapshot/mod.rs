@@ -305,20 +305,19 @@ impl Snapshot {
             inner: snapshot,
             materialized_files: None,
         });
-        if snapshot.version() as u64 == current_version {
-            // `target_version` was `None`, but there were no new commits.
-            // We may still need to pick up a checkpoint written for the current version.
-            self.refresh_same_version_checkpoint_if_needed(engine, current_version)
-                .await
-        } else {
-            match self.materialized_files() {
-                Some(materialized_files) => {
-                    snapshot
-                        .materialize_files_with_engine(engine, Some(materialized_files))
-                        .await
-                }
-                None => Ok(snapshot),
+        // The kernel adopts late checkpoints, so compare checkpoints too.
+        if snapshot.version() == current_version
+            && snapshot.checkpoint_version() == self.checkpoint_version()
+        {
+            return Ok(self);
+        }
+        match self.materialized_files() {
+            Some(materialized_files) => {
+                snapshot
+                    .materialize_files_with_engine(engine, Some(materialized_files))
+                    .await
             }
+            None => Ok(snapshot),
         }
     }
 
