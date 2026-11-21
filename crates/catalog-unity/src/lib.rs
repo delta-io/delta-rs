@@ -13,8 +13,8 @@ use deltalake_core::logstore::{
     object_store::RetryConfig,
 };
 use futures::TryFutureExt as _;
-use reqwest::Url;
 use reqwest::header::{AUTHORIZATION, HeaderValue, InvalidHeaderValue};
+use reqwest::{StatusCode, Url};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
@@ -29,7 +29,7 @@ use crate::credential::{
 };
 use crate::models::{
     ErrorResponse, GetSchemaResponse, GetTableResponse, ListCatalogsResponse, ListSchemasResponse,
-    ListTableSummariesResponse, Table, TableTempCredentialsResponse, TableType,
+    ListTableSummariesResponse, Table, TableSummary, TableTempCredentialsResponse, TableType,
     TemporaryTableCredentialsRequest, TokenErrorResponse,
 };
 use crate::sorted_listing::SortedListingStore;
@@ -838,6 +838,9 @@ impl UnityCatalog {
     ///   USE_CATALOG privilege on the parent catalog.
     ///
     /// There is no guarantee of a specific ordering of the elements in the array.
+    ///
+    /// Unity Catalog OSS has no table summaries. For such a server, the summaries come from the
+    /// list of the tables of one schema, and `schema_name_pattern` must be the name of that schema.
     #[tracing::instrument(skip_all)]
     pub async fn list_table_summaries<S>(
         &self,
@@ -852,19 +855,99 @@ impl UnityCatalog {
             "Table Summary: {}",
             self.catalog_url()
         );
+        let catalog_name = catalog_name.into();
+        let schema_name_pattern = schema_name_pattern.into();
         let token = self.get_credential().await?;
         let resp = self
             .client
             .get(format!("{}/table-summaries", self.catalog_url()))
             .query(&[
-                ("catalog_name", catalog_name.into()),
-                ("schema_name_pattern", schema_name_pattern.into()),
+                ("catalog_name", &catalog_name),
+                ("schema_name_pattern", &schema_name_pattern),
             ])
             .header(AUTHORIZATION, token)
             .send()
             .await?;
 
+        // A server without table summaries answers 404, and so does a server that does not have
+        // the catalog. The list of tables gives the summaries or the error of the catalog.
+        if resp.status() == StatusCode::NOT_FOUND {
+            return self
+                .table_summaries_from_tables(catalog_name, schema_name_pattern)
+                .await;
+        }
+
         Ok(resp.json().await?)
+    }
+
+    /// Makes the table summaries of one schema from the list of its tables.
+    async fn table_summaries_from_tables(
+        &self,
+        catalog_name: String,
+        schema_name: String,
+    ) -> Result<ListTableSummariesResponse, UnityCatalogError> {
+        #[derive(serde::Deserialize)]
+        struct TableEntry {
+            name: String,
+            #[serde(default)]
+            table_type: TableType,
+        }
+
+        // `Error` is first: an error response also matches `Success`, which has no required field.
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum ListTablesResponse {
+            Error(ErrorResponse),
+            Success {
+                #[serde(default)]
+                tables: Vec<TableEntry>,
+                next_page_token: Option<String>,
+            },
+        }
+
+        let token = self.get_credential().await?;
+        let mut summaries = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let mut query = vec![
+                ("catalog_name", catalog_name.as_str()),
+                ("schema_name", schema_name.as_str()),
+            ];
+            if let Some(page_token) = &page_token {
+                query.push(("page_token", page_token.as_str()));
+            }
+            let resp = self
+                .client
+                .get(format!("{}/tables", self.catalog_url()))
+                .query(&query)
+                .header(AUTHORIZATION, token.clone())
+                .send()
+                .await?;
+
+            match resp.json().await? {
+                ListTablesResponse::Error(err) => {
+                    return Ok(ListTableSummariesResponse::Error(err));
+                }
+                ListTablesResponse::Success {
+                    tables,
+                    next_page_token,
+                } => {
+                    summaries.extend(tables.into_iter().map(|table| TableSummary {
+                        full_name: format!("{catalog_name}.{schema_name}.{}", table.name),
+                        table_type: table.table_type,
+                    }));
+                    page_token = next_page_token.filter(|token| !token.is_empty());
+                }
+            }
+            if page_token.is_none() {
+                break;
+            }
+        }
+
+        Ok(ListTableSummariesResponse::Success {
+            tables: summaries,
+            next_page_token: None,
+        })
     }
 
     /// Gets a table from the metastore for a specific catalog and schema.
