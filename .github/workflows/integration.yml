@@ -19,7 +19,8 @@ env:
     --package deltalake-gcp
     --package deltalake-hdfs
     --package deltalake-lakefs
-    --features deltalake-aws/integration_test,deltalake-azure/integration_test,deltalake-gcp/integration_test,deltalake-hdfs/integration_test,deltalake-lakefs/integration_test_lakefs
+    --package deltalake-catalog-unity
+    --features deltalake-aws/integration_test,deltalake-azure/integration_test,deltalake-gcp/integration_test,deltalake-hdfs/integration_test,deltalake-lakefs/integration_test_lakefs,deltalake-catalog-unity/integration_test_unity
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
 
@@ -172,6 +173,36 @@ jobs:
           cargo llvm-cov nextest --cargo-profile=ci \
             $INTEGRATION_TEST_BUILD_ARGS \
             --filterset 'package(deltalake-lakefs)' \
+            --codecov \
+            --output-path codecov.json
+
+      - uses: ./.github/actions/upload-coverage
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  unity:
+    name: Integration Tests (Unity Catalog)
+    runs-on: ubuntu-latest
+
+    steps:
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: ./.github/actions/setup-builder
+      - uses: ./.github/actions/setup-coverage
+
+      - name: Install uv
+        # <https://github.com/astral-sh/setup-uv/releases/tag/v8.0.0>
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57
+
+      # The tests start uc-server. Keep the version the same as in python/pyproject.toml.
+      - name: Install uc-server
+        run: uv tool install unitycatalog-rs-server==0.0.2
+
+      - name: Run tests
+        run: |
+          cargo llvm-cov nextest --cargo-profile=ci \
+            $INTEGRATION_TEST_BUILD_ARGS \
+            --filterset 'package(deltalake-catalog-unity)' \
             --codecov \
             --output-path codecov.json
 
