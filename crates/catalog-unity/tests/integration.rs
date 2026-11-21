@@ -143,6 +143,20 @@ async fn unity_client() {
     let catalog_names: Vec<_> = catalogs.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(catalog_names, [CATALOG]);
 
+    let ListSchemasResponse::Success { schemas } = client.list_schemas(CATALOG).await.unwrap()
+    else {
+        panic!("expected the schemas");
+    };
+    let schema_names: Vec<_> = schemas.iter().map(|s| s.full_name.as_str()).collect();
+    assert_eq!(schema_names, ["unity.default"]);
+
+    let GetSchemaResponse::Success(schema) = client.get_schema(CATALOG, SCHEMA).await.unwrap()
+    else {
+        panic!("expected the schema");
+    };
+    assert_eq!(schema.name, SCHEMA);
+    assert_eq!(schema.catalog_name, CATALOG);
+
     let GetTableResponse::Success(table) = client
         .get_table(CATALOG, SCHEMA, "partitioned")
         .await
