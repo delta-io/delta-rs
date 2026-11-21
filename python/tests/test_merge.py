@@ -3845,3 +3845,93 @@ def test_merge_insert_predicate_skips_rejected_rows_4784(
 
     result = DeltaTable(tmp_path).to_pyarrow_table().sort_by("id").to_pylist()
     assert result == [{"id": 1, "v": 10.0}, {"id": 2, "v": 20.0}]
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_cdf_unmatched_delete_marker_with_insert_5097(
+    tmp_path: pathlib.Path, streaming: bool
+):
+    # Regression test for https://github.com/delta-io/delta-rs/issues/5097
+    import pyarrow as pa
+
+    schema = pa.schema(
+        [
+            pa.field("item_id", pa.int64(), nullable=False),
+            pa.field("store_id", pa.int64(), nullable=False),
+            pa.field("name", pa.string(), nullable=True),
+            pa.field("__version", pa.int64(), nullable=False),
+            pa.field("__deleted", pa.int64(), nullable=True),
+        ]
+    )
+    target = pa.table(
+        {
+            "item_id": pa.array([1, 2], type=pa.int64()),
+            "store_id": pa.array([100, 100], type=pa.int64()),
+            "name": ["kept-a", "kept-b"],
+            "__version": pa.array([1, 1], type=pa.int64()),
+            "__deleted": pa.array([None, None], type=pa.int64()),
+        }
+    ).cast(schema)
+    # item 999 is a delete marker for a key the target never stored;
+    # item 1000 is a new row to insert.
+    source = pa.table(
+        {
+            "item_id": pa.array([999, 1000], type=pa.int64()),
+            "store_id": pa.array([-1, 100], type=pa.int64()),
+            "name": pa.array([None, "new"], type=pa.string()),
+            "__version": pa.array([2, 2], type=pa.int64()),
+            "__deleted": pa.array([1, None], type=pa.int64()),
+        }
+    ).cast(schema)
+
+    write_deltalake(
+        tmp_path,
+        target,
+        configuration={"delta.enableChangeDataFeed": "true"},
+    )
+
+    (
+        DeltaTable(tmp_path)
+        .merge(
+            source=source,
+            predicate="target.item_id = source.item_id",
+            source_alias="source",
+            target_alias="target",
+            streamed_exec=streaming,
+        )
+        .when_matched_delete(predicate="source.__deleted IS NOT NULL")
+        .when_matched_update_all()
+        .when_not_matched_insert_all(predicate="source.__deleted IS NULL")
+        .execute()
+    )
+
+    result = DeltaTable(tmp_path).to_pyarrow_table().sort_by("item_id").to_pylist()
+    assert result == [
+        {
+            "item_id": 1,
+            "store_id": 100,
+            "name": "kept-a",
+            "__version": 1,
+            "__deleted": None,
+        },
+        {
+            "item_id": 2,
+            "store_id": 100,
+            "name": "kept-b",
+            "__version": 1,
+            "__deleted": None,
+        },
+        {
+            "item_id": 1000,
+            "store_id": 100,
+            "name": "new",
+            "__version": 2,
+            "__deleted": None,
+        },
+    ]
+
+    cdf = pa.table(DeltaTable(tmp_path).load_cdf(1, 1).read_all()).select(
+        ["item_id", "_change_type"]
+    )
+    assert cdf.to_pylist() == [{"item_id": 1000, "_change_type": "insert"}]
