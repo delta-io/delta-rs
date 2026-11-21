@@ -208,6 +208,8 @@ pub mod tests {
         ArrayType, ColumnMetadataKey, DataType, MapType, MetadataValue, StructField, StructType,
     };
     use crate::writer::test_utils::create_initialized_table;
+    use delta_kernel::table_features::TableFeature;
+    use rstest::rstest;
     use std::collections::HashMap;
     use tempfile::tempdir;
 
@@ -264,6 +266,18 @@ pub mod tests {
                 "delta.columnMapping.mode".to_string(),
                 mode.to_string(),
             )]))
+            .await
+    }
+
+    async fn table_with(configuration: &[(&str, &str)]) -> crate::DeltaResult<DeltaTable> {
+        DeltaTable::new_in_memory()
+            .create()
+            .with_columns([StructField::nullable("id", DataType::INTEGER)])
+            .with_configuration(
+                configuration
+                    .iter()
+                    .map(|(key, value)| (*key, Some(*value))),
+            )
             .await
     }
 
@@ -325,8 +339,6 @@ pub mod tests {
         let table = set_column_mapping_mode(table, "name").await?;
 
         let snapshot = table.snapshot()?;
-        assert_eq!(snapshot.protocol().min_reader_version(), 2);
-        assert_eq!(snapshot.protocol().min_writer_version(), 5);
         let configuration = snapshot.metadata().configuration();
         assert_eq!(
             configuration
@@ -366,40 +378,60 @@ pub mod tests {
         ids.sort_unstable();
         assert_eq!(ids, (1..=8).collect::<Vec<i64>>());
 
+        // The current mode is accepted and leaves the schema as it is.
+        let unchanged = set_column_mapping_mode(table.clone(), "name").await?;
+        assert_eq!(unchanged.snapshot()?.schema(), snapshot.schema());
+
+        Ok(())
+    }
+
+    /// Enabling column mapping upgrades each kind of protocol to one that supports it.
+    #[rstest]
+    #[case::legacy(&[], (2, 5), false, false)]
+    #[case::table_features(&[("delta.enableDeletionVectors", "true")], (3, 7), true, true)]
+    #[case::writer_features(&[("delta.minWriterVersion", "7")], (2, 7), false, true)]
+    #[tokio::test]
+    async fn test_enable_column_mapping_upgrades_protocol(
+        #[case] configuration: &[(&str, &str)],
+        #[case] versions: (i32, i32),
+        #[case] reader_feature: bool,
+        #[case] writer_feature: bool,
+    ) -> crate::DeltaResult<()> {
+        let table = set_column_mapping_mode(table_with(configuration).await?, "name").await?;
+
+        let snapshot = table.snapshot()?;
+        let protocol = snapshot.protocol();
+        let has_feature = |features: Option<&[TableFeature]>| {
+            features.is_some_and(|features| features.contains(&TableFeature::ColumnMapping))
+        };
+        assert_eq!(
+            (protocol.min_reader_version(), protocol.min_writer_version()),
+            versions
+        );
+        assert_eq!(has_feature(protocol.reader_features()), reader_feature);
+        assert_eq!(has_feature(protocol.writer_features()), writer_feature);
+
         Ok(())
     }
 
     /// An existing table can only change the column mapping mode from `none` to `name`.
+    #[rstest]
+    #[case::none_to_id("none", "id", "from None to Id")]
+    #[case::none_to_unknown("none", "physical", "Invalid delta.columnMapping.mode")]
+    #[case::name_to_none("name", "none", "from Name to None")]
+    #[case::name_to_id("name", "id", "from Name to Id")]
     #[tokio::test]
-    async fn test_set_column_mapping_mode_rejects_unsupported_changes() -> crate::DeltaResult<()> {
-        let unmapped = DeltaTable::new_in_memory()
-            .create()
-            .with_columns([StructField::nullable("id", DataType::INTEGER)])
-            .await?;
+    async fn test_set_column_mapping_mode_rejects_unsupported_changes(
+        #[case] current: &str,
+        #[case] requested: &str,
+        #[case] message: &str,
+    ) -> crate::DeltaResult<()> {
+        let table = table_with(&[("delta.columnMapping.mode", current)]).await?;
 
-        let err = set_column_mapping_mode(unmapped.clone(), "id")
+        let err = set_column_mapping_mode(table, requested)
             .await
-            .expect_err("none to id must be rejected");
-        assert!(err.to_string().contains("from None to Id"), "{err}");
-        let err = set_column_mapping_mode(unmapped.clone(), "physical")
-            .await
-            .expect_err("an unknown mode must be rejected");
-        assert!(
-            err.to_string().contains("Invalid delta.columnMapping.mode"),
-            "{err}"
-        );
-
-        let mapped = set_column_mapping_mode(unmapped, "name").await?;
-        for (mode, change) in [("none", "from Name to None"), ("id", "from Name to Id")] {
-            let err = set_column_mapping_mode(mapped.clone(), mode)
-                .await
-                .expect_err("a change away from name must be rejected");
-            assert!(err.to_string().contains(change), "{err}");
-        }
-
-        // The current mode is accepted and leaves the schema as it is.
-        let unchanged = set_column_mapping_mode(mapped.clone(), "name").await?;
-        assert_eq!(unchanged.snapshot()?.schema(), mapped.snapshot()?.schema());
+            .expect_err("the change must be rejected");
+        assert!(err.to_string().contains(message), "{err}");
 
         Ok(())
     }

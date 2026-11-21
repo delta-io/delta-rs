@@ -354,19 +354,27 @@ async fn column_mapping_guardrails_metadata_operations() -> TestResult {
 }
 
 /// Enabling column mapping on a table with data rewrites no data file. The rows written before
-/// the change stay readable, and later writes land in the same table.
+/// the change stay readable, and each kind of later commit gives the correct rows.
 #[cfg(feature = "datafusion")]
+#[rstest::rstest]
+#[case::append("append", &["1 a Amsterdam", "2 b Berlin", "3 c Cairo"])]
+#[case::update("update", &["2 b Berlin", "10 a Amsterdam"])]
+#[case::delete("delete", &["2 b Berlin"])]
+#[case::checkpoint("checkpoint", &["1 a Amsterdam", "2 b Berlin"])]
 #[tokio::test]
-async fn column_mapping_enable_on_existing_table_roundtrip() -> TestResult {
+async fn column_mapping_enable_on_existing_table_roundtrip(
+    #[case] operation: &str,
+    #[case] expected: &[&str],
+) -> TestResult {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use arrow_array::cast::AsArray;
     use arrow_array::{Int32Array, RecordBatch, StringArray, StructArray};
     use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema};
     use datafusion::prelude::SessionContext;
-    use deltalake_core::kernel::StructType;
 
-    fn batch(id: i32, part: &str, city: &str) -> RecordBatch {
+    fn batch(ids: &[i32], parts: &[&str], cities: &[&str]) -> RecordBatch {
         let info_fields = Fields::from(vec![Field::new("city", ArrowDataType::Utf8, true)]);
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", ArrowDataType::Int32, true),
@@ -376,11 +384,11 @@ async fn column_mapping_enable_on_existing_table_roundtrip() -> TestResult {
         RecordBatch::try_new(
             schema,
             vec![
-                Arc::new(Int32Array::from(vec![id])),
-                Arc::new(StringArray::from(vec![part])),
+                Arc::new(Int32Array::from(ids.to_vec())),
+                Arc::new(StringArray::from(parts.to_vec())),
                 Arc::new(StructArray::new(
                     info_fields,
-                    vec![Arc::new(StringArray::from(vec![city]))],
+                    vec![Arc::new(StringArray::from(cities.to_vec()))],
                     None,
                 )),
             ],
@@ -388,10 +396,18 @@ async fn column_mapping_enable_on_existing_table_roundtrip() -> TestResult {
         .unwrap()
     }
 
-    async fn query(table: &DeltaTable, sql: &str) -> TestResult<Vec<RecordBatch>> {
+    /// Returns each row that matches `filter` as "id part city", in the order of `id`.
+    async fn rows(table: &DeltaTable, filter: &str) -> TestResult<Vec<String>> {
         let ctx = SessionContext::new();
         ctx.register_table("t", table.table_provider().await?)?;
-        Ok(ctx.sql(sql).await?.collect().await?)
+        let row = "arrow_cast(concat(id, ' ', part, ' ', info['city']), 'Utf8')";
+        let sql = format!("SELECT {row} FROM t WHERE {filter} ORDER BY id");
+        let batches = ctx.sql(&sql).await?.collect().await?;
+        Ok(batches
+            .iter()
+            .flat_map(|batch| batch.column(0).as_string::<i32>().iter().flatten())
+            .map(str::to_string)
+            .collect())
     }
 
     let temp_dir = tempfile::tempdir()?;
@@ -399,18 +415,9 @@ async fn column_mapping_enable_on_existing_table_roundtrip() -> TestResult {
     let table_url = Url::from_directory_path(&table_path).unwrap();
     let table = deltalake_core::DeltaTableBuilder::from_url(table_url.clone())?
         .build()?
-        .create()
-        .with_columns([
-            StructField::nullable("id", DataType::INTEGER),
-            StructField::nullable("part", DataType::STRING),
-            StructField::nullable(
-                "info",
-                StructType::try_new([StructField::nullable("city", DataType::STRING)])?,
-            ),
-        ])
+        .write(vec![batch(&[1, 2], &["a", "b"], &["Amsterdam", "Berlin"])])
         .with_partition_columns(["part"])
         .await?;
-    let table = table.write(vec![batch(1, "a", "Amsterdam")]).await?;
     let before = collect_data_files(&table_path)?;
 
     let table = table
@@ -421,36 +428,29 @@ async fn column_mapping_enable_on_existing_table_roundtrip() -> TestResult {
         )]))
         .await?;
     assert_eq!(before, collect_data_files(&table_path)?);
-
-    // The row written before the change is found through its partition value, its statistics,
+    // A row written before the change is found through its partition value, its statistics,
     // and its nested field.
-    let select = "SELECT id, part, info['city'] AS city FROM t";
-    let batches = query(&table, &format!("{select} WHERE part = 'a' AND id = 1")).await?;
-    assert_batches_sorted_eq! {
-        [
-            "+----+------+-----------+",
-            "| id | part | city      |",
-            "+----+------+-----------+",
-            "| 1  | a    | Amsterdam |",
-            "+----+------+-----------+",
-        ],
-        &batches
+    assert_eq!(
+        rows(&table, "part = 'a' AND id = 1").await?,
+        ["1 a Amsterdam"]
+    );
+
+    let table = match operation {
+        "append" => table.write(vec![batch(&[3], &["c"], &["Cairo"])]).await?,
+        "update" => {
+            let update = table.update().with_predicate("id = 1");
+            update.with_update("id", "10").await?.0
+        }
+        "delete" => table.delete().with_predicate("id = 1").await?.0,
+        "checkpoint" => {
+            deltalake_core::checkpoints::create_checkpoint(&table).await?;
+            table
+        }
+        _ => unreachable!(),
     };
-
-    let table = table.write(vec![batch(2, "b", "Berlin")]).await?;
-    let expected = [
-        "+----+------+-----------+",
-        "| id | part | city      |",
-        "+----+------+-----------+",
-        "| 1  | a    | Amsterdam |",
-        "| 2  | b    | Berlin    |",
-        "+----+------+-----------+",
-    ];
-    assert_batches_sorted_eq!(expected, &query(&table, select).await?);
-
+    assert_eq!(rows(&table, "true").await?, expected);
     // A table loaded from the log reads the same rows.
-    let reopened = open_table(table_url).await?;
-    assert_batches_sorted_eq!(expected, &query(&reopened, select).await?);
+    assert_eq!(rows(&open_table(table_url).await?, "true").await?, expected);
 
     Ok(())
 }
