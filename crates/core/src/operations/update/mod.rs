@@ -307,11 +307,10 @@ async fn execute(
     let schema = scan_config
         .table_schema(snapshot.table_configuration())?
         .to_dfschema_ref()?;
-    let table_schema = snapshot.schema();
     let updates = updates
         .into_iter()
         .map(|(key, expr)| {
-            let key = resolve_assignment_key(&key, &schema, &table_schema, session)?;
+            let key = resolve_assignment_key(&key, &schema, session)?;
             Ok((key, expr.resolve(session, schema.clone())?))
         })
         .collect::<DeltaResult<Vec<_>>>()?;

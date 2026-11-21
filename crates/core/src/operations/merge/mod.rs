@@ -610,14 +610,13 @@ impl MergeOperation {
         config: MergeOperationConfig,
         schema: &DFSchema,
         key_schema: &DFSchema,
-        table_schema: &StructType,
         state: &dyn Session,
     ) -> DeltaResult<MergeOperation> {
         let operations = config
             .operations
             .into_iter()
             .map(|(key, expression)| {
-                let key = resolve_assignment_key(&key, key_schema, table_schema, state)?;
+                let key = resolve_assignment_key(&key, key_schema, state)?;
                 Ok((key, into_expr(expression, schema, state)?))
             })
             .collect::<DeltaResult<Vec<_>>>()?;
@@ -1100,7 +1099,7 @@ async fn execute(
     // An assignment key names a target column or a struct field of one. With schema evolution it
     // can also name a column or a struct field that only the source has. The new table schema
     // cannot be used here: it is built below from the resolved keys.
-    let (key_schema, key_table_schema) = {
+    let key_schema = {
         let table_schema = snapshot.input_schema();
         let mut fields = table_schema.fields().to_vec();
         if merge_schema {
@@ -1119,21 +1118,15 @@ async fn execute(
             fields.extend(source_schema.fields().iter().filter(source_only).cloned());
         }
         let schema = arrow_schema::Schema::new(fields);
-        let key_table_schema = match merge_schema {
-            true => Arc::new((&schema).try_into_kernel()?),
-            false => snapshot.schema(),
-        };
-        let key_schema = match &target_alias {
+        match &target_alias {
             // `bare` keeps the alias as written. A `&str` is parsed: lowercased, split on dots.
             Some(alias) => {
                 DFSchema::try_from_qualified_schema(TableReference::bare(alias.as_str()), &schema)?
             }
             None => DFSchema::try_from(schema)?,
-        };
-        (key_schema, key_table_schema)
+        }
     };
-    let into_operation =
-        |op| MergeOperation::try_from(op, &join_schema_df, &key_schema, &key_table_schema, &state);
+    let into_operation = |op| MergeOperation::try_from(op, &join_schema_df, &key_schema, &state);
 
     let match_operations: Vec<MergeOperation> = match_operations
         .into_iter()
@@ -2077,6 +2070,7 @@ mod tests {
     use crate::writer::test_utils::get_delta_schema_non_null_id;
     use crate::writer::test_utils::get_non_null_arrow_schema;
     use crate::writer::test_utils::setup_table_with_configuration;
+    use arrow::array::ArrayRef;
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::DataType as ArrowDataType;
@@ -5390,8 +5384,8 @@ mod tests {
                 "Assignment keys 's' and 't.s.a' set the same field",
             ),
             (vec!["s.a", "t.s.a"], "set the same field"),
-            (vec!["s.c"], "field 'c' not found"),
-            (vec!["a.x"], "intermediate field 'a' is not a struct"),
+            (vec!["s.c"], "'s' has no struct field 'c'"),
+            (vec!["a.x"], "'a' has no struct field 'x'"),
             (vec!["src.x"], "No field named src.x"),
             (vec!["target.s.a"], "No field named target.s"),
         ] {
@@ -5785,6 +5779,63 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    /// With schema evolution, a source column that no clause assigns stays out of the table. Its
+    /// name or its type can be one that a Delta table does not accept.
+    #[rstest]
+    #[case::name_differs_in_case_only("ID", None)]
+    #[case::type_not_in_delta(
+        "id",
+        Some(Arc::new(arrow::array::DurationSecondArray::from(vec![1, 2, 3])) as ArrayRef)
+    )]
+    #[tokio::test]
+    async fn test_merge_with_schema_merge_ignores_unassigned_source_column(
+        #[case] id_column: &str,
+        #[case] other_column: Option<ArrayRef>,
+    ) {
+        let (table, _) = setup().await;
+        let table_schema = table.snapshot().unwrap().schema();
+
+        let mut columns: Vec<(&str, ArrayRef)> = vec![
+            (
+                id_column,
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+            ),
+            (
+                "value",
+                Arc::new(arrow::array::Int32Array::from(vec![11, 12, 13])),
+            ),
+        ];
+        columns.extend(other_column.map(|column| ("elapsed", column)));
+        let batch = RecordBatch::try_from_iter(columns).unwrap();
+        let source = SessionContext::new().read_batch(batch).unwrap();
+
+        let source_id = Expr::Column(Column::new(Some("source"), id_column));
+        let (table, metrics) = table
+            .merge(source, col("target.id").eq(source_id))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .when_matched_update(|update| update.update("value", col("source.value")))
+            .unwrap()
+            .await
+            .unwrap();
+        assert_eq!(metrics.num_target_rows_updated, 2);
+
+        let expected = [
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 11    | 2021-02-01 |",
+            "| C  | 12    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+        assert_eq!(table.snapshot().unwrap().schema(), table_schema);
     }
 
     #[tokio::test]

@@ -2584,6 +2584,39 @@ def test_merge_added_column_is_null_for_insert_that_does_not_set_it(
     assert result == {"id": [1, 2, 3], "new": [7, None, None]}
 
 
+@pytest.mark.pyarrow
+def test_merge_schema_ignores_source_column_that_no_clause_sets(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {"id": pa.array([1, 2], pa.int64()), "value": pa.array([10, 20], pa.int64())}
+    )
+    write_deltalake(tmp_path, target)
+    dt = DeltaTable(tmp_path)
+    # No clause sets the source columns `ID` and `elapsed`, and a Delta table accepts neither:
+    # `ID` differs from `id` only in case, and Delta has no duration type.
+    source = pa.table(
+        {
+            "ID": pa.array([1], pa.int64()),
+            "value": pa.array([11], pa.int64()),
+            "elapsed": pa.array([5], pa.duration("s")),
+        }
+    )
+
+    dt.merge(
+        source=source,
+        predicate='t.id = src."ID"',
+        source_alias="src",
+        target_alias="t",
+        merge_schema=True,
+    ).when_matched_update({"value": "src.value"}).execute()
+
+    result = dt.to_pyarrow_table().sort_by("id").to_pydict()
+    assert result == {"id": [1, 2], "value": [11, 20]}
+
+
 def test_merge_duplicate_key_error_shows_keys_as_written(
     tmp_path: pathlib.Path, sample_table: Table
 ):
