@@ -74,10 +74,6 @@ def unity_catalog_server(tmp_path_factory) -> Generator[str, None, None]:
 @pytest.mark.pyarrow
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=30, method="thread")
-@pytest.mark.xfail(
-    strict=True,
-    reason="delta-rs needs credentials for a table on the local file system",
-)
 def test_uc_read_deltatable(
     unity_catalog_server: str,
     existing_sample_table: DeltaTable,

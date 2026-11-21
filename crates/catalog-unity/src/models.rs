@@ -521,11 +521,15 @@ impl TemporaryTableCredentials {
         None
     }
 
+    /// Returns the storage options that give access to the table location.
+    ///
+    /// A table on the local file system needs no credentials, so the options are empty.
     pub fn get_credentials(self) -> Option<HashMap<String, String>> {
         self.get_aws_credentials()
             .or(self.get_azure_credentials())
             .or(self.get_gcp_credentials())
             .or(self.get_r2_credentials())
+            .or_else(|| self.url.starts_with("file:").then(HashMap::new))
     }
 }
 
@@ -893,6 +897,23 @@ pub(crate) mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn test_local_table_needs_no_credentials() {
+        let credentials = |body: &str| {
+            let TableTempCredentialsResponse::Success(creds) = serde_json::from_str(body).unwrap()
+            else {
+                panic!("expected Success");
+            };
+            creds.get_credentials()
+        };
+
+        assert_eq!(
+            credentials(r#"{"url":"file:///tmp/t"}"#),
+            Some(HashMap::new())
+        );
+        assert_eq!(credentials(r#"{"url":"s3://bucket/t"}"#), None);
     }
 
     #[test]
