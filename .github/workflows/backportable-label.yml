@@ -1,0 +1,76 @@
+name: backportable-label
+
+# Applies or removes the `backportable` label based on the result recorded by
+# the `backportable` workflow. Runs in the base repository context via
+# `workflow_run`, so it has write access to labels on fork PRs.
+#
+# Security: this workflow never checks out or executes PR code. It only reads
+# the head SHA from the trusted run metadata and a single-word result artifact.
+
+on:
+  workflow_run:
+    workflows: [backportable]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  label:
+    name: Apply backportable label
+    runs-on: ubuntu-slim
+    if: github.event.workflow_run.event == 'pull_request'
+    permissions:
+      actions: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Resolve PR number from head SHA
+        id: pr
+        run: |
+          set -uo pipefail
+          # Fork PRs do not populate workflow_run.pull_requests, so look the PR
+          # up by its head SHA. Only accept an open PR whose head matches exactly.
+          numbers=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/pulls" \
+            --jq ".[] | select(.state == \"open\" and .head.sha == \"${HEAD_SHA}\") | .number")
+          count=$(printf '%s\n' "$numbers" | grep -c . || true)
+          if [ "$count" != "1" ]; then
+            echo "Expected exactly one open PR for ${HEAD_SHA}, found ${count}; nothing to label"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "number=${numbers}" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Download backportable result
+        id: download
+        if: steps.pr.outputs.skip == 'false'
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: backportable-result-${{ steps.pr.outputs.number }}
+          path: backportable-result
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Apply or remove label
+        if: steps.pr.outputs.skip == 'false'
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -uo pipefail
+          # A missing artifact (for example the producer failed before upload)
+          # is treated as not backportable.
+          result="$(cat backportable-result/result 2>/dev/null || echo failure)"
+          if [ "$result" = "success" ]; then
+            echo "PR #${PR_NUMBER} is backportable"
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label backportable
+          else
+            echo "PR #${PR_NUMBER} is not backportable"
+            # Keep the label accurate after new pushes; ignore if it was never set.
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label backportable || true
+          fi
