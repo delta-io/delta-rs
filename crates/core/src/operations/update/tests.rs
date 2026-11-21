@@ -764,8 +764,8 @@ async fn test_update_struct_field_errors() {
         ),
         (vec!["s.inner", "s.inner.x"], "set the same field"),
         (vec!["s.a", "`s`.a"], "set the same field"),
-        (vec!["s.c"], "field 'c' not found"),
-        (vec!["s.a.x"], "intermediate field 'a' is not a struct"),
+        (vec!["s.c"], "'s' has no struct field 'c'"),
+        (vec!["s.a.x"], "'a' has no struct field 'x'"),
         (vec!["t.s.a"], "No field named t.s"),
     ] {
         let mut update = struct_table().await.update();
