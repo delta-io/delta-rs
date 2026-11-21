@@ -19,7 +19,12 @@ from deltalake._internal import (
 )
 from deltalake.query import QueryBuilder
 from deltalake.schema import DataType, Field, Schema, VariantType
-from deltalake.table import DeltaTable, Metadata, TableProperty
+from deltalake.table import (
+    DeltaTable,
+    Metadata,
+    TableProperty,
+    filters_to_sql_predicate,
+)
 from deltalake.transaction import CommitProperties, PostCommitHookProperties
 from deltalake.writer import (
     BloomFilterProperties,
@@ -156,6 +161,7 @@ __all__ = [
     "__version__",
     "convert_to_deltalake",
     "enable_nanosecond_timestamps",
+    "filters_to_sql_predicate",
     "init_tracing",
     "rust_core_version",
     "write_deltalake",
