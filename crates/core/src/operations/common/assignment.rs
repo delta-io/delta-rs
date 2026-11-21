@@ -17,7 +17,6 @@ use datafusion::logical_expr::{
     lit,
 };
 use delta_kernel::expressions::ColumnName;
-use delta_kernel::schema::StructType;
 use deltalake_kernel_executor::query::scan::expr_adapter::relax_schema_nested_nullability;
 
 use super::cast_expr;
@@ -53,7 +52,6 @@ impl AssignmentKey {
 pub(crate) fn resolve_assignment_key(
     key: &DeltaColumn,
     schema: &DFSchema,
-    table_schema: &StructType,
     session: &dyn Session,
 ) -> DeltaResult<AssignmentKey> {
     let expr = parse_column_name(schema, key.name(), session)?;
@@ -64,10 +62,21 @@ pub(crate) fn resolve_assignment_key(
             key.name()
         )));
     };
-    if path.len() > 1 {
-        // The planner checks only the column name. Check here that the names after it are struct
-        // fields: without this, `s.no_such_field` passes, and so does `m.key` on a map column.
-        table_schema.field_at(&path)?;
+    // The planner checks only the column name. Check here that the names after it are struct
+    // fields: without this, `s.no_such_field` passes, and so does `m.key` on a map column.
+    let mut field = schema.field_with_unqualified_name(&path[0])?;
+    for name in &path[1..] {
+        field = match field.data_type() {
+            DataType::Struct(fields) => fields.find(name).map(|(_, nested)| nested),
+            _ => None,
+        }
+        .ok_or_else(|| {
+            DeltaTableError::generic(format!(
+                "Assignment key '{}': '{}' has no struct field '{name}'",
+                key.name(),
+                field.name()
+            ))
+        })?;
     }
     Ok(AssignmentKey::new(key.name(), path))
 }
@@ -370,7 +379,6 @@ pub(crate) mod tests {
     use datafusion::common::Column;
     use datafusion::functions::core::expr_fn::{coalesce, get_field, get_field_path};
     use datafusion::prelude::{SessionContext, col};
-    use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
     use rstest::rstest;
 
     use super::*;
@@ -396,9 +404,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_resolve_assignment_key() {
-        let schema = key_columns();
-        let table_schema: StructType = (&schema).try_into_kernel().unwrap();
-        let key_schema = DFSchema::try_from_qualified_schema("t", &schema).unwrap();
+        let key_schema = DFSchema::try_from_qualified_schema("t", &key_columns()).unwrap();
         let session = create_session().state();
 
         let keys: [(DeltaColumn, &[&str]); 11] = [
@@ -416,7 +422,7 @@ pub(crate) mod tests {
             (Column::from_name("my.col").into(), &["my.col"]),
         ];
         for (key, path) in keys {
-            let resolved = resolve_assignment_key(&key, &key_schema, &table_schema, &session);
+            let resolved = resolve_assignment_key(&key, &key_schema, &session);
             assert_eq!(
                 resolved.unwrap().path(),
                 &ColumnName::new(path.iter().copied()),
@@ -428,7 +434,7 @@ pub(crate) mod tests {
             "value", "other.id", "s.b", "id.a", "my.col", "s['a']", "id + 1",
         ] {
             let key = DeltaColumn::from(key);
-            let resolved = resolve_assignment_key(&key, &key_schema, &table_schema, &session);
+            let resolved = resolve_assignment_key(&key, &key_schema, &session);
             assert!(resolved.is_err(), "{key:?}");
         }
     }
