@@ -84,8 +84,7 @@ markers = [
     "pyarrow: marks tests that require pyarrow",
     "no_pyarrow: marks tests that test deltalake functionality without pyarrow",
     "opentelemetry: marks tests that require opentelemetry",
-    "unitycatalog_databricks: marks tests that require unitycatalog_databricks",
-    "unitycatalog_oss: marks tests that require unitycatalog_oss",
+    "unitycatalog: marks tests that require uc-server (dependency group unitycatalog)",
     "pyspark: marks tests that require pyspark",
     "datafusion: marks tests that require datafusion"
 ]
@@ -115,6 +114,9 @@ dev = [
 opentelemetry = ["opentelemetry-sdk>=1.20.0", "opentelemetry-api>=1.20.0"]
 polars = ["polars==1.44.2"]
 lakefs = ["lakefs==0.8.0"]
+# uc-server, the Unity Catalog server of the tests. Not in the default groups:
+# it has no wheel for Windows on ARM64.
+unitycatalog = ["unitycatalog-rs-server==0.0.2"]
 pyspark = [
     "pyspark==4.2.0",
     "delta-spark",

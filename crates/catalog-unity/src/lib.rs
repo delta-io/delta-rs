@@ -1232,83 +1232,10 @@ impl std::fmt::Debug for UnityCatalog {
 #[cfg(test)]
 mod tests {
     use crate::UnityCatalogBuilder;
-    use crate::client::ClientOptions;
     use crate::client::token::TemporaryToken;
     use crate::credential::TokenCredential;
-    use crate::models::tests::{GET_SCHEMA_RESPONSE, GET_TABLE_RESPONSE, LIST_SCHEMAS_RESPONSE};
-    use crate::models::*;
-    use deltalake_core::DataCatalog;
-    use httpmock::prelude::*;
     use reqwest_middleware::ClientWithMiddleware;
     use std::collections::HashMap;
-
-    #[tokio::test]
-    async fn test_unity_client() {
-        let server = MockServer::start_async().await;
-
-        let options = ClientOptions::builder().allow_http(true).build();
-
-        let client = UnityCatalogBuilder::builder()
-            .workspace_url(server.url(""))
-            .bearer_token("bearer_token")
-            .client_options(options)
-            .build()
-            .build()
-            .unwrap();
-
-        server
-            .mock_async(|when, then| {
-                when.path("/api/2.1/unity-catalog/schemas").method("GET");
-                then.body(LIST_SCHEMAS_RESPONSE);
-            })
-            .await;
-
-        server
-            .mock_async(|when, then| {
-                when.path("/api/2.1/unity-catalog/schemas/catalog_name.schema_name")
-                    .method("GET");
-                then.body(GET_SCHEMA_RESPONSE);
-            })
-            .await;
-
-        server
-            .mock_async(|when, then| {
-                when.path("/api/2.1/unity-catalog/tables/catalog_name.schema_name.table_name")
-                    .method("GET");
-                then.body(GET_TABLE_RESPONSE);
-            })
-            .await;
-
-        let list_schemas_response = client.list_schemas("catalog_name").await.unwrap();
-        assert!(matches!(
-            list_schemas_response,
-            ListSchemasResponse::Success { .. }
-        ));
-
-        let get_schema_response = client
-            .get_schema("catalog_name", "schema_name")
-            .await
-            .unwrap();
-        assert!(matches!(get_schema_response, GetSchemaResponse::Success(_)));
-
-        let get_table_response = client
-            .get_table("catalog_name", "schema_name", "table_name")
-            .await;
-        assert!(matches!(
-            get_table_response.unwrap(),
-            GetTableResponse::Success(_)
-        ));
-
-        let storage_location = client
-            .get_table_storage_location(
-                Some("catalog_name".to_string()),
-                "schema_name",
-                "table_name",
-            )
-            .await
-            .unwrap();
-        assert!(storage_location.eq_ignore_ascii_case("string"));
-    }
 
     #[test]
     fn test_unitycatalogbuilder_with_storage_options() {
