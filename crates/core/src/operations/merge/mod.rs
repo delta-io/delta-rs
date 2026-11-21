@@ -7457,4 +7457,113 @@ mod tests {
         assert_batches_sorted_eq! {[
         "+----+-------+------------+--------------+-----------------+", "| id | value | modified   | _change_type | _commit_version |", "+----+-------+------------+--------------+-----------------+", "| D  | 100   | 2021-02-02 | delete       | 2               |", "| A  | 1     | 2021-02-01 | insert       | 1               |", "| B  | 10    | 2021-02-01 | insert       | 1               |", "| C  | 10    | 2021-02-02 | insert       | 1               |", "| D  | 100   | 2021-02-02 | insert       | 1               |", "+----+-------+------------+--------------+-----------------+", ], &batches }
     }
+
+    #[tokio::test]
+    async fn test_merge_cdc_unmatched_delete_marker_with_insert() {
+        // A merge with change data feed enabled must accept a source batch holding
+        // both a delete marker for a key the target never stored and an insert.
+        // The marker matches no clause, so the merge writes nothing for it. It
+        // used to fail validation instead: the all-null row the merge projects
+        // for the marker reached the NOT NULL checks before the CDC split could
+        // drop it. See https://github.com/delta-io/delta-rs/issues/5097
+        use crate::kernel::ProtocolInner;
+        use crate::operations::merge::Action;
+
+        let schema = get_delta_schema_non_null_id();
+
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
+        let table: DeltaTable = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(schema.fields().cloned())
+            .with_actions(actions)
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), Some(0));
+
+        let arrow_schema = get_non_null_arrow_schema();
+        let target_batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-01",
+                    "2021-02-01",
+                ])),
+            ],
+        )
+        .unwrap();
+        let table = table
+            .write(vec![target_batch])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), Some(1));
+
+        // "X" is a delete marker for a key the target never stored; "Y" is an insert.
+        let source_batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["X", "Y"])),
+                Arc::new(arrow::array::Int32Array::from(vec![None, Some(30)])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    None::<&str>,
+                    Some("2023-07-04"),
+                ])),
+            ],
+        )
+        .unwrap();
+        let ctx = SessionContext::new();
+        let source = ctx.read_batch(source_batch).unwrap();
+
+        let (table, _metrics) = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_delete(|delete| delete.predicate(col("source.value").is_null()))
+            .unwrap()
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .predicate(col("source.value").is_not_null())
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "| Y  | 30    | 2023-07-04 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        // The change feed holds the insert for Y and no row for the marker X.
+        let table = table
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&ctx.state(), None)
+            .await
+            .expect("Failed to load CDF");
+        let mut batches = collect(table, ctx.task_ctx())
+            .await
+            .expect("Failed to collect batches");
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();
+        assert_batches_sorted_eq! {[
+        "+----+-------+------------+--------------+-----------------+", "| id | value | modified   | _change_type | _commit_version |", "+----+-------+------------+--------------+-----------------+", "| Y  | 30    | 2023-07-04 | insert       | 2               |", "| A  | 1     | 2021-02-01 | insert       | 1               |", "| B  | 10    | 2021-02-01 | insert       | 1               |", "+----+-------+------------+--------------+-----------------+", ], &batches }
+    }
 }
