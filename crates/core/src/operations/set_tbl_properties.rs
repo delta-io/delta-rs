@@ -1,16 +1,23 @@
 //! Set table properties on a table
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
+use delta_kernel::table_configuration::TableConfiguration;
+use delta_kernel::table_features::{
+    ColumnMappingMode, assign_column_mapping_metadata, find_max_column_id_in_schema,
+    validate_schema_column_mapping,
+};
+use delta_kernel::transforms::{SchemaTransform, transform_output_type};
 use futures::future::BoxFuture;
 
 use crate::DeltaResult;
 use crate::DeltaTable;
-use crate::errors::{ColumnMappingOperation, DeltaTableError};
+use crate::errors::DeltaTableError;
 use crate::kernel::transaction::CommitProperties;
 use crate::kernel::{
-    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, SnapshotMetadataRef,
-    resolve_snapshot,
+    Action, ColumnMetadataKey, EagerSnapshot, Metadata, MetadataExt as _, MetadataValue,
+    ProtocolExt as _, SnapshotMetadataRef, StructField, StructType, resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
 use crate::operations::commit_actions_in_scope;
@@ -62,18 +69,80 @@ impl SetTablePropertiesBuilder {
     }
 }
 
+/// Sets the physical name of every field to the current name of the field.
+///
+/// Data files written without column mapping store each column under its logical name, so that
+/// name must stay the physical name when column mapping is enabled.
+struct LogicalNamesAsPhysicalNames;
+
+impl<'a> SchemaTransform<'a> for LogicalNamesAsPhysicalNames {
+    transform_output_type!(|'a, T| Cow<'a, T>);
+
+    fn transform_struct_field(&mut self, field: &'a StructField) -> Cow<'a, StructField> {
+        let mut field = self.recurse_into_struct_field(field).into_owned();
+        field.metadata.insert(
+            ColumnMetadataKey::ColumnMappingPhysicalName
+                .as_ref()
+                .to_string(),
+            MetadataValue::String(field.name.clone()),
+        );
+        Cow::Owned(field)
+    }
+
+    // The fields inside a variant are not table columns and take no column mapping metadata.
+    fn transform_variant(&mut self, stype: &'a StructType) -> Cow<'a, StructType> {
+        Cow::Borrowed(stype)
+    }
+}
+
+/// Applies a requested `delta.columnMapping.mode` to the table metadata.
+///
+/// An existing table can only change from `none` to `name`. Each field keeps its current name as
+/// the physical name and gets a column id, so the existing data files stay readable. The `id`
+/// mode is rejected because the existing data files hold no Parquet field ids.
+fn apply_column_mapping_mode(
+    table_configuration: &TableConfiguration,
+    metadata: Metadata,
+    requested: &str,
+) -> DeltaResult<Metadata> {
+    let requested_mode = requested.parse::<ColumnMappingMode>().map_err(|_| {
+        DeltaTableError::Generic(format!("Invalid delta.columnMapping.mode: {requested}"))
+    })?;
+    let current_mode = table_configuration.column_mapping_mode();
+
+    match (current_mode, requested_mode) {
+        _ if current_mode == requested_mode => Ok(metadata),
+        (ColumnMappingMode::None, ColumnMappingMode::Name) => {
+            let table_schema = table_configuration.logical_schema();
+            let schema = LogicalNamesAsPhysicalNames.transform_struct(table_schema.as_ref());
+
+            let mut max_id = find_max_column_id_in_schema(&schema)
+                .max(
+                    table_configuration
+                        .table_properties()
+                        .column_mapping_max_column_id,
+                )
+                .unwrap_or(0);
+            let schema = assign_column_mapping_metadata(&schema, &mut max_id, false)?;
+            validate_schema_column_mapping(&schema, requested_mode)?;
+
+            Ok(metadata.with_schema(&schema)?.add_config_key(
+                "delta.columnMapping.maxColumnId".to_string(),
+                max_id.to_string(),
+            )?)
+        }
+        _ => Err(DeltaTableError::Generic(format!(
+            "Changing delta.columnMapping.mode from {current_mode:?} to {requested_mode:?} is not \
+             supported. An existing table can only change from None to Name."
+        ))),
+    }
+}
+
 fn plan_set_table_properties_actions(
     snapshot: SnapshotMetadataRef<'_>,
     properties: HashMap<String, String>,
     raise_if_not_exists: bool,
 ) -> DeltaResult<(Vec<Action>, DeltaOperation)> {
-    if properties.contains_key(TableProperty::ColumnMappingMode.as_ref()) {
-        return Err(DeltaTableError::unsupported_column_mapping(
-            ColumnMappingOperation::Write,
-            "SET TBLPROPERTIES delta.columnMapping.mode",
-        ));
-    }
-
     let mut metadata = snapshot.metadata.clone();
     let current_protocol = snapshot.protocol;
     let new_protocol = current_protocol
@@ -82,6 +151,10 @@ fn plan_set_table_properties_actions(
 
     for (key, value) in &properties {
         metadata = metadata.add_config_key(key.clone(), value.to_string())?;
+    }
+
+    if let Some(mode) = properties.get(TableProperty::ColumnMappingMode.as_ref()) {
+        metadata = apply_column_mapping_mode(snapshot.table_configuration, metadata, mode)?;
     }
 
     let final_protocol = new_protocol.move_table_properties_into_features(metadata.configuration());
@@ -130,6 +203,10 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
 #[cfg(test)]
 /// Tests for the set-table-properties operation.
 pub mod tests {
+    use crate::DeltaTable;
+    use crate::kernel::{
+        ArrayType, ColumnMetadataKey, DataType, MapType, MetadataValue, StructField, StructType,
+    };
     use crate::writer::test_utils::create_initialized_table;
     use std::collections::HashMap;
     use tempfile::tempdir;
@@ -173,6 +250,156 @@ pub mod tests {
         // Test enabling features that automatically set appropriate protocol versions
         let props = HashMap::from([("delta.minWriterVersion".to_string(), "7".to_string())]);
         ops.set_tbl_properties().with_properties(props).await?;
+
+        Ok(())
+    }
+
+    async fn set_column_mapping_mode(
+        table: DeltaTable,
+        mode: &str,
+    ) -> crate::DeltaResult<DeltaTable> {
+        table
+            .set_tbl_properties()
+            .with_properties(HashMap::from([(
+                "delta.columnMapping.mode".to_string(),
+                mode.to_string(),
+            )]))
+            .await
+    }
+
+    /// Collects the name, column id, and physical name of every field in `data_type`.
+    fn column_mapping_annotations(data_type: &DataType, found: &mut Vec<(String, i64, String)>) {
+        match data_type {
+            DataType::Struct(fields) => {
+                for field in fields.fields() {
+                    let id = match field
+                        .metadata()
+                        .get(ColumnMetadataKey::ColumnMappingId.as_ref())
+                    {
+                        Some(MetadataValue::Number(id)) => *id,
+                        other => panic!("field '{}' has no column id: {other:?}", field.name()),
+                    };
+                    let physical_name = match field
+                        .metadata()
+                        .get(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
+                    {
+                        Some(MetadataValue::String(name)) => name.clone(),
+                        other => panic!("field '{}' has no physical name: {other:?}", field.name()),
+                    };
+                    found.push((field.name().clone(), id, physical_name));
+                    column_mapping_annotations(field.data_type(), found);
+                }
+            }
+            DataType::Array(array) => column_mapping_annotations(array.element_type(), found),
+            DataType::Map(map) => {
+                column_mapping_annotations(map.key_type(), found);
+                column_mapping_annotations(map.value_type(), found);
+            }
+            _ => {}
+        }
+    }
+
+    /// Enabling column mapping gives every field, nested fields included, a column id and keeps
+    /// the field name as the physical name.
+    #[tokio::test]
+    async fn test_enable_column_mapping_keeps_names_as_physical_names() -> crate::DeltaResult<()> {
+        let address = StructType::try_new([
+            StructField::nullable("city", DataType::STRING),
+            StructField::nullable("zip", DataType::STRING),
+        ])?;
+        let event = StructType::try_new([StructField::nullable("kind", DataType::STRING)])?;
+        let attribute = StructType::try_new([StructField::nullable("value", DataType::LONG)])?;
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                StructField::nullable("id", DataType::INTEGER),
+                StructField::nullable("address", address),
+                StructField::nullable("events", ArrayType::new(event, true)),
+                StructField::nullable(
+                    "attributes",
+                    MapType::new(DataType::STRING, attribute, true),
+                ),
+            ])
+            .await?;
+
+        let table = set_column_mapping_mode(table, "name").await?;
+
+        let snapshot = table.snapshot()?;
+        assert_eq!(snapshot.protocol().min_reader_version(), 2);
+        assert_eq!(snapshot.protocol().min_writer_version(), 5);
+        let configuration = snapshot.metadata().configuration();
+        assert_eq!(
+            configuration
+                .get("delta.columnMapping.mode")
+                .map(String::as_str),
+            Some("name")
+        );
+        assert_eq!(
+            configuration
+                .get("delta.columnMapping.maxColumnId")
+                .map(String::as_str),
+            Some("8")
+        );
+
+        let mut found = Vec::new();
+        column_mapping_annotations(
+            &DataType::from(snapshot.schema().as_ref().clone()),
+            &mut found,
+        );
+        let names: Vec<_> = found.iter().map(|(name, _, _)| name.as_str()).collect();
+        let physical_names: Vec<_> = found.iter().map(|(_, _, name)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "id",
+                "address",
+                "city",
+                "zip",
+                "events",
+                "kind",
+                "attributes",
+                "value"
+            ]
+        );
+        assert_eq!(physical_names, names);
+        let mut ids: Vec<_> = found.iter().map(|(_, id, _)| *id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (1..=8).collect::<Vec<i64>>());
+
+        Ok(())
+    }
+
+    /// An existing table can only change the column mapping mode from `none` to `name`.
+    #[tokio::test]
+    async fn test_set_column_mapping_mode_rejects_unsupported_changes() -> crate::DeltaResult<()> {
+        let unmapped = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([StructField::nullable("id", DataType::INTEGER)])
+            .await?;
+
+        let err = set_column_mapping_mode(unmapped.clone(), "id")
+            .await
+            .expect_err("none to id must be rejected");
+        assert!(err.to_string().contains("from None to Id"), "{err}");
+        let err = set_column_mapping_mode(unmapped.clone(), "physical")
+            .await
+            .expect_err("an unknown mode must be rejected");
+        assert!(
+            err.to_string().contains("Invalid delta.columnMapping.mode"),
+            "{err}"
+        );
+
+        let mapped = set_column_mapping_mode(unmapped, "name").await?;
+        for (mode, change) in [("none", "from Name to None"), ("id", "from Name to Id")] {
+            let err = set_column_mapping_mode(mapped.clone(), mode)
+                .await
+                .expect_err("a change away from name must be rejected");
+            assert!(err.to_string().contains(change), "{err}");
+        }
+
+        // The current mode is accepted and leaves the schema as it is.
+        let unchanged = set_column_mapping_mode(mapped.clone(), "name").await?;
+        assert_eq!(unchanged.snapshot()?.schema(), mapped.snapshot()?.schema());
 
         Ok(())
     }

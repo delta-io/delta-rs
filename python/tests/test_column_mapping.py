@@ -1,6 +1,6 @@
 """Write-path tests against an existing column-mapped Delta table.
 
-delta-rs cannot create/enable column mapping yet, so these round-trips run against the
+Most of these round-trips run against the
 Spark-written, name-mode, string-partitioned fixture copied into a temp dir. They cover
 append/overwrite/delete/merge under the logical schema (the data is stored under physical
 ``col-<uuid>`` names on disk) and assert that schema evolution is rejected.
@@ -263,3 +263,43 @@ def test_column_mapping_protocol_unchanged_without_table_features(
         protocol.reader_features,
         protocol.writer_features,
     ) == (2, 5, None, None)
+
+
+def test_enable_column_mapping_on_existing_table(tmp_path: pathlib.Path):
+    """Enable name-mode column mapping on a table with data. The rows written before the change
+    stay readable, and an append adds to them."""
+
+    def data(ids: list[int], names: list[str]) -> Table:
+        return Table(
+            {
+                "id": Array(
+                    ids, ArrowField("id", type=DataType.int64(), nullable=True)
+                ),
+                "name": Array(
+                    names, ArrowField("name", type=DataType.string(), nullable=True)
+                ),
+            }
+        )
+
+    table_uri = str(tmp_path / "enable_column_mapping")
+    write_deltalake(table_uri, data([1, 2], ["a", "b"]))
+
+    DeltaTable(table_uri).alter.set_table_properties(
+        {"delta.columnMapping.mode": "name"}
+    )
+    write_deltalake(table_uri, data([3], ["c"]), mode="append")
+
+    result = (
+        QueryBuilder()
+        .register("tbl", DeltaTable(table_uri))
+        .execute("select id, name from tbl order by id")
+        .read_all()
+    )
+    assert result.to_struct_array().to_pylist() == [
+        {"id": 1, "name": "a"},
+        {"id": 2, "name": "b"},
+        {"id": 3, "name": "c"},
+    ]
+    configuration = DeltaTable(table_uri).metadata().configuration
+    assert configuration["delta.columnMapping.mode"] == "name"
+    assert configuration["delta.columnMapping.maxColumnId"] == "2"

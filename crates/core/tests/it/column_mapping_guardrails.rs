@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use deltalake_core::kernel::{
@@ -350,16 +350,107 @@ async fn column_mapping_guardrails_metadata_operations() -> TestResult {
     assert_unsupported_column_mapping_write(&err, "ADD COLUMN");
     assert_eq!(before, collect_data_files(&table_path)?);
 
-    let table = simple_table().await?;
-    let err = table
+    Ok(())
+}
+
+/// Enabling column mapping on a table with data rewrites no data file. The rows written before
+/// the change stay readable, and later writes land in the same table.
+#[cfg(feature = "datafusion")]
+#[tokio::test]
+async fn column_mapping_enable_on_existing_table_roundtrip() -> TestResult {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use arrow_array::{Int32Array, RecordBatch, StringArray, StructArray};
+    use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema};
+    use datafusion::prelude::SessionContext;
+    use deltalake_core::kernel::StructType;
+
+    fn batch(id: i32, part: &str, city: &str) -> RecordBatch {
+        let info_fields = Fields::from(vec![Field::new("city", ArrowDataType::Utf8, true)]);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", ArrowDataType::Int32, true),
+            Field::new("part", ArrowDataType::Utf8, true),
+            Field::new("info", ArrowDataType::Struct(info_fields.clone()), true),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![id])),
+                Arc::new(StringArray::from(vec![part])),
+                Arc::new(StructArray::new(
+                    info_fields,
+                    vec![Arc::new(StringArray::from(vec![city]))],
+                    None,
+                )),
+            ],
+        )
+        .unwrap()
+    }
+
+    async fn query(table: &DeltaTable, sql: &str) -> TestResult<Vec<RecordBatch>> {
+        let ctx = SessionContext::new();
+        ctx.register_table("t", table.table_provider().await?)?;
+        Ok(ctx.sql(sql).await?.collect().await?)
+    }
+
+    let temp_dir = tempfile::tempdir()?;
+    let table_path = temp_dir.path().join("table");
+    let table_url = Url::from_directory_path(&table_path).unwrap();
+    let table = deltalake_core::DeltaTableBuilder::from_url(table_url.clone())?
+        .build()?
+        .create()
+        .with_columns([
+            StructField::nullable("id", DataType::INTEGER),
+            StructField::nullable("part", DataType::STRING),
+            StructField::nullable(
+                "info",
+                StructType::try_new([StructField::nullable("city", DataType::STRING)])?,
+            ),
+        ])
+        .with_partition_columns(["part"])
+        .await?;
+    let table = table.write(vec![batch(1, "a", "Amsterdam")]).await?;
+    let before = collect_data_files(&table_path)?;
+
+    let table = table
         .set_tbl_properties()
         .with_properties(HashMap::from([(
             "delta.columnMapping.mode".to_string(),
             "name".to_string(),
         )]))
-        .await
-        .expect_err("setting column mapping mode should be rejected");
-    assert_unsupported_column_mapping_write(&err, "SET TBLPROPERTIES delta.columnMapping.mode");
+        .await?;
+    assert_eq!(before, collect_data_files(&table_path)?);
+
+    // The row written before the change is found through its partition value, its statistics,
+    // and its nested field.
+    let select = "SELECT id, part, info['city'] AS city FROM t";
+    let batches = query(&table, &format!("{select} WHERE part = 'a' AND id = 1")).await?;
+    assert_batches_sorted_eq! {
+        [
+            "+----+------+-----------+",
+            "| id | part | city      |",
+            "+----+------+-----------+",
+            "| 1  | a    | Amsterdam |",
+            "+----+------+-----------+",
+        ],
+        &batches
+    };
+
+    let table = table.write(vec![batch(2, "b", "Berlin")]).await?;
+    let expected = [
+        "+----+------+-----------+",
+        "| id | part | city      |",
+        "+----+------+-----------+",
+        "| 1  | a    | Amsterdam |",
+        "| 2  | b    | Berlin    |",
+        "+----+------+-----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &query(&table, select).await?);
+
+    // A table loaded from the log reads the same rows.
+    let reopened = open_table(table_url).await?;
+    assert_batches_sorted_eq!(expected, &query(&reopened, select).await?);
 
     Ok(())
 }
