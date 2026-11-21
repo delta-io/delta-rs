@@ -85,7 +85,7 @@ impl WorkspaceOAuthProvider {
         workspace_host: impl Into<String>,
     ) -> Self {
         Self {
-            token_url: format!("{}/oidc/v1/token", workspace_host.into()),
+            token_url: workspace_token_url(&workspace_host.into()),
             client_id: client_id.into(),
             client_secret: client_secret.into(),
         }
@@ -106,6 +106,80 @@ impl TokenCredential for WorkspaceOAuthProvider {
                 ("client_secret", self.client_secret.as_str()),
                 ("scope", DATABRICKS_WORKSPACE_SCOPE),
                 ("grant_type", "client_credentials"),
+            ])
+            .send()
+            .await
+            .map_err(UnityCatalogError::from)?;
+
+        let response: TokenResponse = non200_or_json(response).await?;
+
+        Ok(TemporaryToken {
+            token: response.access_token,
+            expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
+        })
+    }
+}
+
+fn workspace_token_url(workspace_host: &str) -> String {
+    format!("{}/oidc/v1/token", workspace_host.trim_end_matches('/'))
+}
+
+fn read_federated_token_file(path: &str) -> Result<String, UnityCatalogError> {
+    std::fs::read_to_string(path).map_err(|source| UnityCatalogError::FederatedTokenFile {
+        path: path.to_string(),
+        source,
+    })
+}
+
+/// Databricks workload identity federation: exchanges an externally issued
+/// JWT (e.g. a Kubernetes projected service account token) for a workspace
+/// token with an RFC 8693 token-exchange grant.
+///
+/// <https://docs.databricks.com/aws/en/dev-tools/auth/oauth-federation-exchange>
+#[derive(Debug, Clone)]
+pub struct WorkspaceWorkloadIdentityOAuthProvider {
+    token_url: String,
+    client_id: String,
+    federated_token_file: String,
+}
+
+impl WorkspaceWorkloadIdentityOAuthProvider {
+    pub fn new(
+        client_id: impl Into<String>,
+        federated_token_file: impl Into<String>,
+        workspace_host: impl Into<String>,
+    ) -> Self {
+        Self {
+            token_url: workspace_token_url(&workspace_host.into()),
+            client_id: client_id.into(),
+            federated_token_file: federated_token_file.into(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl TokenCredential for WorkspaceWorkloadIdentityOAuthProvider {
+    async fn fetch_token(
+        &self,
+        client: &ClientWithMiddleware,
+    ) -> Result<TemporaryToken<String>, UnityCatalogError> {
+        // Read on every fetch: the kubelet rotates projected tokens in place.
+        // A plain read, not spawn_blocking: the file is a few KB, and token
+        // refresh must not depend on a free thread in the blocking pool.
+        let subject_token = read_federated_token_file(&self.federated_token_file)?;
+
+        let response = client
+            .request(Method::POST, &self.token_url)
+            .header(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON))
+            .form(&[
+                (
+                    "grant_type",
+                    "urn:ietf:params:oauth:grant-type:token-exchange",
+                ),
+                ("subject_token_type", "urn:ietf:params:oauth:token-type:jwt"),
+                ("subject_token", subject_token.trim()),
+                ("client_id", self.client_id.as_str()),
+                ("scope", DATABRICKS_WORKSPACE_SCOPE),
             ])
             .send()
             .await
@@ -335,8 +409,7 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
         &self,
         client: &ClientWithMiddleware,
     ) -> Result<TemporaryToken<String>, UnityCatalogError> {
-        let token_str = std::fs::read_to_string(&self.federated_token_file)
-            .map_err(|_| UnityCatalogError::FederatedTokenFile)?;
+        let token_str = read_federated_token_file(&self.federated_token_file)?;
 
         // https://learn.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-client-creds-grant-flow#third-case-access-token-request-with-a-federated-credential
         let response = client
@@ -550,6 +623,66 @@ mod tests {
             token.unwrap_err().to_string(),
             "Non-200 returned on token acquisition: invalid_client: [abc123] Client authentication failed"
         );
+    }
+
+    #[tokio::test]
+    async fn test_workspace_workload_identity() {
+        let server = MockServer::start_async().await;
+        let tokenfile = NamedTempFile::new().unwrap();
+        // Projected token files can end in a newline; it must not be sent.
+        std::fs::write(tokenfile.path(), "federated-jwt\n").unwrap();
+
+        let client = reqwest_middleware::ClientBuilder::new(Client::new()).build();
+
+        let mock = server
+            .mock_async(|when, then| {
+                when.path("/oidc/v1/token")
+                    .method("POST")
+                    .form_urlencoded_tuple(
+                        "grant_type",
+                        "urn:ietf:params:oauth:grant-type:token-exchange",
+                    )
+                    .form_urlencoded_tuple(
+                        "subject_token_type",
+                        "urn:ietf:params:oauth:token-type:jwt",
+                    )
+                    .form_urlencoded_tuple("subject_token", "federated-jwt")
+                    .form_urlencoded_tuple("client_id", "client_id")
+                    .form_urlencoded_tuple("scope", "all-apis");
+                then.body(r#"{"access_token": "TOKEN", "expires_in": 3600}"#);
+            })
+            .await;
+
+        // A trailing slash on the host must not give "//oidc/v1/token".
+        let credential = WorkspaceWorkloadIdentityOAuthProvider::new(
+            "client_id",
+            tokenfile.path().to_str().unwrap(),
+            format!("{}/", server.base_url()),
+        );
+
+        let token = credential.fetch_token(&client).await.unwrap();
+
+        assert_eq!(&token.token, "TOKEN");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_workspace_workload_identity_missing_file() {
+        let client = reqwest_middleware::ClientBuilder::new(Client::new()).build();
+        let credential = WorkspaceWorkloadIdentityOAuthProvider::new(
+            "client_id",
+            "/nonexistent/databricks/token",
+            "http://localhost",
+        );
+
+        let err = credential.fetch_token(&client).await.unwrap_err();
+
+        let message = err.to_string();
+        assert!(
+            message.contains("/nonexistent/databricks/token"),
+            "{message}"
+        );
+        assert!(message.contains("No such file or directory"), "{message}");
     }
 
     #[tokio::test]
