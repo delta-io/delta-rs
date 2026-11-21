@@ -705,7 +705,7 @@ pub(crate) mod tests {
 
     /// Rows with the struct column `s`, which holds the struct `inner`, and with the column `a`,
     /// which has the name of a field of `s`. In row 2 `s.inner` is NULL, in row 3 `s` is NULL.
-    fn struct_batch() -> RecordBatch {
+    pub(crate) fn struct_batch() -> RecordBatch {
         let inner = Fields::from(vec![
             Field::new("x", DataType::Int32, true),
             Field::new("y", DataType::Int32, true),
