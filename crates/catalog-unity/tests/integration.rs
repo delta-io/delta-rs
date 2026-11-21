@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use deltalake_catalog_unity::models::*;
 use deltalake_catalog_unity::{UnityCatalog, UnityCatalogBuilder};
-use deltalake_core::DataCatalog;
+use deltalake_core::{DataCatalog, DeltaTable, DeltaTableBuilder};
 use deltalake_test::utils::TestTables;
 use reqwest::Url;
 use serde_json::{Value, json};
@@ -119,6 +119,16 @@ impl UnityCatalogServer {
             .build()
             .unwrap()
     }
+
+    async fn load_table(&self, name: &str) -> DeltaTable {
+        let url = Url::parse(&format!("uc://{CATALOG}.{SCHEMA}.{name}")).unwrap();
+        DeltaTableBuilder::from_url(url)
+            .unwrap()
+            .with_storage_options(self.options())
+            .load()
+            .await
+            .unwrap()
+    }
 }
 
 impl Drop for UnityCatalogServer {
@@ -180,4 +190,17 @@ async fn unity_client() {
         panic!("expected an error");
     };
     assert_eq!(error.error_code, "TABLE_NOT_FOUND");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn read_table_on_local_file_system() {
+    let server = UnityCatalogServer::start().await;
+    server
+        .register_table("partitioned", TestTables::Delta0_8_0Partitioned)
+        .await;
+
+    // The server gives no credentials for a local table.
+    let table = server.load_table("partitioned").await;
+    assert_eq!(table.version(), Some(0));
+    assert_eq!(table.get_file_uris().unwrap().count(), 6);
 }
