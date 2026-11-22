@@ -241,6 +241,17 @@ pub enum DeltaTableError {
         /// Human-readable description of the operation (e.g. "ADD COLUMN").
         operation: String,
     },
+
+    /// Error returned when an operation that requires column mapping is attempted on a table
+    /// that does not have it enabled.
+    #[error(
+        "Operation '{operation}' requires column mapping to be enabled on the table \
+         (delta.columnMapping.mode = 'name' or 'id')"
+    )]
+    ColumnMappingRequired {
+        /// Human-readable description of the operation (e.g. "DROP COLUMNS").
+        operation: String,
+    },
 }
 
 impl From<object_store::path::Error> for DeltaTableError {
@@ -285,6 +296,13 @@ impl DeltaTableError {
     ) -> Self {
         Self::UnsupportedColumnMapping {
             mode,
+            operation: operation.to_string(),
+        }
+    }
+
+    /// Construct a [`ColumnMappingRequired`](DeltaTableError::ColumnMappingRequired) error.
+    pub fn column_mapping_required(operation: impl ToString) -> Self {
+        Self::ColumnMappingRequired {
             operation: operation.to_string(),
         }
     }
