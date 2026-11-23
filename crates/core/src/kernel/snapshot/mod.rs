@@ -275,7 +275,21 @@ impl Snapshot {
         // ratified log tail; filesystem-managed stores return `None` here.
         let catalog_log_tail = log_store.catalog_log_tail().await?;
 
-        Self::try_new_with_engine_and_catalog(engine, table_root, version, catalog_log_tail).await
+        let snapshot =
+            Self::try_new_with_engine_and_catalog(engine, table_root, version, catalog_log_tail)
+                .await?;
+
+        if !log_store.is_catalog_managed() && snapshot.table_configuration().is_catalog_managed() {
+            return Err(DeltaTableError::Generic(
+                "table requires catalog-managed (coordinated) commits but was opened without a \
+                 catalog coordinator; open it through its catalog with catalog-managed commits \
+                 enabled (for Unity Catalog: `uc://catalog.schema.table` with \
+                 `catalog_managed=true`)"
+                    .to_string(),
+            ));
+        }
+
+        Ok(snapshot)
     }
 
     /// Create a [`ScanBuilder`] borrowing this snapshot to configure a read of the table.
@@ -328,20 +342,19 @@ impl Snapshot {
             inner: snapshot,
             materialized_files: None,
         });
-        if snapshot.version() as u64 == current_version {
-            // `target_version` was `None`, but there were no new commits.
-            // We may still need to pick up a checkpoint written for the current version.
-            self.refresh_same_version_checkpoint_if_needed(engine, current_version)
-                .await
-        } else {
-            match self.materialized_files() {
-                Some(materialized_files) => {
-                    snapshot
-                        .materialize_files_with_engine(engine, Some(materialized_files))
-                        .await
-                }
-                None => Ok(snapshot),
+        // The kernel adopts late checkpoints, so compare checkpoints too.
+        if snapshot.version() == current_version
+            && snapshot.checkpoint_version() == self.checkpoint_version()
+        {
+            return Ok(self);
+        }
+        match self.materialized_files() {
+            Some(materialized_files) => {
+                snapshot
+                    .materialize_files_with_engine(engine, Some(materialized_files))
+                    .await
             }
+            None => Ok(snapshot),
         }
     }
 
@@ -1094,6 +1107,19 @@ impl Snapshot {
         Ok(None)
     }
 
+    pub(crate) async fn in_commit_timestamp(
+        &self,
+        log_store: &dyn LogStore,
+    ) -> DeltaResult<Option<i64>> {
+        let engine = log_store.engine();
+        let inner = self.inner.clone();
+        Ok(
+            spawn_blocking_with_span(move || inner.get_in_commit_timestamp(engine.as_ref()))
+                .await
+                .map_err(|e| DeltaTableError::GenericError { source: e.into() })??,
+        )
+    }
+
     /// Fetch the [domainMetadata] for a specific domain in this snapshot.
     ///
     /// This returns the latest configuration for the domain, or None if the domain does not exist.
@@ -1558,6 +1584,7 @@ mod tests {
         test_utils::{
             TestResult, TestTables, assert_batches_sorted_eq, make_test_add,
             object_store::{
+                RecordedObjectStoreOperation,
                 drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
             },
         },
@@ -3371,7 +3398,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_snapshot_update_latest_same_version_without_changes_reuses_arc() -> TestResult {
-        let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
+        let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
+        let (log_store, mut operations) = recording_log_store(base);
         let snapshot = Arc::new(Snapshot::try_new(log_store.as_ref(), None).await?)
             .ensure_materialized_files(log_store.as_ref())
             .await?;
@@ -3380,8 +3408,10 @@ mod tests {
             .materialized_files()
             .cloned()
             .expect("expected materialized files");
+        drain_recorded_ops(&mut operations).await;
 
         let updated = snapshot.update(log_store.engine(), None).await?;
+        let update_ops = drain_recorded_ops(&mut operations).await;
 
         assert!(Arc::ptr_eq(&updated, &prior_snapshot));
         assert!(Arc::ptr_eq(
@@ -3390,6 +3420,13 @@ mod tests {
                 .expect("expected materialized files"),
             &prior_materialized
         ));
+        assert!(
+            matches!(
+                update_ops.as_slice(),
+                [RecordedObjectStoreOperation::ListWithOffset(_)]
+            ),
+            "expected a single log listing, got {update_ops:?}"
+        );
         Ok(())
     }
 

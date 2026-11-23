@@ -7,9 +7,7 @@ use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 use arrow_select::take::take;
 use url::Url;
 
-use crate::kernel::{
-    DataType as DeltaDataType, Metadata, PrimitiveType, StructField, StructType, new_metadata,
-};
+use crate::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
 use crate::operations::create::CreateBuilder;
 use crate::{DeltaTable, DeltaTableBuilder, TableProperty};
 /// Result type for writer unit tests, boxing any error for convenient use with `?`.
@@ -185,17 +183,6 @@ pub fn get_delta_schema_non_null_id() -> StructType {
             true,
         ),
     ])
-    .unwrap()
-}
-
-/// Return table metadata for the sample schema with the given partition columns.
-pub fn get_delta_metadata(partition_cols: &[String]) -> Metadata {
-    let table_schema = get_delta_schema();
-    new_metadata(
-        &table_schema,
-        partition_cols.to_vec(),
-        std::iter::empty::<(&str, &str)>(),
-    )
     .unwrap()
 }
 
