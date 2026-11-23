@@ -250,6 +250,7 @@ def test_update_new_values_preserves_strings(tmp_path, value):
     assert result.column("name")[0].as_py() == value
 
 
+@pytest.mark.pyarrow
 @pytest.mark.parametrize("tz", ["UTC", "Asia/Seoul", "America/Los_Angeles"])
 def test_update_new_values_naive_datetime_is_utc(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, tz: str
