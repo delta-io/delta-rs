@@ -1,0 +1,18 @@
+# Issue #5039. The input contains a NULL and values on either side of the predicate.
+
+statement ok
+CREATE TABLE baseline (id INTEGER, x INTEGER);
+
+statement ok
+INSERT INTO baseline VALUES (1, 5), (2, 8), (3, 9), (4, NULL);
+
+statement ok
+CREATE TABLE actual AS SELECT * FROM baseline;
+
+query II rowsort matches
+SELECT id, x FROM baseline WHERE x IS DISTINCT FROM 5;
+----
+
+query II rowsort matches
+SELECT id, x FROM actual WHERE x IS DISTINCT FROM 5;
+----

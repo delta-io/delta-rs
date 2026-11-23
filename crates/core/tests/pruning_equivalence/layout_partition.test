@@ -1,0 +1,14 @@
+# delta: partition-by p,q
+# delta: stats off
+
+statement ok
+CREATE TABLE actual AS SELECT 11 AS id, 1 AS p, 3 AS q;
+
+statement ok
+INSERT INTO actual VALUES (99, 2, 4);
+
+query I
+-- delta-scan: 1/2
+SELECT id FROM actual WHERE p = 1 AND q = 3;
+----
+11

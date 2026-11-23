@@ -1,0 +1,25 @@
+# Issue #4894. The two decimal values differ by one unit in the last digit.
+
+statement ok
+CREATE TABLE baseline (id INTEGER, x DECIMAL(38,18));
+
+statement ok
+INSERT INTO baseline VALUES (1, CAST('1.123456789012345678' AS DECIMAL(38,18))), (2, CAST('1.123456789012345679' AS DECIMAL(38,18))), (3, NULL);
+
+query IR
+SELECT id, x FROM baseline ORDER BY id;
+----
+1	1.123456789012345678
+2	1.123456789012345679
+3	NULL
+
+statement ok
+CREATE TABLE actual AS SELECT * FROM baseline;
+
+query IR rowsort matches
+SELECT id, x FROM baseline WHERE x = CAST('1.123456789012345678' AS DECIMAL(38,18));
+----
+
+query IR rowsort matches
+SELECT id, x FROM actual WHERE x = CAST('1.123456789012345678' AS DECIMAL(38,18));
+----

@@ -1,0 +1,21 @@
+# Issue #5087. NaN and a finite value share one file.
+
+statement ok
+CREATE TABLE baseline (id INTEGER, x DOUBLE);
+
+statement ok
+INSERT INTO baseline VALUES (1, CAST('NaN' AS DOUBLE)), (2, 9.0);
+
+statement ok
+CREATE TABLE actual AS SELECT * FROM baseline;
+
+statement ok
+DELETE FROM actual WHERE x != 9.0;
+
+query IR rowsort survivors
+SELECT id, x FROM baseline WHERE (x != 9.0) IS NOT TRUE;
+----
+
+query IR rowsort survivors
+SELECT id, x FROM actual;
+----
