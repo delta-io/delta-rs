@@ -1,10 +1,18 @@
 //! Compare Delta reads and committed DELETE survivors with a DataFusion in-memory table.
 //!
+//! Add a `.test` file beside `pruning_equivalence/select_delete.test` for a fixed
+//! SQL regression. Run these fixtures with
+//! `cargo test -p deltalake-core --features datafusion --test pruning_equivalence fixtures::sql_fixtures`.
+//! The fixture table `actual` uses Delta storage. Other tables are in memory.
+//!
 //! The ordinary test runs a fixed CI corpus. To replay one case from the workspace root:
 //! `DELTA_SEED=38 DELTA_CASES=1 cargo test -p deltalake-core --features datafusion --test pruning_equivalence explore -- --ignored --nocapture`.
 //! Increase `DELTA_CASES` to explore consecutive seeds. Each failed CASE includes its
 //! predicate, input rows and file layout; the test exits unsuccessfully on a mismatch.
 #![cfg(feature = "datafusion")]
+
+#[path = "pruning_equivalence/fixtures.rs"]
+mod fixtures;
 
 use std::{error::Error, sync::Arc, time::Instant};
 

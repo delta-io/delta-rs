@@ -1,0 +1,48 @@
+# name: crates/core/tests/pruning_equivalence/select_delete.test
+# description: Compare filtered reads and committed DELETE survivors with the original rows.
+# group: [pruning]
+
+statement error
+SELECT * FROM missing_fixture_table;
+----
+missing_fixture_table
+
+statement ok
+CREATE TABLE reference_rows (id INTEGER, val INTEGER);
+
+statement ok
+INSERT INTO reference_rows VALUES (1, 2), (2, 9), (3, NULL), (4, 7), (4, 7);
+
+# The Rust runner backs "actual" with a temporary Delta table.
+statement ok
+CREATE TABLE actual AS SELECT * FROM reference_rows WHERE id < 3;
+
+statement ok
+INSERT INTO actual SELECT * FROM reference_rows WHERE id >= 3;
+
+query II rowsort selected
+SELECT id, val FROM reference_rows WHERE val = 7;
+----
+
+query II rowsort selected
+SELECT id, val FROM actual WHERE val = 7;
+----
+
+statement ok
+DELETE FROM actual WHERE val >= 9;
+
+query II rowsort survivors
+SELECT id, val FROM reference_rows WHERE (val >= 9) IS NOT TRUE;
+----
+
+query II rowsort survivors
+SELECT id, val FROM actual;
+----
+
+query II rowsort
+SELECT val, id FROM actual;
+----
+2	1
+7	4
+7	4
+NULL	3
