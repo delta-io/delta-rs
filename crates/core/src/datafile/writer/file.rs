@@ -1,6 +1,7 @@
 //! One data file in progress: its parquet writer, the multipart upload under it, and the
 //! steps that finish or abort the file.
 
+use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
 use arrow_array::RecordBatch;
@@ -21,6 +22,7 @@ use super::PartitionWriterConfig;
 use super::parallel::ParallelArrowWriter;
 use crate::errors::DeltaResult;
 use crate::logstore::ObjectStoreRef;
+use crate::writer::stats::NanColumnTracker;
 
 const DEFAULT_UPLOAD_PART_SIZE: usize = 1024 * 1024 * 5;
 
@@ -47,18 +49,27 @@ fn upload_part_size() -> usize {
     })
 }
 
+pub(super) struct WrittenFileMetadata {
+    pub(super) parquet: ParquetMetaData,
+    pub(super) columns_with_nan: HashSet<Vec<String>>,
+}
+
 /// Finish a parquet file: encode the last row group and the footer, send what is left of the
 /// file, and complete the upload. Most parts of a large file went out while it was written.
 /// Returns the metadata for the file's Add action. Holds `_permit`, the file's
 /// [`UploadBudget`] reservation, until the upload is done.
 ///
 /// [`UploadBudget`]: super::UploadBudget
-#[instrument(skip(arrow_writer, _permit), fields(rows = 0, size = 0))]
+#[instrument(
+    skip(arrow_writer, columns_with_nan, _permit),
+    fields(rows = 0, size = 0)
+)]
 async fn finish_parquet_file(
     mut arrow_writer: FileArrowWriter,
     path: Path,
+    columns_with_nan: HashSet<Vec<String>>,
     _permit: OwnedSemaphorePermit,
-) -> DeltaResult<(Path, usize, ParquetMetaData)> {
+) -> DeltaResult<(Path, usize, WrittenFileMetadata)> {
     let metadata = match arrow_writer.finish().await {
         Ok(metadata) => metadata,
         Err(e) => {
@@ -99,7 +110,14 @@ async fn finish_parquet_file(
     Span::current().record("size", file_size);
     debug!("multipart upload completed successfully");
 
-    Ok((path, file_size, metadata))
+    Ok((
+        path,
+        file_size,
+        WrittenFileMetadata {
+            parquet: metadata,
+            columns_with_nan,
+        },
+    ))
 }
 
 /// [`ParquetObjectWriter`] for writing to parquet to an [`object_store::ObjectStore`].
@@ -234,7 +252,7 @@ impl FileArrowWriter {
 #[non_exhaustive]
 pub enum LazyArrowWriter {
     Initialized(Path, ObjectStoreRef, PartitionWriterConfig),
-    Writing(Path, FileArrowWriter),
+    Writing(Path, FileArrowWriter, NanColumnTracker),
 }
 
 impl LazyArrowWriter {
@@ -277,10 +295,14 @@ impl LazyArrowWriter {
                     }
                     return Err(e.into());
                 }
-                *self = LazyArrowWriter::Writing(path.clone(), arrow_writer);
+                let mut nan_columns =
+                    NanColumnTracker::new(&config.file_schema, config.writer_properties.stats());
+                nan_columns.observe(batch);
+                *self = LazyArrowWriter::Writing(path.clone(), arrow_writer, nan_columns);
             }
-            LazyArrowWriter::Writing(_, arrow_writer) => {
+            LazyArrowWriter::Writing(_, arrow_writer, nan_columns) => {
                 arrow_writer.write(batch).await?;
+                nan_columns.observe(batch);
             }
         }
 
@@ -290,7 +312,7 @@ impl LazyArrowWriter {
     pub(super) fn estimated_size(&self) -> usize {
         match self {
             LazyArrowWriter::Initialized(_, _, _) => 0,
-            LazyArrowWriter::Writing(_, arrow_writer) => {
+            LazyArrowWriter::Writing(_, arrow_writer, _) => {
                 arrow_writer.bytes_written() + arrow_writer.in_progress_size()
             }
         }
@@ -313,7 +335,7 @@ impl LazyArrowWriter {
     pub(super) fn pending_upload_bytes(&self, max_concurrency_tasks: usize) -> usize {
         match self {
             LazyArrowWriter::Initialized(_, _, _) => 0,
-            LazyArrowWriter::Writing(_, arrow_writer) => {
+            LazyArrowWriter::Writing(_, arrow_writer, _) => {
                 let buffered = arrow_writer.memory_size();
                 let last_row_group = arrow_writer
                     .flushed_row_groups()
@@ -333,20 +355,24 @@ impl LazyArrowWriter {
     pub(super) fn finish(
         self,
         permit: OwnedSemaphorePermit,
-    ) -> Option<impl Future<Output = DeltaResult<(Path, usize, ParquetMetaData)>> + Send + 'static>
-    {
+    ) -> Option<
+        impl Future<Output = DeltaResult<(Path, usize, WrittenFileMetadata)>> + Send + 'static,
+    > {
         match self {
             LazyArrowWriter::Initialized(_, _, _) => None,
-            LazyArrowWriter::Writing(path, arrow_writer) => {
-                Some(finish_parquet_file(arrow_writer, path, permit))
-            }
+            LazyArrowWriter::Writing(path, arrow_writer, nan_columns) => Some(finish_parquet_file(
+                arrow_writer,
+                path,
+                nan_columns.into_columns_with_nan(),
+                permit,
+            )),
         }
     }
 
     /// Abort the in-progress multipart upload, if any. Dropping the writer
     /// instead would leak upload parts, which vacuum cannot see.
     pub(super) async fn abort(self) -> DeltaResult<()> {
-        if let LazyArrowWriter::Writing(_, arrow_writer) = self {
+        if let LazyArrowWriter::Writing(_, arrow_writer, _) = self {
             let mut buf_writer = arrow_writer.into_inner();
             buf_writer.abort().await?;
         }
@@ -356,7 +382,7 @@ impl LazyArrowWriter {
     pub(super) fn in_progress_rows(&self) -> usize {
         match self {
             LazyArrowWriter::Initialized(_, _, _) => 0,
-            LazyArrowWriter::Writing(_, arrow_writer) => arrow_writer.in_progress_rows(),
+            LazyArrowWriter::Writing(_, arrow_writer, _) => arrow_writer.in_progress_rows(),
         }
     }
 }

@@ -7,6 +7,10 @@ use std::{
     ops::AddAssign,
 };
 
+use arrow_array::cast::AsArray;
+use arrow_array::types::{Float32Type, Float64Type};
+use arrow_array::{Array, ArrayRef, RecordBatch};
+use arrow_schema::{DataType, Field, Schema};
 use chrono::Timelike;
 use delta_kernel::expressions::{ColumnName, Scalar};
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
@@ -22,9 +26,156 @@ use parquet::{
 use tracing::warn;
 
 use super::*;
+use crate::datafile::WriterStatsConfig;
 use crate::kernel::arrow::engine_ext::should_include_column;
 use crate::kernel::{Add, scalars::ScalarExt};
 use crate::protocol::{ColumnValueStat, Stats};
+
+/// Parquet float extrema exclude NaNs, so track them from the batches of each file.
+pub(crate) struct NanColumnTracker {
+    columns: Vec<TrackedFloatColumn>,
+}
+
+struct TrackedFloatColumn {
+    path: Vec<String>,
+    indices: Vec<usize>,
+    saw_nan: bool,
+}
+
+impl NanColumnTracker {
+    pub(crate) fn new(schema: &Schema, config: &WriterStatsConfig) -> Self {
+        if config.stats_columns.is_none()
+            && matches!(
+                config.num_indexed_cols,
+                DataSkippingNumIndexedCols::NumColumns(0)
+            )
+        {
+            return Self {
+                columns: Vec::new(),
+            };
+        }
+        let stats_columns = config
+            .stats_columns
+            .as_ref()
+            .and_then(|columns| parse_stats_columns(columns).ok());
+        let mut columns = Vec::new();
+        let mut path = Vec::new();
+        let mut indices = Vec::new();
+        for (index, field) in schema.fields().iter().enumerate() {
+            collect_float_columns(
+                field,
+                index,
+                &mut path,
+                &mut indices,
+                stats_columns.as_deref(),
+                &mut columns,
+            );
+        }
+        Self { columns }
+    }
+
+    pub(crate) fn observe(&mut self, batch: &RecordBatch) {
+        for column in self.columns.iter_mut().filter(|column| !column.saw_nan) {
+            column.saw_nan = contains_nan(batch, &column.indices);
+        }
+    }
+
+    pub(crate) fn into_columns_with_nan(self) -> HashSet<Vec<String>> {
+        self.columns
+            .into_iter()
+            .filter(|column| column.saw_nan)
+            .map(|column| column.path)
+            .collect()
+    }
+}
+
+fn collect_float_columns<'a>(
+    field: &'a Field,
+    index: usize,
+    path: &mut Vec<&'a str>,
+    indices: &mut Vec<usize>,
+    stats_columns: Option<&[ColumnName]>,
+    columns: &mut Vec<TrackedFloatColumn>,
+) {
+    path.push(field.name().as_str());
+    indices.push(index);
+    match unencoded_type(field.data_type()) {
+        DataType::Struct(fields) => {
+            for (child_index, child) in fields.iter().enumerate() {
+                collect_float_columns(child, child_index, path, indices, stats_columns, columns);
+            }
+        }
+        DataType::Float32 | DataType::Float64
+            if stats_columns.is_none_or(|selected| {
+                should_include_column(&ColumnName::new(path.iter().copied()), selected)
+            }) =>
+        {
+            columns.push(TrackedFloatColumn {
+                path: path.iter().map(|name| (*name).to_owned()).collect(),
+                indices: indices.clone(),
+                saw_nan: false,
+            });
+        }
+        _ => (),
+    }
+    indices.pop();
+    path.pop();
+}
+
+fn unencoded_type(data_type: &DataType) -> &DataType {
+    match data_type {
+        DataType::Dictionary(_, value) => unencoded_type(value),
+        DataType::RunEndEncoded(_, value) => unencoded_type(value.data_type()),
+        _ => data_type,
+    }
+}
+
+fn decode_for_nan_stats(array: ArrayRef) -> Option<ArrayRef> {
+    let data_type = unencoded_type(array.data_type());
+    if data_type == array.data_type() {
+        Some(array)
+    } else {
+        arrow_cast::cast(array.as_ref(), data_type).ok()
+    }
+}
+
+fn contains_nan(batch: &RecordBatch, indices: &[usize]) -> bool {
+    let (top_level, children) = indices.split_first().unwrap();
+    let mut array = Arc::clone(batch.column(*top_level));
+    let mut parent_nulls = Vec::new();
+    for &index in children {
+        let Some(decoded) = decode_for_nan_stats(array) else {
+            return true;
+        };
+        let Some(parent) = decoded.as_struct_opt() else {
+            return true;
+        };
+        if let Some(nulls) = parent.nulls() {
+            parent_nulls.push(nulls.clone());
+        }
+        array = Arc::clone(parent.column(index));
+    }
+    // If an encoded array cannot be decoded for this check, omit its bounds conservatively.
+    let Some(array) = decode_for_nan_stats(array) else {
+        return true;
+    };
+    let valid = |row| array.is_valid(row) && parent_nulls.iter().all(|nulls| nulls.is_valid(row));
+    if let Some(floats) = array.as_primitive_opt::<Float32Type>() {
+        floats
+            .values()
+            .iter()
+            .enumerate()
+            .any(|(row, value)| value.is_nan() && valid(row))
+    } else if let Some(floats) = array.as_primitive_opt::<Float64Type>() {
+        floats
+            .values()
+            .iter()
+            .enumerate()
+            .any(|(row, value)| value.is_nan() && valid(row))
+    } else {
+        true
+    }
+}
 
 /// Creates an [`Add`] log action struct.
 pub(crate) fn create_add(
@@ -34,12 +185,14 @@ pub(crate) fn create_add(
     file_metadata: &ParquetMetaData,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
+    columns_with_nan: &HashSet<Vec<String>>,
 ) -> Result<Add, DeltaTableError> {
     let stats = stats_from_file_metadata(
         partition_values,
         file_metadata,
         num_indexed_cols,
         stats_columns,
+        Some(columns_with_nan),
     )?;
     let stats_string = serde_json::to_string(&stats)?;
 
@@ -98,6 +251,7 @@ pub(crate) fn stats_from_parquet_metadata(
         num_rows,
         num_indexed_cols,
         stats_columns,
+        None,
     )
 }
 
@@ -106,6 +260,7 @@ fn stats_from_file_metadata(
     file_metadata: &ParquetMetaData,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
+    columns_with_nan: Option<&HashSet<Vec<String>>>,
 ) -> Result<Stats, DeltaWriterError> {
     let schema_descriptor = file_metadata.file_metadata().schema_descr();
 
@@ -118,7 +273,27 @@ fn stats_from_file_metadata(
         file_metadata.file_metadata().num_rows(),
         num_indexed_cols,
         stats_columns,
+        columns_with_nan,
     )
+}
+
+fn parse_stats_columns(columns: &[impl AsRef<str>]) -> Result<Vec<ColumnName>, DeltaWriterError> {
+    let dialect = sqlparser::dialect::GenericDialect {};
+    columns
+        .iter()
+        .map(|column| {
+            sqlparser::parser::Parser::new(&dialect)
+                .try_with_sql(column.as_ref())
+                .map_err(|err| DeltaTableError::generic(err.to_string()))?
+                .parse_multipart_identifier()
+                .map(|parts| ColumnName::new(parts.into_iter().map(|part| part.value)))
+                .map_err(|err| {
+                    DeltaWriterError::DeltaTable(DeltaTableError::GenericError {
+                        source: Box::new(err),
+                    })
+                })
+        })
+        .collect()
 }
 
 fn stats_from_metadata(
@@ -128,30 +303,13 @@ fn stats_from_metadata(
     num_rows: i64,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
+    columns_with_nan: Option<&HashSet<Vec<String>>>,
 ) -> Result<Stats, DeltaWriterError> {
     let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut null_count: HashMap<String, ColumnCountStat> = HashMap::new();
-    let dialect = sqlparser::dialect::GenericDialect {};
-
     let idx_to_iterate = if let Some(stats_cols) = stats_columns {
-        let stats_cols = stats_cols
-            .iter()
-            .map(|v| {
-                match sqlparser::parser::Parser::new(&dialect)
-                    .try_with_sql(v.as_ref())
-                    .map_err(|e| DeltaTableError::generic(e.to_string()))?
-                    .parse_multipart_identifier()
-                {
-                    Ok(parts) => Ok(ColumnName::new(parts.into_iter().map(|v| v.value))),
-                    Err(e) => Err(DeltaWriterError::DeltaTable(
-                        DeltaTableError::GenericError {
-                            source: Box::new(e),
-                        },
-                    )),
-                }
-            })
-            .collect::<Result<Vec<ColumnName>, DeltaWriterError>>()?;
+        let stats_cols = parse_stats_columns(stats_cols)?;
 
         schema_descriptor
             .columns()
@@ -238,7 +396,11 @@ fn stats_from_metadata(
                 left
             });
 
-        if let Some(stats) = maybe_stats {
+        if let Some(mut stats) = maybe_stats {
+            if columns_with_nan.is_some_and(|columns| columns.contains(column_path_parts)) {
+                stats.min = None;
+                stats.max = None;
+            }
             apply_min_max_for_column(
                 stats,
                 column_descr.clone(),
