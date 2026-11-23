@@ -11,7 +11,7 @@ use futures::future::BoxFuture;
 
 use crate::delta_datafusion::{
     DataValidationExec, DeltaScanNext, DeltaSessionExt, Expression, constraints_to_exprs,
-    create_session, expr::fmt_expr_to_sql, into_expr,
+    create_session, expr::fmt_expr_to_sql,
 };
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
@@ -136,16 +136,13 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 let proivider = DeltaScanNext::builder()
                     .with_snapshot(snapshot.snapshot().clone())
                     .await?;
-                let schema = proivider.schema().to_dfschema()?;
+                let schema = proivider.schema().to_dfschema_ref()?;
 
                 // Create an Hashmap of the name to the processed expression
                 let mut constraints_sql_mapper = HashMap::with_capacity(this.check_constraints.len());
                 for (name, _) in configuration_key_mapper.iter() {
-                    let converted_expr = into_expr(
-                        this.check_constraints[name].clone(),
-                        &schema,
-                        session.as_ref(),
-                    )?;
+                    let converted_expr = this.check_constraints[name]
+                        .resolve_for_constraint(session.as_ref(), schema.clone())?;
                     let constraint_sql = fmt_expr_to_sql(&converted_expr)?;
                     constraints_sql_mapper.insert(name, constraint_sql);
                 }
@@ -329,6 +326,23 @@ mod tests {
             .with_constraint("id", "value > 5")
             .await;
         assert!(constraint.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_add_null_safe_constraint_keeps_portable_sql() -> DeltaResult<()> {
+        let batch = get_record_batch(None, false);
+        let table = create_bare_table().write(vec![batch]).await?;
+
+        let table = table
+            .add_constraint()
+            .with_constraint("fractional", "value IS DISTINCT FROM 5.5")
+            .await?;
+
+        assert_eq!(
+            get_constraint(&table, "delta.constraints.fractional"),
+            "value IS DISTINCT FROM 5.5"
+        );
         Ok(())
     }
 

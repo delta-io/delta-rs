@@ -1586,6 +1586,28 @@ mod test {
         }
 
         #[tokio::test]
+        async fn parses_coerced_null_safe_comparisons() {
+            let session = SessionContext::new();
+            let schema = test_schema();
+
+            for op in ["IS DISTINCT FROM", "IS NOT DISTINCT FROM"] {
+                let implicit = parse_sql_predicate_to_kernel(
+                    format!("year {op} 2020"),
+                    &schema,
+                    &session.state(),
+                )
+                .unwrap();
+                let explicit = parse_sql_predicate_to_kernel(
+                    format!("year {op} CAST(2020 AS INT)"),
+                    &schema,
+                    &session.state(),
+                )
+                .unwrap();
+                assert_eq!(implicit, explicit);
+            }
+        }
+
+        #[tokio::test]
         async fn parses_boolean_logic_matching_dnf() {
             let session = SessionContext::new();
             let schema = test_schema();
