@@ -2010,10 +2010,24 @@ impl std::future::IntoFuture for MergeBuilder {
 
             let parent = this.log_store.clone();
             let (snapshot, metrics) = with_operation(&parent, |log_store| async move {
-                let (state, _) = resolve_session_state(
+                let (mut state, _) = resolve_session_state(
                     this.state.as_deref(),
                     this.session_fallback_policy,
-                    || create_session().state(),
+                    || {
+                        let mut state = create_session().state();
+                        // Default session only (no caller session), streamed merges only: keep the
+                        // source on the build side of the join. DataFusion 56 can make a small
+                        // target the build side, and then the target scan reads every file before
+                        // the source's runtime predicates exist. This applies to every default
+                        // streamed merge, not only those that skip files, because skip_files is
+                        // computed later in `execute`. Documented in the commit message.
+                        if this.streaming {
+                            let options = state.config_mut().options_mut();
+                            options.optimizer.hash_join_single_partition_threshold = 0;
+                            options.optimizer.hash_join_single_partition_threshold_rows = 0;
+                        }
+                        state
+                    },
                     SessionResolveContext {
                         operation: "merge",
                         table_uri: Some(log_store.root_url()),
@@ -2534,17 +2548,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_streaming_source_target_on_build_side() {
-        // With the default session, the small target is the build side of the join. The target
-        // is read before the source statistics are known, so no file is skipped.
+        // With a session that keeps DataFusion's default join thresholds, the small target is the
+        // build side of the join. The target is read before the source statistics are known, so
+        // no file is skipped. The default streamed-merge session forces the source as build side
+        // (see `into_future`), so this case needs an explicit session.
         let schema = get_arrow_schema(&None);
         let table = setup_table(Some(vec!["modified"])).await;
         let table = write_data(table, &schema).await;
 
+        let target_build_side = Arc::new(SessionContext::new().state());
         let (table, metrics) = upsert(
             table,
             a_and_x_source(&schema),
             id_and_modified_match(),
-            None,
+            Some(target_build_side),
         )
         .await;
 
