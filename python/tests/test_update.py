@@ -136,7 +136,7 @@ def test_update_wrong_types_cast(tmp_path: pathlib.Path, sample_table: Table):
     with pytest.raises(Exception) as excinfo:
         dt.update(updates={"deleted": "'hello_world'"})
 
-    expected = """Generic DeltaTable error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Cast error: Cannot cast value 'hello_world' to value of Boolean type"""
+    expected = """Generic DeltaTable error: Optimizer rule 'simplify_expressions' failed\ncaused by\nFailed to cast field 'lit' from Utf8 to Boolean\ncaused by\nArrow error: Cast error: Cannot cast value 'hello_world' to value of Boolean type"""
     assert str(excinfo.value) == expected
 
 
