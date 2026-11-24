@@ -15,6 +15,7 @@ use deltalake_core::{DeltaTableBuilder, delta_datafusion::create_session, protoc
 use super::{LabResult, Url, open_table};
 
 mod layout;
+mod vacuum;
 
 type Rows = Vec<Vec<Option<String>>>;
 
@@ -44,12 +45,17 @@ async fn execute_statement(
     uri: &Url,
     layout: &layout::Layout,
 ) -> LabResult<()> {
+    if let Some(mode) = vacuum::statement_mode(sql) {
+        return vacuum::run(ctx, uri, mode).await;
+    }
     let plan = ctx.state().create_logical_plan(sql).await?;
     match &plan {
         LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(create))
             if create.name.table() == "actual" =>
         {
             let table = DeltaTableBuilder::from_url(uri.clone())?.build()?;
+            // Let SQL COPY seed untracked files under this fixture's temporary table.
+            ctx.register_object_store(&Url::parse("fixture:///")?, table.object_store());
             let writer = table
                 .write([])
                 .with_save_mode(SaveMode::ErrorIfExists)

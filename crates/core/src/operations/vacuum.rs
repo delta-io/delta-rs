@@ -109,12 +109,6 @@ fn deletion_vector_path(file: &LogicalFileView, table_root: &Url) -> DeltaResult
     }
 }
 
-fn tombstone_object_store_path(tombstone: &TombstoneView) -> Path {
-    let path = tombstone.path();
-    // Use `Path::parse` to preserve percent encoding. `Path::from` converts percent signs to `%25`.
-    Path::parse(path.as_ref()).unwrap_or_else(|_| Path::from(path.as_ref()))
-}
-
 async fn collect_keep_version_paths(
     log_store: &dyn LogStore,
     versions: &[Version],
@@ -231,8 +225,10 @@ pub struct VacuumBuilder {
 pub struct VacuumMetrics {
     /// Was this a dry run
     pub dry_run: bool,
-    /// Files deleted successfully
+    /// Planned keys for a dry run, or keys whose delete the store acknowledged as successful.
     pub files_deleted: Vec<String>,
+    /// Number of delete attempts for which the store explicitly reported `NotFound`.
+    pub num_already_absent_files: i64,
 }
 
 /// Details for the Vacuum start operation for the transaction log
@@ -249,8 +245,10 @@ pub struct VacuumStartOperationMetrics {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VacuumEndOperationMetrics {
-    /// The number of actually deleted files
+    /// Number of keys for which the store acknowledged a successful delete.
     pub num_deleted_files: i64,
+    /// Number of delete attempts for which the store explicitly reported `NotFound`.
+    pub num_already_absent_files: i64,
     /// The number of actually vacuumed directories
     pub num_vacuumed_directories: i64,
 }
@@ -402,7 +400,7 @@ impl VacuumBuilder {
         // VacuumMode::Lite file set
         // Expired tombstones are *always deleted (*unless in keep list)
         for tombs in expired_tombstones.iter() {
-            let path = tombstone_object_store_path(tombs);
+            let path = tombs.object_store_path();
             if ok_to_delete(&path, &valid_files, &keep_files, partition_columns)? {
                 files_to_delete.push(path);
                 file_sizes.push(tombs.size().unwrap_or(0));
@@ -567,6 +565,7 @@ impl std::future::IntoFuture for VacuumBuilder {
                     VacuumMetrics {
                         files_deleted: plan.files_to_delete.iter().map(|f| f.to_string()).collect(),
                         dry_run: true,
+                        num_already_absent_files: 0,
                     },
                 ));
             }
@@ -651,20 +650,21 @@ impl VacuumPlan {
             .map(Result::Ok)
             .boxed();
 
-        let files_deleted = store
-            .object_store()
-            .delete_stream(locations)
-            .map(|res| match res {
-                Ok(path) => Ok(path.to_string()),
-                Err(Error::NotFound { path, .. }) => Ok(path),
-                Err(err) => Err(err),
-            })
-            .try_collect::<Vec<_>>()
-            .await?;
+        let mut deletes = store.object_store().delete_stream(locations);
+        let mut files_deleted = Vec::new();
+        let mut num_already_absent_files = 0;
+        while let Some(result) = deletes.next().await {
+            match result {
+                Ok(path) => files_deleted.push(path.to_string()),
+                Err(Error::NotFound { .. }) => num_already_absent_files += 1,
+                Err(err) => return Err(err.into()),
+            }
+        }
 
         // Create end metadata
         let end_metrics = VacuumEndOperationMetrics {
             num_deleted_files: files_deleted.len() as i64,
+            num_already_absent_files,
             num_vacuumed_directories: 0, // Set to zero since we only remove files not dirs
         };
 
@@ -683,6 +683,7 @@ impl VacuumPlan {
             VacuumMetrics {
                 files_deleted,
                 dry_run: false,
+                num_already_absent_files,
             },
         ))
     }
@@ -969,7 +970,7 @@ async fn collect_full_mode_tombstones(
             (Vec::new(), TombstonePathSets::default()),
             |(mut expired_tombstones, mut tombstone_path_sets), tombstone| {
                 let is_expired = is_tombstone_expired(&tombstone, tombstone_retention_timestamp);
-                let path = tombstone_object_store_path(&tombstone);
+                let path = tombstone.object_store_path();
                 tombstone_path_sets.record(path, is_expired);
                 if is_expired {
                     expired_tombstones.push(tombstone);

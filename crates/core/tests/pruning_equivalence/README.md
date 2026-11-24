@@ -43,3 +43,17 @@ SELECT id FROM actual WHERE id = 11;
 ```
 
 The Rust runner checks the scan metric and the returned rows. DuckDB ignores the Delta-specific comments, so its own SQLLogicTest runner can check the SQL and expected rows in the same file.
+
+## Test Vacuum with the Rust runner
+
+The `passing/vacuum_encoded_paths.test` fixture uses `VACUUM actual LITE` and
+`VACUUM actual FULL` to run delta-rs Vacuum against the fixture's temporary
+table. The test clock advances eight days so the default retention period
+expires. DataFusion can write an untracked file into that table using
+`COPY ... TO 'fixture:///...' STORED AS PARQUET`.
+
+After each Vacuum, query `vacuum_files(source, path)` to compare the
+table-relative Parquet keys listed `before` and `after` with the keys
+`reported` as deleted. The `vacuum_end(deleted, already_absent)` row comes
+from that run's committed `VACUUM END` and is empty when the run writes no commit. Set
+`DELTA_FIXTURE=passing/vacuum_encoded_paths.test` to replay this case.

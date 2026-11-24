@@ -1,6 +1,9 @@
+import json
 import os
 import pathlib
+import time
 from datetime import datetime, timedelta
+from urllib.parse import quote, unquote
 
 import pytest
 from arro3.core import Table
@@ -72,14 +75,21 @@ def test_vacuum_zero_duration(
     assert parquet_files == {pathlib.Path(f).name for f in new_files}
 
 
-def test_vacuum_transaction_log(tmp_path: pathlib.Path, sample_table: Table):
+@pytest.mark.parametrize("predelete", [False, True], ids=["present", "one-absent"])
+def test_vacuum_transaction_log(
+    tmp_path: pathlib.Path, sample_table: Table, predelete: bool
+):
     for i in range(5):
         write_deltalake(tmp_path, sample_table, mode="overwrite")
 
     dt = DeltaTable(tmp_path)
+    active = set(map(pathlib.Path, dt.file_uris()))
+    stale = set(tmp_path.glob("*.parquet")) - active
+    if predelete:
+        stale.pop().unlink()
 
     commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
-    dt.vacuum(
+    deleted = dt.vacuum(
         retention_hours=0,
         dry_run=False,
         enforce_retention_duration=False,
@@ -105,9 +115,115 @@ def test_vacuum_transaction_log(tmp_path: pathlib.Path, sample_table: Table):
     assert history[0]["operationParameters"]["status"] == "COMPLETED"
     assert history[1]["operationParameters"] == expected_start_parameters
 
-    assert history[0]["operationMetrics"]["numDeletedFiles"] == 4
+    assert set(deleted) == {path.name for path in stale}
+    assert set(tmp_path.glob("*.parquet")) == active
+    assert history[0]["operationMetrics"]["numDeletedFiles"] == len(stale)
+    assert history[0]["operationMetrics"]["numAlreadyAbsentFiles"] == int(predelete)
     assert history[1]["operationMetrics"]["numFilesToDelete"] == 4
     assert history[1]["operationMetrics"]["sizeOfDataToDelete"] > 0
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("full", [False, True], ids=["lite", "full"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "plain",
+        "a b",
+        "a:b",
+        "a/b",
+        "a%b",
+        "a~b",
+        "München",
+        "日本語",
+        "2024-11-03 00:00:00.000000",
+        datetime(2024, 11, 3),
+    ],
+)
+def test_vacuum_partition_path_lifecycle(tmp_path: pathlib.Path, value, full: bool):
+    import pyarrow as pa
+    import pyarrow.fs as fs
+
+    from deltalake.fs import DeltaStorageHandler
+
+    def commit_actions(version, kind):
+        commit = tmp_path / "_delta_log" / f"{version:020d}.json"
+        actions = map(json.loads, commit.read_text().splitlines())
+        return [action[kind] for action in actions if kind in action]
+
+    data = pa.table({"id": [1, 2], "part": [value, value]})
+    write_deltalake(tmp_path, data, partition_by=["part"])
+    (physical,) = tmp_path.glob("part=*/*.parquet")
+    old_key = physical.relative_to(tmp_path).as_posix()
+    (add,) = commit_actions(0, "add")
+    assert unquote(add["path"]) == old_key
+    partition = add["partitionValues"]["part"]
+    if isinstance(value, str):
+        assert partition == value
+    else:
+        assert datetime.fromisoformat(partition) == value
+    assert physical.parent.name == f"part={quote(partition, safe='')}"
+    store = fs.PyFileSystem(DeltaStorageHandler(str(tmp_path)))
+    listed = store.get_file_info(fs.FileSelector("", recursive=True))
+    assert {entry.path for entry in listed if entry.path.endswith(".parquet")} == {
+        old_key
+    }
+    dt = DeltaTable(tmp_path)
+    assert [pathlib.Path(uri) for uri in dt.file_uris()] == [physical]
+    assert dt.get_add_actions().column("path").to_pylist() == [add["path"]]
+    assert dt.to_pyarrow_table(engine="datafusion")["part"].to_pylist() == [
+        value,
+        value,
+    ]
+
+    write_deltalake(tmp_path, data, partition_by=["part"], mode="overwrite")
+    (remove,) = commit_actions(1, "remove")
+    assert unquote(remove["path"]) == old_key
+    dt.update_incremental()
+    (active,) = map(pathlib.Path, dt.file_uris())
+    assert active != physical
+    orphan = physical.with_name("orphan.parquet")
+    orphan.write_bytes(physical.read_bytes())
+    os.utime(orphan, (0, 0))
+    expected = {old_key}
+    if full:
+        expected.add(orphan.relative_to(tmp_path).as_posix())
+
+    # Vacuum expires tombstones strictly older than its millisecond cutoff.
+    eligible_at = (remove["deletionTimestamp"] + 1) / 1000
+    time.sleep(max(0, eligible_at - time.time()))
+    options = dict(retention_hours=0, enforce_retention_duration=False, full=full)
+    assert set(dt.vacuum(dry_run=True, **options)) == expected
+    assert set(dt.vacuum(dry_run=False, **options)) == expected
+    assert active.is_file()
+    assert not physical.exists()
+    assert orphan.is_file() == (not full)
+    assert next(dt.history(1))["operationMetrics"]["numDeletedFiles"] == len(expected)
+
+    # The same tombstone is still eligible on the second run.
+    assert dt.vacuum(dry_run=False, **options) == []
+    metrics = next(dt.history(1))["operationMetrics"]
+    assert metrics["numDeletedFiles"] == 0
+    assert metrics["numAlreadyAbsentFiles"] == 1
+    assert active.is_file()
+
+
+def test_vacuum_propagates_delete_failure(tmp_path: pathlib.Path, sample_table: Table):
+    write_deltalake(tmp_path, sample_table)
+    (victim,) = tmp_path.glob("*.parquet")
+    write_deltalake(tmp_path, sample_table, mode="overwrite")
+    victim.unlink()
+    victim.mkdir()  # A non-file at the tombstoned key makes local file deletion fail.
+    dt = DeltaTable(tmp_path)
+    with pytest.raises(OSError):
+        dt.vacuum(retention_hours=0, enforce_retention_duration=False, dry_run=False)
+    reopened = DeltaTable(tmp_path)
+    assert all(pathlib.Path(uri).is_file() for uri in reopened.file_uris())
+    assert not any(
+        info["operation"] == "VACUUM END"
+        and info["operationParameters"]["status"] == "COMPLETED"
+        for info in reopened.history()
+    )
 
 
 def test_vacuum_keep_versions():
