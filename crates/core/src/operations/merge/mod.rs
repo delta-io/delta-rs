@@ -2575,6 +2575,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_merge_streaming_source_default_session_keeps_source_on_build_side() {
+        // Without a caller session, the streamed merge uses the default session, which keeps the
+        // source on the build side of the join. The target scan then skips the file that cannot
+        // match the source (A is in file 1 of 2 target files for `modified`), so only one
+        // target file is scanned. This covers the default-session branch in `into_future`.
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+        let table = write_data(table, &schema).await;
+
+        let (table, metrics) = table
+            .merge(a_and_x_source(&schema), id_and_modified_match())
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_streaming(true)
+            .when_matched_update(|update| update.update("value", col("source.value")))
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        assert_eq!(metrics.num_target_rows_inserted, 1);
+        assert_eq!(metrics.num_target_files_scanned, 1);
+        assert_eq!(metrics.num_target_files_removed, 1);
+
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&A_AND_X_UPSERTED, &actual);
+    }
+
+    #[tokio::test]
     async fn test_merge_streaming_source_not_matched_by_source_reads_all_files() {
         let schema = get_arrow_schema(&None);
         let table = setup_table(Some(vec!["modified"])).await;
