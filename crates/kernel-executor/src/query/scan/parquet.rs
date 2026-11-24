@@ -40,7 +40,9 @@ use super::expr_adapter::{DeltaPhysicalExprAdapterFactory, relax_schema_nested_n
 /// session sets `coerce_int96`.
 pub fn table_parquet_options(session: &dyn Session) -> TableParquetOptions {
     let mut global = session.config().options().execution.parquet.clone();
-    global.coerce_int96.get_or_insert(datafusion::common::parquet_config::DFTimeUnit::Microsecond);
+    global
+        .coerce_int96
+        .get_or_insert(datafusion::common::parquet_config::DFTimeUnit::Microsecond);
     TableParquetOptions {
         global,
         ..Default::default()
