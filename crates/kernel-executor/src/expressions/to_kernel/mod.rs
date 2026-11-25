@@ -84,9 +84,14 @@ pub fn is_null_safe_comparison_with_nan(expr: &Expr) -> bool {
 }
 
 fn is_nan_literal(expr: &Expr) -> bool {
-    match expr {
-        Expr::Literal(ScalarValue::Float32(Some(value)), _) => value.is_nan(),
-        Expr::Literal(ScalarValue::Float64(Some(value)), _) => value.is_nan(),
+    matches!(expr, Expr::Literal(value, _) if is_float_nan(value))
+}
+
+/// Returns whether a floating-point scalar contains NaN.
+pub fn is_float_nan(value: &ScalarValue) -> bool {
+    match value {
+        ScalarValue::Float32(Some(value)) => value.is_nan(),
+        ScalarValue::Float64(Some(value)) => value.is_nan(),
         _ => false,
     }
 }
