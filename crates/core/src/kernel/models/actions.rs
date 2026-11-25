@@ -431,7 +431,7 @@ impl ProtocolInner {
         fn parse_bool(value: &str) -> bool {
             value.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v)
         }
-
+        dbg!(&configuration);
         if self.min_writer_version >= 7 {
             // TODO: move this is in future to use delta_kernel::table_properties
             let mut converted_writer_features = configuration
@@ -440,6 +440,9 @@ impl ProtocolInner {
                 .filter_map(|(key, value)| match key.as_str() {
                     "delta.enableChangeDataFeed" if parse_bool(value) => {
                         Some(TableFeature::ChangeDataFeed)
+                    }
+                    "delta.enableTypeWidening" if parse_bool(value) => {
+                        Some(TableFeature::TypeWidening)
                     }
                     "delta.appendOnly" if parse_bool(value) => Some(TableFeature::AppendOnly),
                     "delta.enableDeletionVectors" if parse_bool(value) => {
@@ -667,6 +670,29 @@ impl ProtocolInner {
             }
         }
 
+        // Check enableTypeWidening and promote the protocol to writer table features.
+        if let Some(enable_tw) = parsed_properties.get(&TableProperty::EnableTypeWidening) {
+            let if_enable_tw = enable_tw.to_ascii_lowercase().parse::<bool>();
+            match if_enable_tw {
+                Ok(true) => {
+                    self.upgrade_to_reader_features();
+                    self.upgrade_to_writer_features();
+                    self.writer_features
+                        .get_or_insert_with(HashSet::new)
+                        .insert(TableFeature::TypeWidening);
+                    self.reader_features
+                        .get_or_insert_with(HashSet::new)
+                        .insert(TableFeature::TypeWidening);
+                }
+                Ok(false) => {}
+                _ => {
+                    return Err(Error::Generic(format!(
+                        "delta.enableTypeWidening = '{enable_tw}' is invalid, valid values are ['true']"
+                    )));
+                }
+            }
+        }
+
         // If the minWriterVersion has been set to 7 then there are additional writer features
         // which must be applied
         if self.min_writer_version >= 7
@@ -772,6 +798,8 @@ pub enum TableFeatures {
     CheckConstraints,
     /// CDF on a table
     ChangeDataFeed,
+    /// allow to change columns
+    TypeWidening,
     /// Columns with generated values
     GeneratedColumns,
     /// ID Columns
@@ -807,6 +835,7 @@ impl FromStr for TableFeatures {
             "invariants" => Ok(TableFeatures::Invariants),
             "checkConstraints" => Ok(TableFeatures::CheckConstraints),
             "changeDataFeed" => Ok(TableFeatures::ChangeDataFeed),
+            "typeWidening" => Ok(TableFeatures::TypeWidening),
             "generatedColumns" => Ok(TableFeatures::GeneratedColumns),
             "identityColumns" => Ok(TableFeatures::IdentityColumns),
             "rowTracking" => Ok(TableFeatures::RowTracking),
@@ -834,6 +863,7 @@ impl AsRef<str> for TableFeatures {
             TableFeatures::Invariants => "invariants",
             TableFeatures::CheckConstraints => "checkConstraints",
             TableFeatures::ChangeDataFeed => "changeDataFeed",
+            TableFeatures::TypeWidening => "typeWidening",
             TableFeatures::GeneratedColumns => "generatedColumns",
             TableFeatures::IdentityColumns => "identityColumns",
             TableFeatures::RowTracking => "rowTracking",

@@ -75,6 +75,9 @@ pub enum TableProperty {
     /// true to enable deletion vectors and predictive I/O for updates.
     EnableDeletionVectors,
 
+    ///true to enable automatic type migration with schema evolution during write operations
+    EnableTypeWidening,
+
     /// The degree to which a transaction must be isolated from modifications made by concurrent transactions.
     ///
     /// Valid values are `Serializable` and `WriteSerializable`.
@@ -140,6 +143,7 @@ impl AsRef<str> for TableProperty {
             Self::DeletedFileRetentionDuration => "delta.deletedFileRetentionDuration",
             Self::EnableChangeDataFeed => "delta.enableChangeDataFeed",
             Self::EnableDeletionVectors => "delta.enableDeletionVectors",
+            Self::EnableTypeWidening => "delta.enableTypeWidening",
             Self::IsolationLevel => "delta.isolationLevel",
             Self::LogRetentionDuration => "delta.logRetentionDuration",
             Self::EnableExpiredLogCleanup => "delta.enableExpiredLogCleanup",
@@ -175,6 +179,7 @@ impl FromStr for TableProperty {
                 Ok(Self::DeletedFileRetentionDuration)
             }
             "delta.enableChangeDataFeed" => Ok(Self::EnableChangeDataFeed),
+            "delta.enableTypeWidening" => Ok(Self::EnableTypeWidening),
             "delta.enableDeletionVectors" => Ok(Self::EnableDeletionVectors),
             "delta.isolationLevel" => Ok(Self::IsolationLevel),
             "delta.logRetentionDuration" | "logRetentionDuration" => Ok(Self::LogRetentionDuration),
@@ -241,6 +246,9 @@ pub trait TablePropertiesExt {
     /// Whether the Change Data Feed is enabled for this table.
     fn enable_change_data_feed(&self) -> bool;
 
+    /// Allow types to widened for this table.
+    fn enable_type_widening(&self) -> bool;
+
     /// How long removed data files are retained before they may be physically deleted by vacuum.
     fn deleted_file_retention_duration(&self) -> Duration;
 
@@ -283,6 +291,10 @@ impl TablePropertiesExt for TableProperties {
 
     fn enable_change_data_feed(&self) -> bool {
         self.enable_change_data_feed.unwrap_or(false)
+    }
+
+    fn enable_type_widening(&self) -> bool {
+        self.enable_type_widening.unwrap_or(false)
     }
 
     fn deleted_file_retention_duration(&self) -> Duration {
