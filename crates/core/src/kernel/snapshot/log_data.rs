@@ -131,6 +131,7 @@ mod datafusion {
     use crate::{DeltaResult, DeltaTableError};
 
     use crate::kernel::ARROW_HANDLER;
+    use crate::kernel::scalars::create_escaped_binary_string;
     use crate::kernel::snapshot::ceil_timestamps;
 
     impl LogDataHandler<'_> {
@@ -253,25 +254,21 @@ mod datafusion {
             // This means the stored bytes are the UTF-8 encoding of that escape string,
             // NOT the original raw bytes.  We must apply the same encoding to the predicate
             // scalars before comparing so that equality holds.
-            fn encode_binary_bytes(bytes: &[u8]) -> Vec<u8> {
-                bytes
-                    .iter()
-                    .flat_map(|&b| format!("\\u{b:04X}").into_bytes())
-                    .collect()
-            }
-
+            //
             // Unwrap the dictionary wrapper that `_arrow_schema` adds to binary
             // partition columns.
             fn unwrap_binary_scalar(scalar: &ScalarValue) -> Option<Vec<u8>> {
                 match scalar {
                     ScalarValue::Binary(Some(v)) | ScalarValue::LargeBinary(Some(v)) => {
-                        Some(encode_binary_bytes(v))
+                        Some(create_escaped_binary_string(v).into_bytes())
                     }
                     ScalarValue::Dictionary(_, inner) => unwrap_binary_scalar(inner),
                     _ => None,
                 }
             }
 
+            let encoded_values: Vec<Vec<u8>> =
+                values.iter().filter_map(unwrap_binary_scalar).collect();
             let mut contains = Vec::with_capacity(binary_arr.len());
             for i in 0..binary_arr.len() {
                 if binary_arr.is_null(i) {
@@ -279,12 +276,7 @@ mod datafusion {
                     contains.push(true);
                 } else {
                     let pv: &[u8] = binary_arr.value(i);
-                    contains.push(
-                        values
-                            .iter()
-                            .filter_map(unwrap_binary_scalar)
-                            .any(|encoded| encoded.as_slice() == pv),
-                    );
+                    contains.push(encoded_values.iter().any(|encoded| encoded == pv));
                 }
             }
             Some(BooleanArray::from(contains))

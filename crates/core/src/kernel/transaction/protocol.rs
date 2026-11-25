@@ -294,6 +294,29 @@ impl ProtocolChecker {
             }
         }
 
+        if actions
+            .iter()
+            .any(|action| matches!(action, Action::DomainMetadata(_)))
+        {
+            return Err(TransactionError::UnsupportedTableFeatures(vec![
+                TableFeature::DomainMetadata,
+            ]));
+        }
+
+        let enables_in_commit_timestamps = actions.iter().any(|action| {
+            matches!(action, Action::Metadata(metadata) if metadata
+                .configuration()
+                .get("delta.enableInCommitTimestamps")
+                .is_some_and(|value| value.eq_ignore_ascii_case("true")))
+        });
+        if enables_in_commit_timestamps
+            && snapshot.config().enable_in_commit_timestamps != Some(true)
+        {
+            return Err(TransactionError::UnsupportedTableFeatures(vec![
+                TableFeature::InCommitTimestamp,
+            ]));
+        }
+
         Ok(())
     }
 }
@@ -338,6 +361,14 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
         writer_features.insert(TableFeature::ColumnMapping);
     }
     writer_features.insert(TableFeature::DeletionVectors);
+    writer_features.insert(TableFeature::CatalogManaged);
+    writer_features.insert(TableFeature::VacuumProtocolCheck);
+    // Appends neither emit nor drop domain-metadata actions, so writing to a table that carries
+    // them is compliant; the row-id high-water-mark upkeep that RowTracking would need is a
+    // separate (still unsupported) feature.
+    writer_features.insert(TableFeature::DomainMetadata);
+    // Populated on commit by `maybe_set_in_commit_timestamp`.
+    writer_features.insert(TableFeature::InCommitTimestamp);
     // writer_features.insert(TableFeature::IdentityColumns);
     // `checkpointProtection` is a writer-only feature which constrains checkpoint
     // creation and metadata cleanup, neither of which this crate performs when
@@ -546,6 +577,31 @@ mod tests {
                 .can_commit(eager, &neutral_actions, &neutral_op)
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn test_can_commit_rejects_domain_metadata_actions() {
+        let snapshot = DeltaTableState::from_actions(vec![
+            Action::Protocol(ProtocolInner::new(1, 1).as_kernel()),
+            metadata_action(None).into(),
+        ])
+        .await
+        .unwrap();
+        let op = DeltaOperation::Update { predicate: None };
+        let actions = vec![Action::DomainMetadata(crate::kernel::DomainMetadata {
+            domain: "app.domain".to_string(),
+            configuration: "{}".to_string(),
+            removed: false,
+        })];
+
+        let err = INSTANCE
+            .can_commit(snapshot.snapshot(), &actions, &op)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            TransactionError::UnsupportedTableFeatures(features)
+                if features == vec![TableFeature::DomainMetadata]
+        ));
     }
 
     #[tokio::test]

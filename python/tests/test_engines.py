@@ -215,3 +215,17 @@ def test_datafusion_engine_string_lists_convert_to_pandas(tmp_path):
     table = DeltaTable(tmp_path).to_pyarrow_table(engine="datafusion")
 
     assert len(table.to_pandas()) == 2
+
+
+@pytest.mark.parametrize(
+    "table_path, feature",
+    [(COLUMN_MAPPED_TABLE, "columnMapping"), (DV_TABLE, "deletionVectors")],
+)
+def test_pyarrow_engine_error_points_to_datafusion_engine(table_path, feature):
+    dt = DeltaTable(table_path)
+    with pytest.raises(DeltaProtocolError) as excinfo:
+        dt.to_pyarrow_dataset()
+    message = str(excinfo.value)
+    assert feature in message
+    assert 'engine="datafusion"' in message
+    assert "not yet supported by the deltalake reader" not in message
