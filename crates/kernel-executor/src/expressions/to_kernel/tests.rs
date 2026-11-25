@@ -690,6 +690,17 @@ fn test_between_with_expressions() {
 }
 
 #[test]
+fn test_null_safe_nan_comparisons_are_not_used_for_file_skipping() {
+    for (nan, finite) in [(lit(f32::NAN), lit(1.0_f32)), (lit(f64::NAN), lit(1.0_f64))] {
+        for op in [Operator::IsDistinctFrom, Operator::IsNotDistinctFrom] {
+            assert!(to_delta_predicate(&binary_expr(col("x"), op, nan.clone())).is_err());
+            assert!(to_delta_predicate(&binary_expr(nan.clone(), op, col("x"))).is_err());
+            assert!(to_delta_predicate(&binary_expr(col("x"), op, finite.clone())).is_ok());
+        }
+    }
+}
+
+#[test]
 fn test_is_exact_partition_predicate() {
     let partition_columns = ["p".to_string(), "q".to_string()];
     let exact = |expr: Expr| is_exact_partition_predicate(&expr, &partition_columns);
