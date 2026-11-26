@@ -76,6 +76,41 @@ def test_append_unsigned_int_to_float_column(tmp_path):
     assert sorted(result["foo"].to_pylist()) == [1.0, 2.0, 3.0, 200.0]
 
 
+def test_append_unsigned_with_generated_column(tmp_path):
+    from deltalake import Field as DeltaField
+    from deltalake import Schema as DeltaSchema
+
+    schema = DeltaSchema(
+        [
+            DeltaField("a", "long"),
+            DeltaField("b", "long"),
+            DeltaField("c", "long", metadata={"delta.generationExpression": "a - b"}),
+        ]
+    )
+    DeltaTable.create(tmp_path, schema)
+    write_deltalake(
+        tmp_path,
+        Table.from_pydict(
+            {
+                "a": Array([0, 200], DataType.uint8()),
+                "b": Array([1, 250], DataType.uint8()),
+            }
+        ),
+        mode="append",
+    )
+
+    dt = DeltaTable(tmp_path)
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select a, b, c from tbl order by a")
+        .read_all()
+    )
+    assert result["a"].to_pylist() == [0, 200]
+    assert result["b"].to_pylist() == [1, 250]
+    assert result["c"].to_pylist() == [-1, -50]
+
+
 def test_overwrite_schema_with_unsigned_column(tmp_path):
     write_deltalake(
         tmp_path, Table.from_pydict({"foo": Array([1, 2], DataType.int64())})
