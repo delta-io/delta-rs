@@ -1238,6 +1238,26 @@ impl MaterializedFilesSeed {
             self.existing_predicate,
         )
     }
+
+    /// Keep only the files at these (batch, row) positions. At the seed's version each kept
+    /// file replays from its own row, as in a full replay.
+    #[cfg(feature = "datafusion")]
+    fn retain_rows(self, rows: &[(usize, usize)]) -> DeltaResult<Self> {
+        let mut keep_by_batch = std::collections::BTreeMap::new();
+        for &(batch, row) in rows {
+            keep_by_batch
+                .entry(batch)
+                .or_insert_with(|| vec![false; self.batches[batch].num_rows()])[row] = true;
+        }
+        let batches = keep_by_batch
+            .into_iter()
+            .map(|(batch, keep)| filter_record_batch(&self.batches[batch], &keep.into()))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            batches: batches.into(),
+            ..self
+        })
+    }
 }
 
 impl IntoIterator for MaterializedFilesSeed {

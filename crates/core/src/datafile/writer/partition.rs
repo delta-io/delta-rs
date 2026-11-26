@@ -981,12 +981,11 @@ mod tests {
         }
     }
 
-    /// An upstream gap, kept as documentation: with both a row-count bound and a byte bound
-    /// the serial writer still ignores the byte bound, because a batch that opens a row group
-    /// is written whole (`if in_progress.buffered_rows > 0`), so one row group holds every row.
-    /// The parallel writer honours both bounds; `test_row_groups_respect_both_bounds` pins it.
+    /// With both a row-count bound and a byte bound the serial writer honours the byte bound
+    /// too (parquet < 60.2 ignored it, writing one row group holding every row). The parallel
+    /// writer honours both bounds as well; `test_row_groups_respect_both_bounds` pins it.
     #[tokio::test]
-    async fn test_row_group_bytes_serial_ignores_bytes_under_row_bound() {
+    async fn test_row_group_bytes_serial_honours_bytes_under_row_bound() {
         let batch = one_column_batch(Int32Array::from_iter_values(0..10_000));
         let properties = WriterProperties::builder()
             .set_compression(Compression::UNCOMPRESSED)
@@ -996,7 +995,11 @@ mod tests {
         let groups = row_groups(write_one_file(&batch, properties, false, None).await);
 
         let group_sizes: Vec<i64> = groups.iter().map(|group| group.num_rows()).collect();
-        assert_eq!(group_sizes, [10_000]);
+        assert!(
+            group_sizes.len() > 1,
+            "expected the byte bound to split the file, got {group_sizes:?}"
+        );
+        assert_eq!(group_sizes.iter().sum::<i64>(), 10_000);
     }
 
     /// A byte bound has to bound a file's *first* row group too. It has no row group before it
