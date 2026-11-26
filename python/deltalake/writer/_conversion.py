@@ -11,11 +11,10 @@ def _convert_arro3_schema_to_delta(
     convert_unsigned: bool = True,
 ) -> Arro3Schema:
     """Convert an arro3 schema to a schema compatible with Delta Lake. Converts unsigned integers
-    without an existing column (or when replacing the existing schema) to their signed equivalent
-    unless ``convert_unsigned`` is False (existing columns that are not being replaced are left
-    unsigned so Rust casts them directly to the existing column's type without an intermediate
-    narrow signed cast), and converts all timestamps to `us` timestamps, except nanosecond
-    timestamps when the experimental nanosecond timestamp feature is enabled.
+    to the type of an existing numeric column (signed integer, floating-point, or decimal) when
+    not replacing the existing schema, or otherwise to their signed equivalent unless
+    ``convert_unsigned`` is False, and converts all timestamps to `us` timestamps, except
+    nanosecond timestamps when the experimental nanosecond timestamp feature is enabled.
     Also handles null column types by converting them to match
     corresponding fields in the existing table schema.
 
@@ -23,7 +22,7 @@ def _convert_arro3_schema_to_delta(
         schema (Arro3Schema): Source schema.
         existing_schema (Arro3Schema, optional): Existing table schema to match null and unsigned types against. Defaults to None.
         replacing_existing_schema (bool): Whether the write replaces the existing schema rather than keeping it,
-            in which case unsigned integers are converted to their signed equivalent rather than left for casting. Defaults to False.
+            in which case unsigned integers are converted to their signed equivalent rather than matching existing numeric columns. Defaults to False.
         convert_unsigned (bool): Whether to convert unsigned integer types to signed equivalents.
             Set to False for operations like MERGE where Rust casts all source expressions directly. Defaults to True.
 
@@ -61,15 +60,22 @@ def _convert_arro3_schema_to_delta(
         elif DataType.is_fixed_size_binary(dtype):
             return DataType.binary()
         elif DataType.is_unsigned_integer(dtype):
-            if not convert_unsigned or (
+            if not convert_unsigned:
+                return dtype
+            if (
                 not replacing_existing_schema
                 and existing_dtype is not None
-                and not DataType.is_null(existing_dtype)
+                and (
+                    DataType.is_signed_integer(existing_dtype)
+                    or DataType.is_floating(existing_dtype)
+                    or DataType.is_decimal(existing_dtype)
+                )
             ):
-                # Let Rust cast directly to the existing column's type rather than going through
-                # the signed type of the same width, which can overflow when a direct cast to a
-                # wider type would succeed.
-                return dtype
+                # Cast directly to the existing numeric column's type rather than going through
+                # the signed type of the same width (which can overflow when a direct cast to a
+                # wider type would succeed) or leaving it unsigned (which changes arithmetic in
+                # generated column expressions such as `a - b`).
+                return existing_dtype
             if DataType.is_uint16(dtype):
                 return DataType.int16()
             elif DataType.is_uint32(dtype):

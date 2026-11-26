@@ -768,6 +768,7 @@ def test_unsigned_conversion_with_existing_schema():
         [
             Field("existing_int", DataType.uint8()),
             Field("existing_float", DataType.uint16()),
+            Field("existing_decimal", DataType.uint8()),
             Field("existing_null", DataType.uint8()),
             Field("new_col", DataType.uint8()),
             Field(
@@ -786,6 +787,7 @@ def test_unsigned_conversion_with_existing_schema():
         [
             Field("existing_int", DataType.int64()),
             Field("existing_float", DataType.float64()),
+            Field("existing_decimal", DataType.decimal128(10, 2)),
             Field("existing_null", DataType.null()),
             Field(
                 "nested",
@@ -797,16 +799,17 @@ def test_unsigned_conversion_with_existing_schema():
 
     converted = _convert_arro3_schema_to_delta(source_schema, existing_schema)
 
-    assert converted.field("existing_int").type == DataType.uint8()
-    assert converted.field("existing_float").type == DataType.uint16()
+    assert converted.field("existing_int").type == DataType.int64()
+    assert converted.field("existing_float").type == DataType.float64()
+    assert converted.field("existing_decimal").type == DataType.decimal128(10, 2)
     assert converted.field("existing_null").type == DataType.int8()
     assert converted.field("new_col").type == DataType.int8()
     nested_fields = {f.name: f.type for f in converted.field("nested").type.fields}
     assert nested_fields == {
-        "existing_field": DataType.uint8(),
+        "existing_field": DataType.int64(),
         "new_field": DataType.int16(),
     }
-    assert converted.field("items").type.value_type == DataType.uint8()
+    assert converted.field("items").type.value_type == DataType.int64()
 
 
 def test_replacing_existing_schema_keeps_null_resolution_and_converts_unsigned():
