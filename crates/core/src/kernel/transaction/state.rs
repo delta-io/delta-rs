@@ -321,7 +321,15 @@ mod tests {
 
         let adds = log_data.iter().map(|f| f.to_add()).collect();
         let partition_columns = vec![];
-        let container = AddContainer::new(&adds, &partition_columns, log_data.read_schema());
+        let kernel_schema =
+            StructType::try_new(Vec::<delta_kernel::schema::StructField>::new()).unwrap();
+        let container = AddContainer::new(
+            &adds,
+            &partition_columns,
+            log_data.read_schema(),
+            &kernel_schema,
+            ColumnMappingMode::None,
+        );
         let mut files = container.predicate_matches(predicate).unwrap();
         assert!(files.any(|add| add.path == file));
     }
