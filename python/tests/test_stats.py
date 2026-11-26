@@ -283,6 +283,7 @@ def test_pyarrow_dataset_keeps_files_without_min_max_4915(
     assert dt.to_pyarrow_table(filters=[("flag", "=", True)]).num_rows == 8
 
 
+@pytest.mark.pyarrow
 def test_file_skipping_with_negative_zero_max_values(tmp_path: pathlib.Path):
     """https://github.com/delta-io/delta-rs/issues/4990
 
