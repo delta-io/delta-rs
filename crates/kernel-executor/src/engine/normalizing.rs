@@ -25,7 +25,6 @@ use delta_kernel::{
     PredicateEvaluator,
 };
 
-
 /// An [`EvaluationHandler`] that delegates to the kernel's [`ArrowEvaluationHandler`] but
 /// normalizes `-0.0` to `0.0` in float data before predicate evaluation, restoring SQL
 /// comparison semantics over arrow's `totalOrder` comparison kernels.
@@ -49,7 +48,8 @@ impl EvaluationHandler for NormalizingEvaluationHandler {
         expression: ExpressionRef,
         output_type: DataType,
     ) -> DeltaResult<Arc<dyn ExpressionEvaluator>> {
-        self.inner.new_expression_evaluator(input_schema, expression, output_type)
+        self.inner
+            .new_expression_evaluator(input_schema, expression, output_type)
     }
 
     fn new_predicate_evaluator(
@@ -57,7 +57,9 @@ impl EvaluationHandler for NormalizingEvaluationHandler {
         input_schema: SchemaRef,
         predicate: PredicateRef,
     ) -> DeltaResult<Arc<dyn PredicateEvaluator>> {
-        let inner = self.inner.new_predicate_evaluator(input_schema, predicate)?;
+        let inner = self
+            .inner
+            .new_predicate_evaluator(input_schema, predicate)?;
         Ok(Arc::new(NormalizingPredicateEvaluator { inner }))
     }
 
