@@ -1212,7 +1212,7 @@ class DeltaTable:
 
         source = RecordBatchReader.from_arrow(source)
         compatible_delta_schema = _convert_arro3_schema_to_delta(
-            source.schema, self.schema().to_arrow()
+            source.schema, convert_unsigned=False
         )
 
         py_merge_builder = self._table.create_merge_builder(
