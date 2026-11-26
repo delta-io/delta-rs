@@ -55,10 +55,11 @@ use crate::delta_datafusion::{
 use crate::errors::{ColumnMappingOperation, DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
 use crate::kernel::{Action, Add, DataType, PartitionsExt, Remove, StructType, Version};
-use crate::kernel::{EagerSnapshot, resolve_snapshot};
+use crate::kernel::{EagerSnapshot, LogicalFileView, resolve_snapshot};
 use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
+use crate::protocol::checkpoints::catalog_managed_maintenance_error;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
@@ -70,6 +71,7 @@ use crate::{
 /// Planner used by optimize.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum PlannerStrategy {
     /// Older metrics with no planner field.
     #[default]
@@ -265,6 +267,7 @@ impl Default for MetricDetails {
 
 /// Type of optimization to perform.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum OptimizeType {
     /// Compact files into pre-determined bins
     Compact,
@@ -424,6 +427,11 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
 
         Box::pin(async move {
             let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
+
+            if this.log_store.is_catalog_managed() {
+                return Err(catalog_managed_maintenance_error("OPTIMIZE"));
+            }
+
             if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
                 return Err(DeltaTableError::unsupported_column_mapping(
                     ColumnMappingOperation::Write,
@@ -623,24 +631,47 @@ struct SelectedFileScanFactory {
     snapshot: EagerSnapshot,
     log_store: LogStoreRef,
     scan_config: DeltaScanConfig,
+    row_by_path: Arc<HashMap<String, (usize, usize)>>,
 }
 
 impl SelectedFileScanFactory {
     fn new(snapshot: &EagerSnapshot, log_store: LogStoreRef, scan_config: DeltaScanConfig) -> Self {
+        let row_by_path = snapshot
+            .snapshot()
+            .materialized_files()
+            .into_iter()
+            .flat_map(|materialized_files| materialized_files.batches.iter().enumerate())
+            .flat_map(|(batch_index, batch)| {
+                (0..batch.num_rows()).map(move |row| {
+                    let path = LogicalFileView::new(batch.clone(), row).path().into_owned();
+                    (path, (batch_index, row))
+                })
+            })
+            .collect();
         Self {
             snapshot: snapshot.clone(),
             log_store,
             scan_config,
+            row_by_path: Arc::new(row_by_path),
         }
     }
 
-    fn provider_for(
-        &self,
-        adds: impl IntoIterator<Item = Add>,
-    ) -> Result<DeltaScanNext, DeltaTableError> {
+    fn provider_for(&self, files: &MergeBin) -> Result<DeltaScanNext, DeltaTableError> {
         let provider = DeltaScanNext::new(self.snapshot.clone(), self.scan_config.clone())?
             .with_log_store(self.log_store.clone());
-        Ok(provider.with_adds(adds))
+        let provider = match self.seed_rows(files) {
+            Some(seed_rows) => provider.with_seed_rows(seed_rows),
+            None => provider,
+        };
+        Ok(provider.with_adds(files.iter().cloned()))
+    }
+
+    /// Positions of the bin's files, or `None` if one is not materialized.
+    fn seed_rows(&self, files: &MergeBin) -> Option<Vec<(usize, usize)>> {
+        files
+            .iter()
+            .map(|add| self.row_by_path.get(&add.path).copied())
+            .collect()
     }
 }
 
@@ -742,7 +773,7 @@ impl MergePlan {
         context: Arc<SessionContext>,
         scan_factory: SelectedFileScanFactory,
     ) -> Result<ParquetReadStream, DeltaTableError> {
-        let provider = scan_factory.provider_for(files.iter().cloned())?;
+        let provider = scan_factory.provider_for(&files)?;
         let df = context.read_table(Arc::new(provider))?;
         let stream = df
             .execute_stream()
@@ -766,7 +797,7 @@ impl MergePlan {
         use datafusion::logical_expr::expr::ScalarFunction;
         use datafusion::logical_expr::{Expr, ScalarUDF, ident};
 
-        let provider = scan_factory.provider_for(files.iter().cloned())?;
+        let provider = scan_factory.provider_for(&files)?;
         let df = context.ctx.read_table(Arc::new(provider))?;
 
         let cols = context
@@ -1495,6 +1526,46 @@ mod compact_planner_tests {
         assert!(err.to_string().contains("optimize target_size"));
         assert!(err.to_string().contains("i64::MAX"));
     }
+
+    #[tokio::test]
+    async fn test_bin_scan_replays_only_the_bin_files() -> DeltaResult<()> {
+        use crate::delta_datafusion::{FileSelection, MissingSelectedFilePolicy, create_session};
+        use crate::test_utils::TestTables;
+
+        let table = TestTables::Delta0_8_0SpecialPartitioned
+            .table_builder()?
+            .load()
+            .await?;
+        let snapshot = table.snapshot()?.snapshot();
+        let adds: Vec<_> = snapshot
+            .try_log_data()?
+            .iter()
+            .map(|file| file.to_add())
+            .collect();
+        let bin_file = adds
+            .iter()
+            .find(|add| add.partition_values["x"].as_deref() == Some("B B"))
+            .expect("file for partition B B");
+        let factory =
+            SelectedFileScanFactory::new(snapshot, table.log_store(), DeltaScanConfig::default());
+        let bin = MergeBin::from_file(bin_file.clone());
+        let provider = factory.provider_for(&bin)?;
+
+        // Request both files so the bin's seed alone determines which rows are visible.
+        let selection = FileSelection::from_adds(adds)
+            .with_missing_file_policy(MissingSelectedFilePolicy::Ignore);
+        let batches = create_session()
+            .into_inner()
+            .read_table(Arc::new(provider.with_file_selection(selection)))?
+            .select_columns(&["x"])?
+            .collect()
+            .await?;
+        datafusion::assert_batches_eq!(
+            &["+-----+", "| x   |", "+-----+", "| B B |", "+-----+"],
+            &batches
+        );
+        Ok(())
+    }
 }
 
 pub(super) mod util {
@@ -1524,8 +1595,9 @@ pub(super) mod zorder {
 
     use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
     use arrow_array::{Array, ArrayRef, BinaryArray};
-    use arrow_buffer::bit_util::{get_bit_raw, set_bit_raw, unset_bit_raw};
-    use arrow_row::{Row, RowConverter, SortField};
+    use arrow_buffer::bit_iterator::BitIndexIterator;
+    use arrow_buffer::bit_util::set_bit_raw;
+    use arrow_row::{RowConverter, SortField};
     use arrow_schema::ArrowError;
     // use arrow_schema::Schema as ArrowSchema;
 
@@ -1900,6 +1972,7 @@ pub(super) mod zorder {
     ///   when interleaving.
     /// * `num_columns` - The number of columns in the input array. Used to
     ///   determine offset when interleaving.
+    /// * `out` - The zero-initialized output buffer. Only set bits are written.
     fn set_bits_for_column(
         input: ArrayRef,
         col_pos: usize,
@@ -1913,8 +1986,9 @@ pub(super) mod zorder {
         for (row_i, row) in rows.iter().enumerate() {
             // How many bytes to get to this row's out position
             let row_offset = row_i * num_columns * 16;
-            for bit_i in 0..128 {
-                let bit = row.get_bit(bit_i);
+            let bytes = row.as_ref();
+            let prefix_bits = bytes.len().min(16) * 8;
+            for bit_i in BitIndexIterator::new(bytes, 0, prefix_bits) {
                 // Position of bit within the value. We place a value every
                 // `num_columns` bits, offset by `col_pos` when interleaving.
                 // So if there are 3 columns, and we are the second column, then
@@ -1922,32 +1996,11 @@ pub(super) mod zorder {
                 let bit_pos = (bit_i * num_columns) + col_pos;
                 let out_pos = (row_offset * 8) + bit_pos;
                 // Safety: we pre-sized the output vector in the outer function
-                if bit {
-                    unsafe { set_bit_raw(out.as_mut_ptr(), out_pos) };
-                } else {
-                    unsafe { unset_bit_raw(out.as_mut_ptr(), out_pos) };
-                }
+                unsafe { set_bit_raw(out.as_mut_ptr(), out_pos) };
             }
         }
 
         Ok(())
-    }
-
-    trait RowBitUtil {
-        fn get_bit(&self, bit_i: usize) -> bool;
-    }
-
-    impl RowBitUtil for Row<'_> {
-        /// Get the bit at the given index, or just give false if the index is out of bounds
-        fn get_bit(&self, bit_i: usize) -> bool {
-            let byte_i = bit_i / 8;
-            let bytes = self.as_ref();
-            if byte_i >= bytes.len() {
-                return false;
-            }
-            // Safety: we just did a bounds check above
-            unsafe { get_bit_raw(bytes.as_ptr(), bit_i) }
-        }
     }
 
     #[cfg(test)]
@@ -2000,6 +2053,18 @@ pub(super) mod zorder {
             let data: &BinaryArray = as_generic_binary_array(result.as_ref());
             assert_eq!(data.value_data().len(), 3 * 16 * 3);
             assert!(data.iter().all(|x| x.unwrap().len() == 3 * 16));
+            // Pins bit order, column interleaving and the 16-byte prefix.
+            assert_eq!(
+                data.value_data(),
+                &[
+                    28, 0, 0, 133, 128, 13, 130, 0, 9, 128, 4, 9, 128, 32, 9, 2, 0, 9, 130, 4, 1,
+                    16, 32, 9, 18, 32, 9, 147, 36, 73, 16, 36, 1, 0, 0, 1, 2, 0, 8, 0, 0, 1, 144,
+                    4, 9, 2, 0, 9, 28, 0, 0, 26, 129, 13, 2, 0, 9, 128, 32, 9, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 19, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+                ]
+            );
         }
 
         #[tokio::test]

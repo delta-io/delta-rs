@@ -63,6 +63,7 @@ fn list_with_delimiter_recursive(
                 ListResult {
                     common_prefixes: vec![],
                     objects: vec![],
+                    extensions: Default::default(),
                 },
                 |mut acc, res| {
                     acc.common_prefixes.extend(res.common_prefixes);

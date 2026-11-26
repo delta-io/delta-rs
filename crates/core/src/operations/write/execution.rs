@@ -22,7 +22,9 @@ use tokio::task::JoinSet;
 use crate::DeltaTableError;
 use crate::datafile::DeltaWriterProperties;
 use crate::datafile::writer::{DeltaWriter, UploadBudget, WriterConfig, write_batches_timed};
-use crate::delta_datafusion::{ColumnMappingState, DataValidationExec, validation_predicates};
+use crate::delta_datafusion::{
+    ColumnMappingState, DataValidationExec, ValidationCheck, validation_predicates,
+};
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile};
 use crate::logstore::{LogStore, ObjectStoreRef};
@@ -327,10 +329,10 @@ fn validated_plan(
         } else if contains_cdc {
             pred = when(col(CDC_COLUMN_NAME).eq(lit("insert")), pred).otherwise(lit(true))?;
         }
-        validations.push(pred);
+        validations.push(ValidationCheck::new(pred, "write predicate"));
     }
 
-    let plan = DataValidationExec::try_new_with_predicates(session, plan, validations)?;
+    let plan = DataValidationExec::try_new_with_labeled_predicates(session, plan, validations)?;
     match insert_marker_column {
         Some(insert_marker_column) => drop_internal_column(plan, insert_marker_column),
         None => Ok(plan),

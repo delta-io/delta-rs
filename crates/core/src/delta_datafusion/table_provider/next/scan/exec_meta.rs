@@ -78,6 +78,8 @@ pub(crate) struct DeltaScanMetaExec {
     metrics: ExecutionPlanMetricsSet,
     /// Column name for the file id
     file_id_field: Option<FieldRef>,
+    /// Maximum output rows per execution partition.
+    fetch: Option<usize>,
     /// plan properties
     properties: Arc<PlanProperties>,
 }
@@ -96,7 +98,11 @@ impl DisplayAs for DeltaScanMetaExec {
                         .as_ref()
                         .map(|f| f.name().to_owned())
                         .unwrap_or("<none>".to_string())
-                )
+                )?;
+                if let Some(fetch) = self.fetch {
+                    write!(f, ", fetch={fetch}")?;
+                }
+                Ok(())
             }
         }
     }
@@ -145,6 +151,7 @@ impl DeltaScanMetaExec {
             public_file_ids,
             metrics,
             file_id_field,
+            fetch: None,
             properties,
         }
     }
@@ -181,7 +188,7 @@ impl DeltaScanMetaExec {
             DataFusionError::Plan(format!("DeltaScanMetaExec: invalid partition {partition}"))
         })?;
 
-        files
+        let rows = files
             .iter()
             .try_fold(0usize, |total, (file_id, row_count)| {
                 let file_rows = self.effective_row_count_for_file(file_id, *row_count)?;
@@ -190,7 +197,8 @@ impl DeltaScanMetaExec {
                         "DeltaScanMetaExec exact row count overflow".to_string(),
                     )
                 })
-            })
+            })?;
+        Ok(self.fetch.map_or(rows, |fetch| rows.min(fetch)))
     }
 }
 
@@ -276,6 +284,7 @@ impl ExecutionPlan for DeltaScanMetaExec {
             scan_plan: Arc::clone(&self.scan_plan),
             input: self.input[partition].clone(),
             current: None,
+            remaining: self.fetch,
             batch_size: task_ctx.session_config().batch_size(),
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
             dv_short_mask_padded_files_total: MetricBuilder::new(&self.metrics)
@@ -294,20 +303,23 @@ impl ExecutionPlan for DeltaScanMetaExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn supports_limit_pushdown(&self) -> bool {
-        true
-    }
-
     fn cardinality_effect(&self) -> CardinalityEffect {
-        CardinalityEffect::Equal
+        if self.fetch.is_some() {
+            CardinalityEffect::LowerEqual
+        } else {
+            CardinalityEffect::Equal
+        }
     }
 
     fn fetch(&self) -> Option<usize> {
-        None
+        self.fetch
     }
 
-    fn with_fetch(&self, _: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        None
+    fn with_fetch(&self, fetch: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(Self {
+            fetch,
+            ..self.clone()
+        }))
     }
 
     fn statistics_from_inputs(
@@ -386,6 +398,8 @@ struct DeltaScanMetaStream {
     /// File currently split into bounded chunks: (file id, total rows, rows
     /// emitted, rows per chunk).
     current: Option<(String, usize, usize, usize)>,
+    /// Rows still to emit after applying deletion vectors.
+    remaining: Option<usize>,
     /// Maximum rows per emitted batch, from the session `batch_size`.
     batch_size: usize,
     /// Execution metrics
@@ -497,6 +511,10 @@ impl DeltaScanMetaStream {
             batch
         };
 
+        let batch = match self.remaining {
+            Some(remaining) if batch.num_rows() > remaining => batch.slice(0, remaining),
+            _ => batch,
+        };
         let result = self.evaluate_transform(file_id, batch)?;
 
         if let Some(file_id_field) = &self.file_id_field {
@@ -564,6 +582,9 @@ impl Stream for DeltaScanMetaStream {
         // Single-pass block, not a real loop: every path yields exactly one
         // poll result, and all exits funnel through `record_poll` below.
         let poll = 'poll: {
+            if self.remaining == Some(0) {
+                break 'poll Poll::Ready(None);
+            }
             if self.current.is_none() {
                 let Some((file_id, row_count)) = self.input.pop_front() else {
                     break 'poll Poll::Ready(None);
@@ -587,6 +608,9 @@ impl Stream for DeltaScanMetaStream {
                 }
             };
             let emitted = offset + len;
+            if let Some(remaining) = &mut self.remaining {
+                *remaining -= batch.num_rows();
+            }
             self.current = if emitted >= total_rows {
                 None
             } else {
@@ -598,6 +622,11 @@ impl Stream for DeltaScanMetaStream {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
+        match self.remaining {
+            Some(0) => return (0, Some(0)),
+            Some(_) => return (0, None),
+            None => {}
+        }
         // Lower bound: queued files plus the in-progress file, each yielding
         // at least one batch. A file may yield many chunks, so the total is
         // genuinely unknown upfront.
@@ -621,7 +650,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Fields, Schema};
     use datafusion::{
         catalog::TableProvider,
-        common::stats::Precision,
+        common::{stats::Precision, tree_node::TreeNode},
         physical_plan::collect_partitioned,
         physical_plan::displayable,
         physical_plan::statistics::StatisticsContext,
@@ -1104,8 +1133,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_meta_scan_limit_sql() -> TestResult {
+        use datafusion::prelude::{SessionConfig, SessionContext};
+
+        let (_dir, table) = create_partitioned_repro_table().await?;
+        let table = table
+            .write(vec![make_partition_batch(0, 3), make_partition_batch(1, 3)])
+            .await?;
+        let provider = table.table_provider().await?;
+
+        for partitions in [1, 2] {
+            let session = SessionContext::new_with_config(
+                SessionConfig::new()
+                    .with_target_partitions(partitions)
+                    .with_batch_size(2),
+            );
+            session.register_table("delta_table", Arc::clone(&provider))?;
+            for (clause, expected) in [("LIMIT 2", 2), ("LIMIT 5 OFFSET 2", 4)] {
+                let plan = session
+                    .sql(&format!("SELECT part FROM delta_table {clause}"))
+                    .await?
+                    .create_physical_plan()
+                    .await?;
+                let plan_str = displayable(plan.as_ref()).indent(true).to_string();
+                let has_expected_scan = plan.exists(|node| {
+                    Ok(node
+                        .downcast_ref::<DeltaScanMetaExec>()
+                        .is_some_and(|exec| {
+                            exec.input.len() == partitions
+                                && (clause != "LIMIT 2" || exec.fetch() == Some(2))
+                        }))
+                })?;
+                let batches = datafusion::physical_plan::collect(plan, session.task_ctx()).await?;
+                assert_eq!(
+                    batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                    expected,
+                    "{clause}, target_partitions={partitions}\n{plan_str}"
+                );
+                assert!(has_expected_scan, "{plan_str}");
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_meta_scan_limit_execution_and_statistics() -> TestResult {
+        use datafusion::prelude::{SessionConfig, SessionContext};
+
+        let (_dir, table) = create_partitioned_repro_table().await?;
+        let table = table
+            .write((0..4).map(|part| make_partition_batch(part, 5)))
+            .await?;
+        let provider = table.table_provider().await?;
+        let session = SessionContext::new_with_config(SessionConfig::new().with_batch_size(3));
+        let part_idx = provider.schema().index_of("part")?;
+        let scan = provider
+            .scan(&session.state(), Some(&vec![part_idx]), &[], None)
+            .await?;
+        let exec = scan.downcast_ref::<DeltaScanMetaExec>().unwrap();
+        assert_eq!(exec.input[0].len(), 4);
+        for (file_id, _) in &exec.input[0] {
+            // Two kept rows per file, including the implicit trailing keep bit.
+            exec.selection_vectors
+                .insert(file_id.clone(), vec![false, false, false, true]);
+        }
+
+        for partitions in [1, 2] {
+            for fetch in [None, Some(0), Some(1), Some(3), Some(20)] {
+                let limited = exec
+                    .with_fetch(fetch)
+                    .expect("metadata scan supports fetch");
+                let limited = limited
+                    .repartitioned(partitions, &ConfigOptions::default())?
+                    .unwrap();
+                assert_eq!(limited.fetch(), fetch);
+                let expected = fetch.unwrap_or(8).min(8 / partitions);
+                let stats = StatisticsContext::new();
+                for partition in 0..partitions {
+                    assert_eq!(
+                        stats
+                            .compute(
+                                limited.as_ref(),
+                                &StatisticsArgs::new().with_partition(Some(partition)),
+                            )?
+                            .num_rows,
+                        Precision::Exact(expected)
+                    );
+                    let mut stream = limited.execute(partition, session.task_ctx())?;
+                    let (min_batches, max_batches) = stream.size_hint();
+                    let mut batch_count = 0;
+                    let mut rows = 0;
+                    while let Some(batch) = stream.try_next().await? {
+                        batch_count += 1;
+                        rows += batch.num_rows();
+                    }
+                    assert!(min_batches <= batch_count);
+                    assert!(max_batches.is_none_or(|max| batch_count <= max));
+                    assert_eq!(rows, expected, "fetch={fetch:?}, partition={partition}");
+                }
+                assert_eq!(
+                    stats
+                        .compute(limited.as_ref(), &StatisticsArgs::new())?
+                        .num_rows,
+                    Precision::Exact(expected * partitions)
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_meta_only_scan() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1156,7 +1295,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_meta_only_scan_with_projection() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1202,7 +1341,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_meta_only_scan_with_file_id() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().with_file_column("file_id").await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1233,7 +1372,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_meta_only_scan_with_file_id_count_all() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().with_file_column("file_id").await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1255,7 +1394,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_meta_only_scan_with_file_id_projection() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().with_file_column("file_id").await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1291,7 +1430,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_meta_only_scan_excludes_unprojected_file_id_from_reported_schema() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().with_file_column("file_id").await?;
         let session = Arc::new(create_session().into_inner());
         let data_idx = provider.schema().index_of("data").unwrap();

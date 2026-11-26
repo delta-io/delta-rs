@@ -5,7 +5,7 @@ use datafusion::functions::core::expr_fn::get_field_path;
 use datafusion::logical_expr::{Expr, lit};
 use delta_kernel::expressions::ColumnName;
 use delta_kernel::schema::StructType;
-use delta_kernel::{DeltaResult, Error as KernelError};
+use delta_kernel::{KernelError, KernelResult as DeltaResult};
 
 /// A schema that can resolve the root of a kernel column path to a DataFusion column.
 pub(crate) trait ColumnResolver {

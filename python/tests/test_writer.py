@@ -2504,6 +2504,39 @@ def test_predicate_out_of_bounds(tmp_path: pathlib.Path):
     )
 
 
+@pytest.mark.pyarrow
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        "t = TIMESTAMP '1970-01-01T00:00:00'",
+        "t <= '1970-01-01T00:00:00'",
+        "t = TIMESTAMP '1970-01-01T00:00:00+00:00'",
+    ],
+)
+def test_overwrite_predicate_timestamp_literal_with_timezone_column(
+    tmp_path: pathlib.Path, predicate: str
+):
+    """A timestamp literal must be coerced to the type of a timezone-aware column.
+
+    Constant folding turns `TIMESTAMP '...'` into a nanosecond literal, which the
+    kernel evaluator refuses to compare with a `timestamp[us, tz=UTC]` column.
+    """
+    import pyarrow as pa
+
+    hours = pa.array([0, 3_600_000_000], pa.timestamp("us", tz="UTC"))
+    write_deltalake(tmp_path, pa.table({"t": hours, "v": [1.0, 2.0]}))
+
+    write_deltalake(
+        tmp_path,
+        pa.table({"t": hours[:1], "v": [9.0]}),
+        mode="overwrite",
+        predicate=predicate,
+    )
+
+    values = DeltaTable(tmp_path).to_pyarrow_table().column("v").to_pylist()
+    assert sorted(values) == [2.0, 9.0]
+
+
 @pytest.mark.pandas
 def test_write_timestampntz(tmp_path: pathlib.Path):
     import pandas as pd
@@ -2609,6 +2642,20 @@ def test_write_timestamp(tmp_path: pathlib.Path):
     # Now that a datetime has been passed through the writer version needs to
     # be upgraded to 7 to support timestampNtz
     assert protocol.min_writer_version == 2
+
+
+@pytest.mark.pyarrow
+def test_write_naive_timestamp_into_utc_timestamp_column(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    utc = pa.table({"t": pa.array([0], pa.timestamp("us", tz="UTC"))})
+    naive = pa.table({"t": pa.array([0], pa.timestamp("us"))})
+    write_deltalake(tmp_path, utc)
+
+    with pytest.raises(SchemaMismatchError, match="column `t` is timestamp_ntz"):
+        write_deltalake(tmp_path, naive, mode="append")
+
+    write_deltalake(tmp_path, naive, mode="append", schema_mode="merge")
 
 
 def test_write_transactions(tmp_path: pathlib.Path, sample_table: Table):

@@ -64,6 +64,7 @@ pub(crate) use crate::delta_datafusion::file_id::FILE_ID_COLUMN_DEFAULT;
 
 /// Policy for selected files that are not active in a scan snapshot.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MissingSelectedFilePolicy {
     /// Return an error when a selected file is not active in the scan snapshot.
     #[default]
@@ -432,6 +433,7 @@ pub(crate) fn normalize_path_as_file_id(
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SnapshotWrapper {
     Snapshot(Arc<Snapshot>),
     EagerSnapshot(Arc<EagerSnapshot>),
@@ -498,6 +500,8 @@ pub struct DeltaScan {
     file_selection: Option<FileSelection>,
     #[serde(skip)]
     runtime_file_filter: Option<RuntimeFileFilter>,
+    #[serde(skip)]
+    seed_rows: Option<Arc<[(usize, usize)]>>,
 }
 
 /// Deletion vector selection for one data file.
@@ -540,6 +544,7 @@ impl DeltaScan {
             log_store: None,
             file_selection: None,
             runtime_file_filter: None,
+            seed_rows: None,
         })
     }
 
@@ -556,6 +561,13 @@ impl DeltaScan {
     /// See [`RuntimeFileFilter`].
     pub(crate) fn with_runtime_file_filter(mut self, filter: RuntimeFileFilter) -> Self {
         self.runtime_file_filter = Some(filter);
+        self
+    }
+
+    /// Replay only the materialized files at these (batch, row) positions.
+    /// The positions must cover the file selection.
+    pub(crate) fn with_seed_rows(mut self, seed_rows: Vec<(usize, usize)>) -> Self {
+        self.seed_rows = Some(seed_rows.into());
         self
     }
 
@@ -678,9 +690,11 @@ impl DeltaScan {
         scan_plan: &KernelScanPlan,
         engine: Arc<dyn Engine>,
     ) -> SendableScanMetadataStream {
-        scan_plan
-            .scan
-            .scan_metadata_seeded(engine, self.snapshot.snapshot().materialized_files())
+        scan_plan.scan.scan_metadata_seeded(
+            engine,
+            self.snapshot.snapshot().materialized_files(),
+            self.seed_rows.as_deref(),
+        )
     }
 
     async fn resolve_file_selection(
@@ -728,7 +742,7 @@ impl TableProvider for DeltaScan {
     async fn scan(
         &self,
         session: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -3079,8 +3093,7 @@ mod tests {
         crate::DeltaTable,
         Arc<crate::delta_datafusion::table_provider::next::DeltaScan>,
     )> {
-        let mut table =
-            open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let mut table = open_fs_path("../test/tests/data/multi_partitioned");
         table.load().await?;
 
         let provider = crate::delta_datafusion::table_provider::next::DeltaScan::new(
@@ -3241,8 +3254,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delta_scan_provider_schema_keeps_configured_file_id_capability() -> TestResult {
-        let mut table =
-            open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let mut table = open_fs_path("../test/tests/data/multi_partitioned");
         table.load().await?;
         let provider = crate::delta_datafusion::table_provider::next::DeltaScan::new(
             table.snapshot()?.snapshot().clone(),
@@ -3256,8 +3268,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delta_scan_config_file_column_projection() -> TestResult {
-        let mut table =
-            open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let mut table = open_fs_path("../test/tests/data/multi_partitioned");
         table.load().await?;
         let provider = Arc::new(
             crate::delta_datafusion::table_provider::next::DeltaScan::new(
