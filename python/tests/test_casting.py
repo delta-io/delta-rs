@@ -172,6 +172,86 @@ def test_merge_unsigned_into_signed_column(tmp_path):
     assert result["narrow"].to_pylist() == [None, 5]
 
 
+@pytest.mark.pyarrow
+def test_merge_preserves_null_source_type_for_renamed_assignment(tmp_path):
+    import pyarrow as pa
+
+    write_deltalake(
+        tmp_path,
+        pa.table(
+            {
+                "id": pa.array([1], type=pa.int64()),
+                "a": pa.array([{"x": 10}], type=pa.struct([("x", pa.int64())])),
+                "b": pa.array([42], type=pa.int64()),
+            }
+        ),
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "a": pa.array([None], type=pa.null()),
+        }
+    )
+
+    dt = DeltaTable(tmp_path)
+    (
+        dt.merge(
+            source,
+            predicate="s.id = t.id",
+            source_alias="s",
+            target_alias="t",
+        )
+        .when_matched_update({"b": "s.a"})
+        .execute()
+    )
+
+    result = pa.table(
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select id, a, b from tbl")
+        .read_all()
+    )
+    assert result["id"].to_pylist() == [1]
+    assert result["a"].to_pylist() == [{"x": 10}]
+    assert result["b"].to_pylist() == [None]
+
+
+def test_merge_renamed_unsigned_source_column(tmp_path):
+    write_deltalake(
+        tmp_path,
+        Table.from_pydict(
+            {
+                "id": Array([1], DataType.int64()),
+                "b": Array([42], DataType.int64()),
+            }
+        ),
+    )
+    source = Table.from_pydict(
+        {
+            "id": Array([1], DataType.int64()),
+            "u": Array([200], DataType.uint8()),
+        }
+    )
+
+    dt = DeltaTable(tmp_path)
+    (
+        dt.merge(
+            source,
+            predicate="s.id = t.id",
+            source_alias="s",
+            target_alias="t",
+        )
+        .when_matched_update({"b": "s.u"})
+        .execute()
+    )
+
+    result = (
+        QueryBuilder().register("tbl", dt).execute("select id, b from tbl").read_all()
+    )
+    assert result["id"].to_pylist() == [1]
+    assert result["b"].to_pylist() == [200]
+
+
 @pytest.mark.parametrize("schema_mode", [None, "merge"])
 def test_append_fractional_float64_to_int64_rejected(tmp_path, schema_mode):
     """Appending fractional float64 values into an int64 column must raise
