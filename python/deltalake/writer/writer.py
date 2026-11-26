@@ -123,7 +123,7 @@ def write_deltalake(
         data = RecordBatchReader.from_arrow(data)
 
     existing_schema = None
-    if table is not None:
+    if table is not None and schema_mode != "overwrite":
         existing_schema = table.schema().to_arrow()
 
     compatible_delta_schema = _convert_arro3_schema_to_delta(

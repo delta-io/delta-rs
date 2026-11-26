@@ -761,3 +761,49 @@ def test_nested_null_append_to_existing_table(tmp_path: pathlib.Path):
     dt = DeltaTable(tmp_path)
     assert dt.schema().to_arrow().field("s").type == struct_type
     assert dt.to_pyarrow_table().num_rows == 2
+
+
+def test_unsigned_conversion_with_existing_schema():
+    source_schema = Schema(
+        [
+            Field("existing_int", DataType.uint8()),
+            Field("existing_float", DataType.uint16()),
+            Field("existing_null", DataType.uint8()),
+            Field("new_col", DataType.uint8()),
+            Field(
+                "nested",
+                DataType.struct(
+                    [
+                        Field("existing_field", DataType.uint8()),
+                        Field("new_field", DataType.uint16()),
+                    ]
+                ),
+            ),
+            Field("items", DataType.list(Field("element", DataType.uint8()))),
+        ]
+    )
+    existing_schema = Schema(
+        [
+            Field("existing_int", DataType.int64()),
+            Field("existing_float", DataType.float64()),
+            Field("existing_null", DataType.null()),
+            Field(
+                "nested",
+                DataType.struct([Field("existing_field", DataType.int64())]),
+            ),
+            Field("items", DataType.list(Field("element", DataType.int64()))),
+        ]
+    )
+
+    converted = _convert_arro3_schema_to_delta(source_schema, existing_schema)
+
+    assert converted.field("existing_int").type == DataType.uint8()
+    assert converted.field("existing_float").type == DataType.uint16()
+    assert converted.field("existing_null").type == DataType.int8()
+    assert converted.field("new_col").type == DataType.int8()
+    nested_fields = {f.name: f.type for f in converted.field("nested").type.fields}
+    assert nested_fields == {
+        "existing_field": DataType.uint8(),
+        "new_field": DataType.int16(),
+    }
+    assert converted.field("items").type.value_type == DataType.uint8()
