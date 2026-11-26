@@ -1,0 +1,21 @@
+# Issue #4892. An integral column is compared with a fractional bound.
+
+statement ok
+CREATE TABLE baseline (id INTEGER, x INTEGER);
+
+statement ok
+INSERT INTO baseline VALUES (1, 7), (2, 8), (3, 9), (4, NULL);
+
+statement ok
+CREATE TABLE actual AS SELECT * FROM baseline;
+
+statement ok
+DELETE FROM actual WHERE x < 8.5;
+
+query II rowsort survivors
+SELECT id, x FROM baseline WHERE (x < 8.5) IS NOT TRUE;
+----
+
+query II rowsort survivors
+SELECT id, x FROM actual;
+----

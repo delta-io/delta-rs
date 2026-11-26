@@ -14,6 +14,12 @@ to.
 
 Use `DeltaTable.vacuum` to perform the vacuum operation. Note that to prevent accidental deletion, the function performs a dry-run by default: it will only list the files to be deleted. Pass `dry_run=False` to actually delete files.
 
+A real run returns the table-relative keys whose deletion the storage backend
+acknowledged. The `VACUUM END` commit records their count in `numDeletedFiles`.
+If the backend reports that a key was already missing, Vacuum omits it from
+the returned list and increments `numAlreadyAbsentFiles`. Backends such as S3
+can acknowledge a delete even when the key is already absent.
+
 The retention window is controlled by the `delta.deletedFileRetentionDuration` table property and defaults to one week. Set it when creating the table:
 
 === "Python"

@@ -93,6 +93,12 @@ static DV_FIELD_INDICES: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(
     indices
 });
 
+/// Convert a once-decoded log path to its object-store key. Preserve escaped partition
+/// values and retain the legacy encoding fallback for paths the store cannot parse.
+fn storage_path_from_decoded(path: &str) -> Path {
+    Path::parse(path).unwrap_or_else(|_| Path::from(path))
+}
+
 /// Provides semantic, typed access to file metadata from Delta log replay.
 ///
 /// This struct wraps a RecordBatch containing file data and provides zero-copy
@@ -123,17 +129,9 @@ impl LogicalFileView {
         get_string_value(self.files.column(*PATH_INDEX), self.index).unwrap()
     }
 
-    /// An object store [`Path`] to the file.
-    ///
-    /// this tries to parse the file string and if that fails, it will return the string as is.
-    // TODO assert consistent handling of the paths encoding when reading log data so this logic can be removed.
+    /// The table-relative object-store key for this active file.
     pub fn object_store_path(&self) -> Path {
-        let path = self.path();
-        // Try to preserve percent encoding if possible
-        match Path::parse(path.as_ref()) {
-            Ok(path) => path,
-            Err(_) => Path::from(path.as_ref()),
-        }
+        storage_path_from_decoded(&self.path())
     }
 
     /// Returns the file size in bytes.

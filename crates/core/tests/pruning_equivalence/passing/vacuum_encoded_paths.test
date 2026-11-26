@@ -1,0 +1,117 @@
+# Regression for delta-rs #4815. 'a/b' and 'a%2Fb' must remain distinct keys.
+# delta: partition-by part
+
+statement ok
+CREATE TABLE actual AS SELECT * FROM (VALUES
+  (1, 'plain'), (2, 'a b'), (3, 'a:b'), (4, 'a/b'), (5, 'a%b'), (6, 'a~b'),
+  (7, 'München'), (8, '日本語'), (9, '2024-11-03 00:00:00.000000'), (10, 'a%2Fb'),
+  (11, 'keep')
+) AS input(id, part);
+
+# The slash and the literal escape spelling must also read back as distinct values.
+query IT
+SELECT id, part FROM actual WHERE id IN (4, 10) ORDER BY id;
+----
+4	a/b
+10	a%2Fb
+
+# With no candidates there is no VACUUM END commit.
+statement ok
+VACUUM actual LITE;
+
+query II
+SELECT deleted, already_absent FROM vacuum_end;
+----
+
+statement ok
+DELETE FROM actual WHERE part <> 'keep';
+
+statement ok
+COPY (SELECT 0 AS id) TO 'fixture:///part=a%253Ab/orphan.parquet' STORED AS PARQUET;
+
+statement ok
+VACUUM actual LITE;
+
+# Inspect the physical directories of the files that disappeared, independently of Vacuum.
+query T rowsort
+SELECT split_part(path, '/', 1) FROM (
+  SELECT path FROM vacuum_files WHERE source = 'before'
+  EXCEPT ALL
+  SELECT path FROM vacuum_files WHERE source = 'after'
+) AS removed;
+----
+part=%E6%97%A5%E6%9C%AC%E8%AA%9E
+part=2024-11-03%2000%3A00%3A00.000000
+part=M%C3%BCnchen
+part=a%20b
+part=a%252Fb
+part=a%25b
+part=a%2Fb
+part=a%3Ab
+part=a~b
+part=plain
+
+query T rowsort first_deletions
+SELECT path FROM vacuum_files WHERE source = 'before'
+EXCEPT ALL SELECT path FROM vacuum_files WHERE source = 'after';
+----
+
+query T rowsort first_deletions
+SELECT path FROM vacuum_files WHERE source = 'reported';
+----
+
+query I
+SELECT deleted FROM vacuum_end;
+----
+10
+
+query T
+SELECT path FROM vacuum_files WHERE source = 'after' AND path LIKE '%/orphan.parquet';
+----
+part=a%3Ab/orphan.parquet
+
+# Full now has one new tombstone, one untracked file, and ten absent keys.
+statement ok
+INSERT INTO actual VALUES (12, 'a:b');
+
+statement ok
+DELETE FROM actual WHERE part = 'a:b';
+
+statement ok
+VACUUM actual FULL;
+
+query T rowsort mixed_deletions
+SELECT path FROM vacuum_files WHERE source = 'before'
+EXCEPT ALL SELECT path FROM vacuum_files WHERE source = 'after';
+----
+
+query T rowsort mixed_deletions
+SELECT path FROM vacuum_files WHERE source = 'reported';
+----
+
+query II
+SELECT deleted, already_absent FROM vacuum_end;
+----
+2	10
+
+statement ok
+VACUUM actual LITE;
+
+query T
+SELECT path FROM vacuum_files WHERE source = 'reported';
+----
+
+query II
+SELECT deleted, already_absent FROM vacuum_end;
+----
+0	11
+
+query T
+SELECT split_part(path, '/', 1) FROM vacuum_files WHERE source = 'after';
+----
+part=keep
+
+query IT
+SELECT id, part FROM actual;
+----
+11	keep

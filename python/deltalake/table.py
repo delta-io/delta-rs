@@ -962,7 +962,11 @@ class DeltaTable:
                 when False, it will only vacuum not referenced files since last log checkpoint (or since genesis if no checkpoint exists).
             keep_versions: An optional list of versions to keep. If provided, files from these versions will not be deleted.
         Returns:
-            the list of files no longer referenced by the Delta Table and are older than the retention threshold.
+            Table-relative keys selected for deletion in a dry run. A real run returns keys
+            whose deletion the storage backend acknowledged. Keys explicitly reported as
+            missing are counted in the VACUUM END metric `numAlreadyAbsentFiles`. Some
+            backends, including S3, acknowledge deletion even when the key is absent.
+            Other storage errors propagate to the caller.
         """
         full_is_default = cast(Any, full) is _DEFAULT_FALSE
         keep_versions_is_default = cast(Any, keep_versions) is _DEFAULT_NONE
@@ -1722,7 +1726,8 @@ class DeltaTable:
         Each row corresponds to one data file (an *add* action in the
         Delta transaction log).  The returned columns always include:
 
-        - ``path`` relative file path
+        - ``path`` table-relative URI-encoded path as stored in the transaction log.
+          A literal percent sign in a physical filename appears as ``%25`` here.
         - ``size_bytes`` file size in bytes
         - ``modification_time`` last modification timestamp (ms)
         - ``num_records`` row count (when stats are available)

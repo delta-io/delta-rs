@@ -1,0 +1,18 @@
+# Issue #5007. The finite min and max coincide in a file containing NaN.
+
+statement ok
+CREATE TABLE baseline (id INTEGER, x DOUBLE);
+
+statement ok
+INSERT INTO baseline VALUES (1, CAST('NaN' AS DOUBLE)), (2, 9.0);
+
+statement ok
+CREATE TABLE actual AS SELECT * FROM baseline;
+
+query IR rowsort matches
+SELECT id, x FROM baseline WHERE x = 9.0;
+----
+
+query IR rowsort matches
+SELECT id, x FROM actual WHERE x = 9.0;
+----

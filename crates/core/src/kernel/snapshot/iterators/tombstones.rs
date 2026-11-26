@@ -5,9 +5,10 @@ use arrow::{
     datatypes::Int64Type,
 };
 use delta_kernel::{actions::Remove, schema::ToSchema};
+use object_store::path::Path;
 use percent_encoding::percent_decode_str;
 
-use crate::kernel::snapshot::iterators::get_string_value;
+use super::{get_string_value, storage_path_from_decoded};
 
 /// A lightweight, cloneable view over a single tombstone (`Remove` action) row.
 ///
@@ -32,6 +33,11 @@ impl TombstoneView {
         let raw = get_string_value(self.data.column(*FIELD_INDEX), self.index)
             .expect("valid string field");
         percent_decode_str(raw).decode_utf8_lossy()
+    }
+
+    /// The table-relative object-store key for the removed file.
+    pub fn object_store_path(&self) -> Path {
+        storage_path_from_decoded(&self.path())
     }
 
     /// Returns the deletion timestamp (milliseconds since epoch), if recorded.

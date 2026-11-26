@@ -1,0 +1,23 @@
+# Issue #4880. CASE evaluates a partition predicate over duplicate and nullable rows.
+
+# delta: partition-by p
+
+statement ok
+CREATE TABLE baseline (id INTEGER, p INTEGER, value INTEGER);
+
+statement ok
+INSERT INTO baseline VALUES (1, 1, NULL), (2, 5, 11), (2, 5, 11), (3, NULL, 7);
+
+statement ok
+CREATE TABLE actual AS SELECT * FROM baseline;
+
+statement ok
+DELETE FROM actual WHERE CASE WHEN p = 5 THEN true ELSE false END;
+
+query III rowsort survivors
+SELECT id, p, value FROM baseline WHERE (CASE WHEN p = 5 THEN true ELSE false END) IS NOT TRUE;
+----
+
+query III rowsort survivors
+SELECT id, p, value FROM actual;
+----

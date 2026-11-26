@@ -1,0 +1,13 @@
+# delta: stats on
+
+statement ok
+CREATE TABLE actual AS SELECT 11 AS id;
+
+statement ok
+INSERT INTO actual VALUES (99);
+
+query I
+-- delta-scan: 1/2
+SELECT id FROM actual WHERE id = 11;
+----
+11
