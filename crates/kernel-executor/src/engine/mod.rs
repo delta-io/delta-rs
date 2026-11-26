@@ -196,7 +196,7 @@ mod tests {
                 .evaluation_handler()
                 .as_ref()
                 .any_ref()
-                .is::<ArrowEvaluationHandler>()
+                .is::<normalizing::NormalizingEvaluationHandler>()
         );
     }
 
