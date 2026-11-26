@@ -490,15 +490,23 @@ impl Scan {
         builder.build()
     }
 
+    /// `seed_rows` keeps only the materialized files at these (batch, row) positions.
     #[cfg(feature = "datafusion")]
     pub(crate) fn scan_metadata_seeded(
         &self,
         engine: Arc<dyn Engine>,
         materialized_files: Option<&Arc<MaterializedFiles>>,
+        seed_rows: Option<&[(usize, usize)]>,
     ) -> SendableScanMetadataStream {
-        match materialized_files.and_then(|materialized_files| materialized_files.full_table_seed())
-        {
-            Some(materialized_seed) => {
+        let materialized_seed = materialized_files
+            .and_then(|materialized_files| materialized_files.full_table_seed())
+            .map(|seed| match seed_rows {
+                Some(seed_rows) => seed.retain_rows(seed_rows),
+                None => Ok(seed),
+            })
+            .transpose();
+        match materialized_seed {
+            Ok(Some(materialized_seed)) => {
                 let (existing_version, existing_data, existing_predicate) =
                     materialized_seed.into_parts();
                 self.scan_metadata_from(
@@ -508,7 +516,8 @@ impl Scan {
                     existing_predicate,
                 )
             }
-            None => self.scan_metadata(engine),
+            Ok(None) => self.scan_metadata(engine),
+            Err(err) => Box::pin(futures::stream::once(async { Err(err) })),
         }
     }
 
