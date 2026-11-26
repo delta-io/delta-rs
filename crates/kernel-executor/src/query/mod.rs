@@ -4,41 +4,44 @@
 //! [`to_logical_plan`] walks the nodes in order, builds one `LogicalPlan` per node from its
 //! already translated inputs ([`operator`]), and returns the plan of the terminal (last) node.
 //! Expressions and predicates inside operators go through [`crate::expressions`].
-//!
-//! The walk is taken from delta-kernel-rs `datafusion-executor/src/plan.rs` at commit 04c2ec32
-//! (Apache-2.0; see the NOTICE file in this crate).
 
 use std::sync::Arc;
 
 use datafusion::common::DataFusionError;
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::LogicalPlan;
-use delta_kernel::DeltaResult;
+use delta_kernel::KernelResult as DeltaResult;
 use delta_kernel::plans::PlanResult;
 use delta_kernel::plans::ir::plan::Plan;
 
-use crate::{DataFusionPlanExecutor, Error};
+use crate::{DataFusionPlanExecutor, ExecutorError};
 
 pub mod operator;
+pub mod scan;
 
 /// Translates `plan`, runs it on a session built from the executor's task context, and streams
 /// the terminal node's rows as [`PlanResult::Data`].
 pub fn execute(executor: &DataFusionPlanExecutor, plan: Plan) -> DeltaResult<PlanResult> {
     let logical = to_logical_plan(executor, &plan)?;
     let ctx = executor.task_ctx();
-    let session =
-        SessionContext::new_with_config_rt(ctx.session_config().clone(), ctx.runtime_env());
-    let stream = crate::runtime::block_on(executor.handle(), async move {
+    let mut config = ctx.session_config().clone();
+
+    // A scan gives every file its own partition. Splitting a file further by byte range would
+    // interleave its rows, and the kernel's handler contract wants them in file order.
+    config.options_mut().optimizer.repartition_file_scans = false;
+    let session = SessionContext::new_with_config_rt(config, ctx.runtime_env());
+    let handle = crate::runtime::query_handle(executor.handle())?;
+    let stream = crate::runtime::block_on(&handle, async move {
         session
             .execute_logical_plan(logical)
             .await?
             .execute_stream()
             .await
     })
-    .map_err(Error::from)?;
+    .map_err(ExecutorError::from)?;
+
     Ok(PlanResult::Data(crate::stream::into_engine_data(
-        executor.handle(),
-        stream,
+        &handle, stream,
     )))
 }
 
@@ -55,6 +58,7 @@ pub fn to_logical_plan(
     // strictly less than the node's own, so a single forward pass leaves each node's inputs already
     // lowered by the time it is reached.
     let mut lowered: Vec<Arc<LogicalPlan>> = Vec::with_capacity(plan.nodes.len());
+
     for (node_index, node) in plan.nodes.iter().enumerate() {
         let op = &node.op;
         let available = lowered.len();
@@ -132,7 +136,14 @@ mod tests {
 
     #[tokio::test]
     async fn empty_plan_is_rejected() {
-        let err = to_logical_plan(&executor(), &Plan { nodes: vec![] }).unwrap_err();
+        let err = to_logical_plan(
+            &executor(),
+            &Plan {
+                schema: Arc::new(test_schema()),
+                nodes: vec![],
+            },
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("no nodes"), "{err}");
     }
 
@@ -140,6 +151,7 @@ mod tests {
     async fn terminal_node_is_the_plans_output() {
         // Two independent sources; the last node is the terminal one, so its rows are the output.
         let plan = Plan {
+            schema: Arc::new(test_schema()),
             nodes: vec![
                 values_node(vec![vec![1i64.into()]]),
                 values_node(vec![vec![2i64.into()], vec![3i64.into()]]),
@@ -180,6 +192,7 @@ mod tests {
             predicate: KernelPredicate::is_not_null(column_expr!("projected")).into(),
         };
         let plan = Plan {
+            schema: project_schema.clone(),
             nodes: vec![
                 values_node(vec![vec![1i64.into()]]),
                 PlanNode::new(project, vec![0]),
@@ -207,7 +220,14 @@ mod tests {
     #[tokio::test]
     async fn invalid_input_reference_is_rejected(#[case] input_index: usize) {
         let node = PlanNode::new(Values::new(test_schema(), vec![]), vec![input_index]);
-        let err = to_logical_plan(&executor(), &Plan { nodes: vec![node] }).unwrap_err();
+        let err = to_logical_plan(
+            &executor(),
+            &Plan {
+                schema: Arc::new(test_schema()),
+                nodes: vec![node],
+            },
+        )
+        .unwrap_err();
         let message = err.to_string();
         assert!(message.contains("node 0 (values)"), "{message}");
         assert!(

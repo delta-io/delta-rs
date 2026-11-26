@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Generator
 
 import pytest
 from arro3.core import Array, DataType, Field, Schema, Table
-from azure.storage import blob
 
 from deltalake import (
     DeltaTable,
@@ -171,6 +170,7 @@ def azurite_creds():
     # These are the well-known values
     # https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=visual-studio#well-known-storage-account-and-key
     import azure.core
+    from azure.storage import blob
 
     account_name = "devstoreaccount1"
     config = dict(
@@ -217,6 +217,8 @@ def azurite_env_vars(monkeypatch, azurite_creds):
 
 @pytest.fixture(scope="session")
 def azurite_sas_creds(azurite_creds):
+    from azure.storage import blob
+
     env = os.environ.copy()
     env.update(azurite_creds)
     env["AZURE_STORAGE_CONNECTION_STRING"] = (
@@ -338,6 +340,28 @@ def existing_sample_table(tmp_path: pathlib.Path, sample_table: Table):
     path = str(tmp_path)
     write_deltalake(path, sample_table)
     return DeltaTable(path)
+
+
+@pytest.fixture()
+def struct_table() -> "pa.Table":
+    """A table with the struct column `s`. In row 2 `s.inner` is null, in row 3 `s` is null."""
+    import pyarrow as pa
+
+    inner = pa.struct([("x", pa.int64()), ("y", pa.int64())])
+    struct = pa.struct([("a", pa.int64()), ("b", pa.string()), ("inner", inner)])
+    return pa.table(
+        {
+            "id": pa.array([1, 2, 3], pa.int64()),
+            "s": pa.array(
+                [
+                    {"a": 1, "b": "one", "inner": {"x": 10, "y": 11}},
+                    {"a": 2, "b": "two", "inner": None},
+                    None,
+                ],
+                type=struct,
+            ),
+        }
+    )
 
 
 @pytest.fixture()

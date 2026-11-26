@@ -8,13 +8,13 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod actions;
-pub(crate) mod fields;
 
 pub use actions::*;
 
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(missing_docs)]
+#[non_exhaustive]
 pub enum Action {
     #[serde(rename = "metaData")]
     Metadata(Metadata),

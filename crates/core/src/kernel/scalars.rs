@@ -414,7 +414,7 @@ fn checked(arr: &dyn Array, idx: usize, val: Scalar) -> Scalar {
     }
 }
 
-fn create_escaped_binary_string(data: &[u8]) -> String {
+pub(crate) fn create_escaped_binary_string(data: &[u8]) -> String {
     let mut escaped_string = String::new();
     for &byte in data {
         // Convert each byte to its two-digit hexadecimal representation

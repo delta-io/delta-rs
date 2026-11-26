@@ -180,7 +180,7 @@ mod tests {
         kernel::TableFeatures,
         writer::test_utils::{create_bare_table, get_record_batch},
     };
-    use delta_kernel::DeltaResult;
+    use delta_kernel::KernelResult as DeltaResult;
     use delta_kernel::table_features::TableFeature;
 
     #[tokio::test]

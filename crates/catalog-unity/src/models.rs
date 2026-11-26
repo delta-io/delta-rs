@@ -60,6 +60,7 @@ impl std::error::Error for ErrorResponse {}
 /// List catalogs response
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum ListCatalogsResponse {
     /// Successful response
     Success {
@@ -74,6 +75,7 @@ pub enum ListCatalogsResponse {
 /// List schemas response
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum ListSchemasResponse {
     /// Successful response
     Success {
@@ -87,6 +89,7 @@ pub enum ListSchemasResponse {
 /// Get table response
 #[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum GetTableResponse {
     /// Successful response
     Success(Table),
@@ -97,6 +100,7 @@ pub enum GetTableResponse {
 /// List schemas response
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum GetSchemaResponse {
     /// Successful response
     Success(Box<Schema>),
@@ -107,6 +111,7 @@ pub enum GetSchemaResponse {
 /// List table summaries response
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum ListTableSummariesResponse {
     /// Successful response
     Success {
@@ -122,6 +127,7 @@ pub enum ListTableSummariesResponse {
 
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum TableTempCredentialsResponse {
     Success(TemporaryTableCredentials),
     Error(ErrorResponse),
@@ -131,6 +137,7 @@ pub enum TableTempCredentialsResponse {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[allow(missing_docs)]
 /// Whether the current securable is accessible from all workspaces or a specific set of workspaces.
+#[non_exhaustive]
 pub enum IsolationMode {
     #[default]
     Undefined,
@@ -142,6 +149,7 @@ pub enum IsolationMode {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[allow(missing_docs)]
 /// The type of the catalog.
+#[non_exhaustive]
 pub enum CatalogType {
     #[default]
     Undefined,
@@ -194,6 +202,7 @@ pub struct ProvisioningInfo {
 
 #[derive(Deserialize, Debug, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
 pub enum ProvisioningState {
     #[default]
     Provisioning,
@@ -228,7 +237,8 @@ pub struct Schema {
     /// Full name of schema, in form of catalog_name.schema_name.
     pub full_name: String,
 
-    /// The type of the parent catalog.
+    /// The type of the parent catalog. Unity Catalog OSS does not return it.
+    #[serde(default)]
     pub catalog_type: String,
 
     /// Name of parent catalog.
@@ -262,7 +272,8 @@ pub struct Schema {
     #[serde(default)]
     pub updated_at: i64,
 
-    /// Unique identifier of parent metastore.
+    /// Unique identifier of parent metastore. Unity Catalog OSS does not return it.
+    #[serde(default)]
     pub metastore_id: String,
 }
 
@@ -271,6 +282,7 @@ pub struct Schema {
 #[allow(missing_docs)]
 /// Possible data source formats for unity tables
 #[derive(Clone, PartialEq)]
+#[non_exhaustive]
 pub enum DataSourceFormat {
     Delta,
     Csv,
@@ -305,6 +317,7 @@ pub enum DataSourceFormat {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[allow(missing_docs)]
 /// Possible data source formats for unity tables
+#[non_exhaustive]
 pub enum TableType {
     Managed,
     External,
@@ -412,6 +425,7 @@ pub struct ColumnInfo {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
 pub enum ColumnTypeName {
     Boolean,
     Byte,
@@ -507,11 +521,15 @@ impl TemporaryTableCredentials {
         None
     }
 
+    /// Returns the storage options that give access to the table location.
+    ///
+    /// A table on the local file system needs no credentials, so the options are empty.
     pub fn get_credentials(self) -> Option<HashMap<String, String>> {
         self.get_aws_credentials()
             .or(self.get_azure_credentials())
             .or(self.get_gcp_credentials())
             .or(self.get_r2_credentials())
+            .or_else(|| self.url.starts_with("file:").then(HashMap::new))
     }
 }
 
@@ -879,6 +897,45 @@ pub(crate) mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn test_local_table_needs_no_credentials() {
+        let credentials = |body: &str| {
+            let TableTempCredentialsResponse::Success(creds) = serde_json::from_str(body).unwrap()
+            else {
+                panic!("expected Success");
+            };
+            creds.get_credentials()
+        };
+
+        assert_eq!(
+            credentials(r#"{"url":"file:///tmp/t"}"#),
+            Some(HashMap::new())
+        );
+        assert_eq!(credentials(r#"{"url":"s3://bucket/t"}"#), None);
+    }
+
+    #[test]
+    fn test_schema_response_of_unity_catalog_oss() {
+        // Unity Catalog OSS returns no `catalog_type` and no `metastore_id`.
+        let body = r#"{
+            "name": "default",
+            "catalog_name": "unity",
+            "properties": {},
+            "full_name": "unity.default",
+            "created_at": 1795275730773,
+            "updated_at": 1795275730773,
+            "schema_id": "565a2cae-aa4e-402d-92d5-19a4a398d9f1"
+        }"#;
+        let GetSchemaResponse::Success(schema) = serde_json::from_str(body).unwrap() else {
+            panic!("expected Success");
+        };
+        assert_eq!(schema.full_name, "unity.default");
+
+        let list: ListSchemasResponse =
+            serde_json::from_str(&format!(r#"{{"schemas": [{body}]}}"#)).unwrap();
+        assert!(matches!(list, ListSchemasResponse::Success { schemas } if schemas.len() == 1));
     }
 
     #[test]

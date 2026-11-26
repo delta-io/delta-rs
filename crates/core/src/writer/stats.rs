@@ -8,10 +8,9 @@ use std::{
 };
 
 use chrono::Timelike;
-use delta_kernel::expressions::Scalar;
+use delta_kernel::expressions::{ColumnName, Scalar};
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
-use itertools::Itertools;
 use parquet::basic::Type;
 use parquet::basic::{ConvertedType, DecimalType, LogicalType};
 use parquet::file::metadata::ParquetMetaData;
@@ -23,6 +22,7 @@ use parquet::{
 use tracing::warn;
 
 use super::*;
+use crate::kernel::arrow::engine_ext::should_include_column;
 use crate::kernel::{Add, scalars::ScalarExt};
 use crate::protocol::{ColumnValueStat, Stats};
 
@@ -89,7 +89,7 @@ pub(crate) fn stats_from_parquet_metadata(
 ) -> Result<Stats, DeltaWriterError> {
     let num_rows = parquet_metadata.file_metadata().num_rows();
     let schema_descriptor = parquet_metadata.file_metadata().schema_descr_ptr();
-    let row_group_metadata = parquet_metadata.row_groups().to_vec();
+    let row_group_metadata = parquet_metadata.row_groups();
 
     stats_from_metadata(
         partition_values,
@@ -109,7 +109,7 @@ fn stats_from_file_metadata(
 ) -> Result<Stats, DeltaWriterError> {
     let schema_descriptor = file_metadata.file_metadata().schema_descr();
 
-    let row_group_metadata: Vec<RowGroupMetaData> = file_metadata.row_groups().to_vec();
+    let row_group_metadata = file_metadata.row_groups();
 
     stats_from_metadata(
         partition_values,
@@ -124,7 +124,7 @@ fn stats_from_file_metadata(
 fn stats_from_metadata(
     partition_values: &IndexMap<String, Scalar>,
     schema_descriptor: Arc<SchemaDescriptor>,
-    row_group_metadata: Vec<RowGroupMetaData>,
+    row_group_metadata: &[RowGroupMetaData],
     num_rows: i64,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
@@ -143,7 +143,7 @@ fn stats_from_metadata(
                     .map_err(|e| DeltaTableError::generic(e.to_string()))?
                     .parse_multipart_identifier()
                 {
-                    Ok(parts) => Ok(parts.into_iter().map(|v| v.value).join(".")),
+                    Ok(parts) => Ok(ColumnName::new(parts.into_iter().map(|v| v.value))),
                     Err(e) => Err(DeltaWriterError::DeltaTable(
                         DeltaTableError::GenericError {
                             source: Box::new(e),
@@ -151,14 +151,14 @@ fn stats_from_metadata(
                     )),
                 }
             })
-            .collect::<Result<Vec<String>, DeltaWriterError>>()?;
+            .collect::<Result<Vec<ColumnName>, DeltaWriterError>>()?;
 
         schema_descriptor
             .columns()
             .iter()
             .enumerate()
             .filter_map(|(index, col)| {
-                if stats_cols.contains(&col.name().to_string()) {
+                if should_include_column(&ColumnName::new(col.path().parts()), &stats_cols) {
                     Some(index)
                 } else {
                     None
@@ -658,16 +658,10 @@ fn apply_min_max_for_column(
                     ColumnValueStat::Column(maxes),
                     ColumnCountStat::Column(null_counts),
                 ) => {
-                    let remaining_parts: Vec<String> = column_path_parts
-                        .iter()
-                        .skip(1)
-                        .map(|s| s.to_string())
-                        .collect();
-
                     apply_min_max_for_column(
                         statistics,
                         column_descr,
-                        remaining_parts.as_slice(),
+                        &column_path_parts[1..],
                         mins,
                         maxes,
                         null_counts,
@@ -1630,6 +1624,53 @@ mod tests {
             assert!(
                 nested_min.contains_key(key),
                 "nested.{key} missing from min_values"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_write_nested_data_skipping_stats_columns() {
+        use crate::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
+
+        let long = || DeltaDataType::Primitive(PrimitiveType::Long);
+        let nested = StructType::try_new([
+            StructField::nullable("b", long()),
+            StructField::nullable("c", long()),
+        ])
+        .unwrap();
+        // Names are column paths: `x.b` and `x` select nested leaves, and `b` must not match `x.b`.
+        for (stats_columns, expected_min_values) in [
+            ("x.b", json!({"x": {"b": 3}})),
+            ("x", json!({"x": {"b": 3, "c": 4}})),
+            ("b", json!({"b": 2})),
+        ] {
+            let configuration: HashMap<String, Option<String>> = [(
+                "delta.dataSkippingStatsColumns".to_string(),
+                Some(stats_columns.to_string()),
+            )]
+            .into_iter()
+            .collect();
+            let table = DeltaTable::new_in_memory()
+                .create()
+                .with_columns([
+                    StructField::nullable("b", long()),
+                    StructField::nullable("x", DeltaDataType::Struct(Box::new(nested.clone()))),
+                ])
+                .with_configuration(configuration)
+                .await
+                .unwrap();
+
+            let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+            let rows = vec![json!({"b": 2, "x": {"b": 3, "c": 4}})];
+            let batch = record_batch_from_message(writer.arrow_schema(), rows.as_slice()).unwrap();
+            writer.write(batch).await.unwrap();
+            let add = writer.flush().await.unwrap();
+            let stats = add[0].get_stats().unwrap().unwrap();
+
+            assert_eq!(
+                serde_json::to_value(&stats.min_values).unwrap(),
+                expected_min_values,
+                "dataSkippingStatsColumns = {stats_columns:?}"
             );
         }
     }

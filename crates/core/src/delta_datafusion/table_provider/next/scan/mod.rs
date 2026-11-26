@@ -26,17 +26,17 @@ use arrow_array::{
 };
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaBuilder, SchemaRef};
-use chrono::{TimeZone as _, Utc};
 use dashmap::DashMap;
 use datafusion::{
     catalog::Session,
     common::{
-        ColumnStatistics, HashMap, Result, Statistics, ToDFSchema, internal_datafusion_err,
-        plan_err, stats::Precision,
+        ColumnStatistics, HashMap, Result, ScalarValue, Statistics, ToDFSchema,
+        internal_datafusion_err, plan_err, stats::Precision,
     },
     datasource::physical_plan::{
         ParquetSource,
         parquet::{CachedParquetFileReaderFactory, metadata::DFParquetMetadata},
+        wrap_partition_type_in_dict, wrap_partition_value_in_dict,
     },
     error::DataFusionError,
     execution::{
@@ -64,9 +64,13 @@ use delta_kernel::{
     Engine, Expression, engine::arrow_data::ArrowEngineData, expressions::StructData,
     scan::ScanMetadata, table_features::TableFeature,
 };
+use deltalake_kernel_executor::io::storage::to_partitioned_file;
+use deltalake_kernel_executor::query::scan::expr_adapter::{
+    DeltaPhysicalExprAdapterFactory, relax_schema_nested_nullability,
+};
 use futures::{Stream, StreamExt as _, TryStreamExt as _, future::ready};
 use itertools::Itertools as _;
-use object_store::{ObjectMeta, path::Path};
+use object_store::ObjectMeta;
 use parquet::arrow::RowNumber;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData};
 use tracing::debug;
@@ -75,7 +79,6 @@ use url::Url;
 pub use self::exec::DeltaScanExec;
 use self::exec::DvExecutionState;
 use self::exec_meta::DeltaScanMetaExec;
-use self::expr_adapter::{DeltaPhysicalExprAdapterFactory, relax_schema_nested_nullability};
 pub(crate) use self::plan::{KernelScanPlan, ProjectedScanContract, supports_filters_pushdown};
 use self::replay::{ScanFileContext, ScanFileStream};
 pub(crate) use self::runtime_filter::RuntimeFileFilter;
@@ -94,7 +97,6 @@ use crate::{
 
 mod exec;
 mod exec_meta;
-mod expr_adapter;
 mod plan;
 mod replay;
 mod runtime_filter;
@@ -158,7 +160,7 @@ pub(super) async fn execution_plan(
                     _ => {
                         return plan_err!(
                             "Expected exact row counts in file: {}",
-                            super::redact_url_for_error(&f.file_url)
+                            super::redact_url_for_error(&f.meta.location)
                         );
                     }
                 },
@@ -377,7 +379,7 @@ async fn replay_files(
         for (file_index, file) in files.iter().enumerate() {
             public_file_ids.insert(
                 compact_internal_file_id(file_index),
-                file.file_url.to_string(),
+                file.meta.location.to_string(),
             );
         }
     }
@@ -497,9 +499,9 @@ fn validate_dv_parquet_metadata(
     }
     let mut total = 0_u64;
     for (group_index, group) in metadata.row_groups().iter().enumerate() {
-        let Ok(expected) = i16::try_from(group_index) else {
+        let Ok(expected) = i32::try_from(group_index) else {
             return plan_err!(
-                "Parquet row-group index {group_index} exceeds i16 for file id '{id}'"
+                "Parquet row-group index {group_index} exceeds i32 for file id '{id}'"
             );
         };
         if group.ordinal() != Some(expected) {
@@ -562,21 +564,11 @@ async fn get_data_scan_plan(
     // Create one `DataSourceExec` plan for each store.
     // Add a compact scan file id as a partition value for file correlation.
     // The exec maps that id back to the public file path only when the file column is projected.
-    let to_partitioned_file = |(file_index, f): (usize, ScanFileContext)| {
+    let to_store_file = |(file_index, f): (usize, ScanFileContext)| {
         if let Some(part_stata) = &f.partitions {
             update_partition_stats(part_stata, &f.stats, &mut partition_stats)?;
         }
-        // We create a PartitionedFile from the ObjectMeta to avoid any surprises in path encoding
-        // that may arise from using the 'new' method directly. i.e. the 'new' method encodes paths
-        // segments again, which may lead to double-encoding in some cases.
-        let mut partitioned_file: PartitionedFile = ObjectMeta {
-            location: Path::from_url_path(f.file_url.path())?,
-            size: f.size,
-            last_modified: Utc.timestamp_nanos(0),
-            e_tag: None,
-            version: None,
-        }
-        .into();
+        let mut partitioned_file = to_partitioned_file(&f.meta)?;
         let file_value = wrap_file_id_value(compact_internal_file_id(file_index));
         // NOTE: `PartitionedFile::with_statistics` appends exact stats for partition columns based
         // on `partition_values`, so partition values must be set first.
@@ -587,15 +579,20 @@ async fn get_data_scan_plan(
             // partition-column entry; table-level column stats are rebuilt below.
             partitioned_file.statistics = Some(Arc::new(f.stats));
         } else {
-            partitioned_file = partitioned_file.with_statistics(Arc::new(f.stats));
+            // Avoid doubling the stats Vec when `with_statistics` appends partition entries.
+            let mut stats = f.stats;
+            stats
+                .column_statistics
+                .reserve_exact(partitioned_file.partition_values.len());
+            partitioned_file = partitioned_file.with_statistics(Arc::new(stats));
         }
-        Ok::<_, DataFusionError>((f.file_url.as_object_store_url(), partitioned_file))
+        Ok::<_, DataFusionError>((f.meta.location.as_object_store_url(), partitioned_file))
     };
 
     let partitioned_files = files
         .into_iter()
         .enumerate()
-        .map(to_partitioned_file)
+        .map(to_store_file)
         .try_collect::<_, Vec<_>, _>()?;
 
     let mut dv_metadata_caches: HashMap<ObjectStoreUrl, Arc<FileMetadataCache>> = HashMap::new();
@@ -817,7 +814,7 @@ fn remap_deletion_vectors_to_internal_file_ids(
         if dvs_by_url.is_empty() {
             break;
         }
-        if let Some(dv) = dvs_by_url.remove(file.file_url.as_str()) {
+        if let Some(dv) = dvs_by_url.remove(file.meta.location.as_str()) {
             dvs.insert(compact_internal_file_id(file_index), dv);
         }
     }
@@ -1096,6 +1093,7 @@ async fn get_read_plan(
 }
 
 // Small helper to reuse some code between exec and exec_meta
+// `batch` must hold one file's rows: partition values are read from the first row.
 fn finalize_transformed_batch(
     batch: RecordBatch,
     scan_plan: &KernelScanPlan,
@@ -1112,6 +1110,29 @@ fn finalize_transformed_batch(
     let result = if result.schema_ref().eq(&scan_plan.contract.result_schema) {
         result
     } else {
+        // One value per file: wrap it once instead of casting every row.
+        let partition_columns = scan_plan.snapshot.metadata().partition_columns();
+        let mut fields = result.schema_ref().fields().to_vec();
+        let mut columns = result.columns().to_vec();
+        let mut wrapped = false;
+        for (field, column) in fields.iter_mut().zip(columns.iter_mut()) {
+            if !column.is_empty()
+                && partition_columns.contains(field.name())
+                && let Some((_, target)) =
+                    scan_plan.contract.result_schema.fields().find(field.name())
+                && target.data_type() == &wrap_partition_type_in_dict(column.data_type().clone())
+            {
+                let value = ScalarValue::try_from_array(column, 0)?;
+                *column = wrap_partition_value_in_dict(value).to_array_of_size(column.len())?;
+                *field = Arc::clone(target);
+                wrapped = true;
+            }
+        }
+        let result = if wrapped {
+            RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?
+        } else {
+            result
+        };
         let adapted = schema_adapter.adapt(result)?;
         if adapted.schema_ref().eq(&scan_plan.contract.result_schema) {
             adapted
@@ -1209,7 +1230,8 @@ mod tests {
         physical_plan::collect,
         prelude::{col, lit},
     };
-    use object_store::{ObjectStoreExt as _, memory::InMemory};
+    use delta_kernel::FileMeta;
+    use object_store::{ObjectStoreExt as _, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
     use url::Url;
 
@@ -1268,27 +1290,25 @@ mod tests {
     }
 
     #[test]
-    fn test_dv_rejects_row_group_index_beyond_i16() -> TestResult {
+    fn test_dv_accepts_row_group_index_beyond_i16() -> TestResult {
         use parquet::file::metadata::{FileMetaData, RowGroupMetaData};
         use parquet::schema::types::{SchemaDescriptor, Type};
 
         let schema = Arc::new(SchemaDescriptor::new(Arc::new(
             Type::group_type_builder("schema").build()?,
         )));
-        let mut groups = (0..=i16::MAX)
+        // Parquet row-group ordinals are i32, so indices past i16::MAX are valid.
+        let groups = (0..=i32::from(i16::MAX) + 1)
             .map(|ordinal| {
                 RowGroupMetaData::builder(Arc::clone(&schema))
                     .set_ordinal(ordinal)
                     .build()
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        groups.push(RowGroupMetaData::builder(Arc::clone(&schema)).build()?);
         let metadata =
             ParquetMetaData::new(FileMetaData::new(1, 0, None, None, schema, None), groups);
 
-        let err = validate_dv_parquet_metadata(&metadata, None, 0, "f0", "file_id")
-            .expect_err("row-group index must fit i16");
-        assert!(err.to_string().contains("row-group index"));
+        validate_dv_parquet_metadata(&metadata, None, 0, "f0", "file_id")?;
         Ok(())
     }
 
@@ -1498,16 +1518,14 @@ mod tests {
                 range.end - range.start == METADATA_SIZE_HINT && parquet_sizes.contains(&range.end)
             };
             match op {
-                RecordedObjectStoreOperation::GetRange(kind, range)
-                    if matches!(kind, RecordedPathKind::Data | RecordedPathKind::Other) =>
-                {
-                    is_prefetch(range)
-                }
-                RecordedObjectStoreOperation::GetRanges(kind, ranges)
-                    if matches!(kind, RecordedPathKind::Data | RecordedPathKind::Other) =>
-                {
-                    ranges.iter().any(is_prefetch)
-                }
+                RecordedObjectStoreOperation::GetRange(
+                    RecordedPathKind::Data | RecordedPathKind::Other,
+                    range,
+                ) => is_prefetch(range),
+                RecordedObjectStoreOperation::GetRanges(
+                    RecordedPathKind::Data | RecordedPathKind::Other,
+                    ranges,
+                ) => ranges.iter().any(is_prefetch),
                 _ => false,
             }
         });
@@ -1555,8 +1573,11 @@ mod tests {
 
     fn scan_file_context(file_url: &str) -> ScanFileContext {
         ScanFileContext {
-            file_url: Url::parse(file_url).expect("valid test URL"),
-            size: 0,
+            meta: FileMeta {
+                location: Url::parse(file_url).expect("valid test URL"),
+                last_modified: 0,
+                size: 0,
+            },
             transform: None,
             stats: Statistics::new_unknown(&Schema::empty()),
             num_records: None,
@@ -1571,12 +1592,12 @@ mod tests {
             scan_file_context("s3://bucket/very/long/path/second.parquet"),
         ];
         let mut dvs_by_url = HashMap::new();
-        dvs_by_url.insert(files[1].file_url.to_string(), vec![true, false, true]);
+        dvs_by_url.insert(files[1].meta.location.to_string(), vec![true, false, true]);
 
         let dvs = remap_deletion_vectors_to_internal_file_ids(&files, dvs_by_url)?;
 
         assert!(dvs.contains_key("1"));
-        assert!(!dvs.contains_key(files[1].file_url.as_str()));
+        assert!(!dvs.contains_key(files[1].meta.location.as_str()));
         assert_eq!(
             dvs.get("1").expect("compact dv key").as_slice(),
             &[true, false, true]
@@ -1751,7 +1772,7 @@ mod tests {
         let err = adapter
             .adapt(source)
             .expect_err("invalid value cast should fail under DataFusion default cast semantics");
-        match err {
+        match err.find_root() {
             DataFusionError::ArrowError(inner, _) => {
                 assert!(
                     matches!(inner.as_ref(), ArrowError::CastError(_)),
@@ -1808,7 +1829,7 @@ mod tests {
         let err = adapter
             .adapt(source)
             .expect_err("overflow cast should fail under DataFusion default cast semantics");
-        match err {
+        match err.find_root() {
             DataFusionError::ArrowError(inner, _) => {
                 assert!(
                     matches!(inner.as_ref(), ArrowError::CastError(_)),

@@ -9,7 +9,7 @@ use delta_kernel::expressions::{
     JunctionPredicateOp, Scalar, UnaryPredicate, UnaryPredicateOp,
 };
 use delta_kernel::schema::{DataType, StructType};
-use delta_kernel::{DeltaResult, Error as KernelError};
+use delta_kernel::{KernelError, KernelResult as DeltaResult};
 use itertools::Itertools;
 
 use super::expression::to_datafusion_expr;

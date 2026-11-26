@@ -47,6 +47,7 @@ impl Default for VacuumFixtureParams {
 
 /// Whether full-mode vacuum uses the parallel multi-level scan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum VacuumScanMode {
     /// Default: parallel prefix expansion when the table has >1 partition cols.
     Parallel,

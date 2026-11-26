@@ -1,4 +1,4 @@
-//! Adapts a DataFusion record batch stream to the kernel's `EngineData` iterator.
+//! Adapts a DataFusion record batch stream to kernel's `EngineData` iterator.
 //!
 //! [`PlanResult::Data`] is a synchronous iterator. [`into_engine_data`] spawns one task on the
 //! executor's runtime that drains the stream into a bounded channel, and the iterator receives
@@ -9,7 +9,7 @@
 
 use datafusion::execution::SendableRecordBatchStream;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
-use delta_kernel::{DeltaResultIteratorStatic, EngineData};
+use delta_kernel::{EngineData, KernelResultIteratorStatic as DeltaResultIteratorStatic};
 use futures::StreamExt;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
@@ -34,10 +34,12 @@ pub fn into_engine_data(
         }
     });
     Box::new(std::iter::from_fn(move || {
-        block_in_place(|| receiver.blocking_recv()).map(|batch| {
+        // Not `blocking_recv`: it panics on a current-thread runtime's thread, where the kernel
+        // can pull this iterator while the stream task runs on a background runtime.
+        block_in_place(|| futures::executor::block_on(receiver.recv())).map(|batch| {
             batch
                 .map(|batch| Box::new(ArrowEngineData::new(batch)) as Box<dyn EngineData>)
-                .map_err(|err| crate::Error::from(err).into())
+                .map_err(|err| crate::ExecutorError::from(err).into())
         })
     }))
 }

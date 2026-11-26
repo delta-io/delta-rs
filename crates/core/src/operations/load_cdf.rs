@@ -40,6 +40,7 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion_datasource::PartitionedFile;
 use delta_kernel::table_features::ColumnMappingMode;
+use object_store::path::Path;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -507,8 +508,9 @@ impl CdfLoadBuilder {
 
                 let mut new_part_values = spec_partition_values.clone();
                 new_part_values.extend(partition_values);
-                let mut part_file = PartitionedFile::new(action.path(), action.size()? as u64)
-                    .with_partition_values(new_part_values.clone());
+                let mut part_file =
+                    partitioned_file(Path::parse(action.path())?, action.size()? as u64)
+                        .with_partition_values(new_part_values.clone());
 
                 if let Some(access_plan) = create_file_scan_plan(
                     Arc::clone(&self.log_store.engine()),
@@ -1820,16 +1822,14 @@ pub(crate) mod tests {
                 range.end - range.start == METADATA_SIZE_HINT && parquet_sizes.contains(&range.end)
             };
             match op {
-                RecordedObjectStoreOperation::GetRange(kind, range)
-                    if matches!(kind, RecordedPathKind::Data | RecordedPathKind::Other) =>
-                {
-                    is_prefetch(range)
-                }
-                RecordedObjectStoreOperation::GetRanges(kind, ranges)
-                    if matches!(kind, RecordedPathKind::Data | RecordedPathKind::Other) =>
-                {
-                    ranges.iter().any(is_prefetch)
-                }
+                RecordedObjectStoreOperation::GetRange(
+                    RecordedPathKind::Data | RecordedPathKind::Other,
+                    range,
+                ) => is_prefetch(range),
+                RecordedObjectStoreOperation::GetRanges(
+                    RecordedPathKind::Data | RecordedPathKind::Other,
+                    ranges,
+                ) => ranges.iter().any(is_prefetch),
                 _ => false,
             }
         });
@@ -1839,6 +1839,176 @@ pub(crate) mod tests {
              ParquetSource (https://github.com/delta-io/delta-rs/issues/4864); recorded operations: {operations:?}"
         );
 
+        Ok(())
+    }
+
+    /// Version 1 deletes ids 2 and 3 of the only file with a deletion vector. Version 2 removes
+    /// that file and version 3 re-adds it, both without change data files, as Spark does for a
+    /// partition DELETE and a RESTORE, so their change rows are the eight live ids.
+    #[tokio::test]
+    async fn test_cdf_unpaired_actions_with_deletion_vector() -> TestResult {
+        use delta_kernel::actions::deletion_vector_writer::{
+            KernelDeletionVector, StreamingDeletionVectorWriter,
+        };
+        use parquet::arrow::ArrowWriter;
+        use serde_json::json;
+
+        let dir = tempfile::tempdir()?;
+        std::fs::create_dir(dir.path().join("_delta_log"))?;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let data_file = std::fs::File::create(dir.path().join("part-0.parquet"))?;
+        let mut writer = ArrowWriter::try_new(data_file, Arc::clone(&schema), None)?;
+        writer.write(&RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from_iter_values(0..10))],
+        )?)?;
+        writer.close()?;
+
+        let dv_path = dir.path().join("dv.bin");
+        let mut dv_file = std::fs::File::create(&dv_path)?;
+        let mut dv_writer = StreamingDeletionVectorWriter::new(&mut dv_file);
+        let mut dv = KernelDeletionVector::new();
+        dv.add_deleted_row_indexes([2, 3]);
+        let written = dv_writer.write_deletion_vector(dv)?;
+        dv_writer.finalize()?;
+
+        let file = json!({
+            "path": "part-0.parquet",
+            "partitionValues": {},
+            "size": std::fs::metadata(dir.path().join("part-0.parquet"))?.len(),
+            "modificationTime": 0,
+            "dataChange": true,
+        });
+        let mut file_with_dv = file.clone();
+        file_with_dv["deletionVector"] = json!({
+            "storageType": "p",
+            "pathOrInlineDv": Url::from_file_path(dv_path).unwrap().as_str(),
+            "offset": written.offset,
+            "sizeInBytes": written.size_in_bytes,
+            "cardinality": 2,
+        });
+        let table_schema = json!({"type": "struct", "fields": [
+            {"name": "id", "type": "integer", "nullable": false, "metadata": {}}
+        ]});
+        let commits = [
+            vec![
+                json!({"protocol": {"minReaderVersion": 3, "minWriterVersion": 7,
+                    "readerFeatures": ["deletionVectors"],
+                    "writerFeatures": ["deletionVectors", "changeDataFeed"]}}),
+                json!({"metaData": {"id": "5f4b3c8e-2d1a-4e6f-9b7c-0a1b2c3d4e5f",
+                    "format": {"provider": "parquet", "options": {}},
+                    "schemaString": table_schema.to_string(), "partitionColumns": [],
+                    "configuration": {"delta.enableChangeDataFeed": "true",
+                        "delta.enableDeletionVectors": "true"}}}),
+                json!({"add": file}),
+            ],
+            vec![json!({"add": file_with_dv}), json!({"remove": file})],
+            vec![json!({"remove": file_with_dv})],
+            vec![json!({"add": file_with_dv})],
+        ];
+        for (version, actions) in commits.iter().enumerate() {
+            let commit_info = json!({"commitInfo": {"timestamp": version}});
+            std::fs::write(
+                dir.path().join(format!("_delta_log/{version:020}.json")),
+                std::iter::once(&commit_info)
+                    .chain(actions)
+                    .map(serde_json::Value::to_string)
+                    .join(
+                        "
+",
+                    ),
+            )?;
+        }
+
+        let table_uri = Url::from_directory_path(dir.path()).unwrap();
+        let builder = DeltaTable::try_from_url(table_uri)
+            .await?
+            .scan_cdf()
+            .with_starting_version(1);
+        let ctx = SessionContext::new();
+        ctx.register_table("cdf", Arc::new(DeltaCdfTableProvider::try_new(builder)?))?;
+        let batches = ctx
+            .sql("SELECT id, _change_type, _commit_version FROM cdf")
+            .await?
+            .collect()
+            .await?;
+
+        assert_batches_sorted_eq! {[
+            "+----+--------------+-----------------+",
+            "| id | _change_type | _commit_version |",
+            "+----+--------------+-----------------+",
+            "| 0  | delete       | 2               |",
+            "| 0  | insert       | 3               |",
+            "| 1  | delete       | 2               |",
+            "| 1  | insert       | 3               |",
+            "| 2  | delete       | 1               |",
+            "| 3  | delete       | 1               |",
+            "| 4  | delete       | 2               |",
+            "| 4  | insert       | 3               |",
+            "| 5  | delete       | 2               |",
+            "| 5  | insert       | 3               |",
+            "| 6  | delete       | 2               |",
+            "| 6  | insert       | 3               |",
+            "| 7  | delete       | 2               |",
+            "| 7  | insert       | 3               |",
+            "| 8  | delete       | 2               |",
+            "| 8  | insert       | 3               |",
+            "| 9  | delete       | 2               |",
+            "| 9  | insert       | 3               |",
+            "+----+--------------+-----------------+",
+        ], &batches }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_cdf_with_escaped_partition_values() -> TestResult {
+        let delta_schema = TestSchemas::simple();
+        let table: DeltaTable = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(delta_schema.fields().cloned())
+            .with_partition_columns(["modified"])
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await?;
+
+        let schema: Arc<Schema> = Arc::new(delta_schema.try_into_arrow()?);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("1"), Some("2"), Some("3")])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+                Arc::new(StringArray::from(vec![
+                    Some("a b"),
+                    Some("a b"),
+                    Some("2024-01-01 12:00:00"),
+                ])),
+            ],
+        )?;
+        let table = table.write(vec![batch]).await?;
+        let (table, _) = table.delete().with_predicate("value = 1").await?;
+
+        let ctx = SessionContext::new();
+        let cdf_scan = table
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&ctx.state(), None)
+            .await?;
+        let mut batches = collect(cdf_scan, ctx.task_ctx()).await?;
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();
+
+        assert_batches_sorted_eq! {[
+            "+----+-------+---------------------+--------------+-----------------+",
+            "| id | value | modified            | _change_type | _commit_version |",
+            "+----+-------+---------------------+--------------+-----------------+",
+            "| 1  | 1     | a b                 | delete       | 2               |",
+            "| 1  | 1     | a b                 | insert       | 1               |",
+            "| 2  | 2     | a b                 | insert       | 1               |",
+            "| 3  | 3     | 2024-01-01 12:00:00 | insert       | 1               |",
+            "+----+-------+---------------------+--------------+-----------------+",
+        ], &batches }
         Ok(())
     }
 

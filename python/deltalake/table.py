@@ -76,6 +76,12 @@ SUPPORTED_READER_FEATURES = {
     "variantType-preview",
 }
 
+# Appended to the pyarrow engine's refusals of tables the datafusion engine reads.
+_DATAFUSION_ENGINE_HINT = (
+    ' Read the table with the datafusion engine instead: pass engine="datafusion" '
+    "to to_pyarrow_table or to_pandas, or use DeltaTable.scan."
+)
+
 FSCK_METRICS_FILES_REMOVED_LABEL = "files_removed"
 
 FilterLiteralType = tuple[str, str, Any]
@@ -906,10 +912,15 @@ class DeltaTable:
             The approximate number of rows for this specific table
         """
         actions = self.get_add_actions(flatten=True)
-        num_records: list[int | None] = actions.column("num_records").to_pylist()
+        # arro3's stubs incorrectly type to_pylist() as returning a NumPy array.
+        # See https://github.com/kylebarron/arro3/issues/550
+        num_records = cast(list[int | None], actions.column("num_records").to_pylist())
         deleted_rows: list[int | None]
         if "deletion_vector.cardinality" in actions.column_names:
-            deleted_rows = actions.column("deletion_vector.cardinality").to_pylist()
+            deleted_rows = cast(
+                list[int | None],
+                actions.column("deletion_vector.cardinality").to_pylist(),
+            )
         else:
             deleted_rows = [None] * len(num_records)
 
@@ -1021,7 +1032,8 @@ class DeltaTable:
         If a datetime object without a timezone is passed in `new_values`, the UTC timezone will be assumed.
 
         Args:
-            updates: a mapping of column name to update SQL expression.
+            updates: a mapping of column name to update SQL expression. A name such as `s.a` sets the
+                field `a` of the struct column `s`. The other fields of `s` keep their value.
             new_values: a mapping of column name to python datatype.
             predicate: a logical expression.
             writer_properties: Pass writer properties to the Rust parquet writer.
@@ -1343,9 +1355,14 @@ class DeltaTable:
                 SUPPORTED_READER_FEATURES
             )
             if len(missing_features) > 0:
+                hint = (
+                    _DATAFUSION_ENGINE_HINT
+                    if missing_features <= {"columnMapping", "deletionVectors"}
+                    else ""
+                )
                 raise DeltaProtocolError(
                     f"The table has set these reader features: {missing_features} "
-                    "but these are not yet supported by the deltalake reader."
+                    "but these are not supported by the pyarrow engine." + hint
                 )
 
         # minReaderVersion 2 tables carry column mapping without a
@@ -1362,6 +1379,7 @@ class DeltaTable:
             raise DeltaProtocolError(
                 "The table requires reader feature 'columnMapping' "
                 "but this is not supported using pyarrow Datasets."
+                + _DATAFUSION_ENGINE_HINT
             )
 
         if (
@@ -1371,6 +1389,7 @@ class DeltaTable:
             raise DeltaProtocolError(
                 "The table requires reader feature 'deletionVectors' "
                 "but this is not supported using pyarrow Datasets."
+                + _DATAFUSION_ENGINE_HINT
             )
 
         import pyarrow
@@ -1522,6 +1541,7 @@ class DeltaTable:
         columns: list[str] | None,
         filesystem: str | pa_fs.FileSystem | None,
         filters: str | FilterType | Expression | None,
+        keep_top_level_views: bool = True,
     ) -> "pyarrow.Table":
         if partitions is not None:
             raise ValueError(
@@ -1554,10 +1574,19 @@ class DeltaTable:
 
         reader = self._table.scan(columns=columns, predicate=predicate)
         table = pyarrow.RecordBatchReader.from_stream(reader).read_all()
-        # the engine emits arrow view types; cast back to the table's logical schema
         target = pyarrow.schema(self.schema().to_arrow())
         if columns is not None:
             target = pyarrow.schema([target.field(name) for name in columns])
+        if keep_top_level_views:
+            view_types = (pyarrow.string_view(), pyarrow.binary_view())
+            target = pyarrow.schema(
+                [
+                    logical_field.with_type(engine_field.type)
+                    if engine_field.type in view_types
+                    else logical_field
+                    for logical_field, engine_field in zip(target, table.schema)
+                ]
+            )
         return table.cast(target)
 
     def to_pandas(
@@ -1614,6 +1643,7 @@ class DeltaTable:
                     columns=columns,
                     filesystem=filesystem,
                     filters=filters,
+                    keep_top_level_views=False,
                 ).to_pandas(types_mapper=types_mapper)
             case "pyarrow":
                 _warn_pyarrow_engine("to_pandas")
@@ -1952,6 +1982,26 @@ class TableMerger:
         self._builder = builder
         self._table = table
 
+    def _all_source_columns(self, except_cols: list[str] | None) -> dict[str, str]:
+        """The assignments that set each target column from the source column with the same name.
+
+        A source column that the target does not have is left out, unless the merge evolves the
+        schema.
+        """
+        source_alias = self._builder.source_alias
+        target_alias = self._builder.target_alias
+        source_prefix = f"{source_alias}." if source_alias is not None else ""
+        target_prefix = f"{target_alias}." if target_alias is not None else ""
+
+        skip = set(except_cols or [])
+        target_columns = {field.name for field in self._table.schema.fields}
+        return {
+            f"{target_prefix}`{col.name}`": f"{source_prefix}`{col.name}`"
+            for col in self._builder.arrow_schema  # type: ignore[attr-defined]
+            if col.name not in skip
+            and (self._builder.merge_schema or col.name in target_columns)
+        }
+
     def when_matched_update(
         self, updates: dict[str, str], predicate: str | None = None
     ) -> TableMerger:
@@ -1963,7 +2013,8 @@ class TableMerger:
             in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
-            updates: a mapping of column name to update SQL expression.
+            updates: a mapping of column name to update SQL expression. A name such as `s.a` sets the
+                field `a` of the struct column `s`. The other fields of `s` keep their value.
             predicate:  SQL like predicate on when to update.
 
         Returns:
@@ -2076,21 +2127,7 @@ class TableMerger:
             2  3    6
             ```
         """
-        maybe_source_alias = self._builder.source_alias
-        maybe_target_alias = self._builder.target_alias
-
-        src_alias = (maybe_source_alias + ".") if maybe_source_alias is not None else ""
-        trgt_alias = (
-            (maybe_target_alias + ".") if maybe_target_alias is not None else ""
-        )
-
-        except_columns = except_cols or []
-
-        updates = {
-            f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
-            for col in self._builder.arrow_schema  # type: ignore[attr-defined]
-            if col.name not in except_columns
-        }
+        updates = self._all_source_columns(except_cols)
 
         self._builder.when_matched_update(updates, predicate)
         return self
@@ -2172,7 +2209,8 @@ class TableMerger:
             in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
-            updates (dict):  a mapping of column name to insert SQL expression.
+            updates (dict):  a mapping of column name to insert SQL expression. A name such as `s.a` sets the
+                field `a` of the struct column `s`. The other fields of `s` are null.
             predicate (str | None, Optional): SQL like predicate on when to insert.
 
         Returns:
@@ -2293,21 +2331,7 @@ class TableMerger:
             3  4    NaN
             ```
         """
-        maybe_source_alias = self._builder.source_alias
-        maybe_target_alias = self._builder.target_alias
-
-        src_alias = (maybe_source_alias + ".") if maybe_source_alias is not None else ""
-        trgt_alias = (
-            (maybe_target_alias + ".") if maybe_target_alias is not None else ""
-        )
-
-        except_columns = except_cols or []
-
-        updates = {
-            f"{trgt_alias}`{col.name}`": f"{src_alias}`{col.name}`"
-            for col in self._builder.arrow_schema  # type: ignore[attr-defined]
-            if col.name not in except_columns
-        }
+        updates = self._all_source_columns(except_cols)
 
         self._builder.when_not_matched_insert(updates, predicate)
         return self
@@ -2323,7 +2347,8 @@ class TableMerger:
             in backticks: "target.`123column`" or "target.`my column`"
 
         Args:
-            updates: a mapping of column name to update SQL expression.
+            updates: a mapping of column name to update SQL expression. A name such as `s.a` sets the
+                field `a` of the struct column `s`. The other fields of `s` keep their value.
             predicate: SQL like predicate on when to update.
 
         Returns:
