@@ -33,6 +33,7 @@ reqwest-middleware = { version = "0.5", features = ["json", "query", "form"] }
 unity-catalog-delta-client-api = "0.1.0"
 unity-catalog-delta-rest-client = "0.1.0"
 rand = "0.10"
+uuid = { workspace = true, features = ["v4"] }
 dashmap = "6"
 datafusion = { workspace = true, optional = true }
 moka = { version = "0.12", optional = true, features = ["future"] }
@@ -40,6 +41,7 @@ moka = { version = "0.12", optional = true, features = ["future"] }
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = { workspace = true }
+deltalake-test = { path = "../test" }
 httpmock = { version = "0.8.3" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
@@ -52,9 +54,13 @@ azure = ["deltalake-azure"]
 gcp = ["deltalake-gcp"]
 r2 = ["deltalake-aws"]
 datafusion = ["dep:datafusion", "deltalake-core/datafusion", "moka"]
+integration_test_unity = []
 
 [[example]]
 name = "uc_example"
 path = "examples/uc_example.rs"
 required-features = ["datafusion", "aws"]
 
+
+[lints]
+workspace = true

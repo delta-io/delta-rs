@@ -13,8 +13,6 @@
   <a href="https://github.com/delta-io/delta-rs/issues/new?template=bug_report.md">Report a bug</a>
   ·
   <a href="https://github.com/delta-io/delta-rs/issues/new?template=feature_request.md">Request a feature</a>
-  ·
-  <a href="https://github.com/delta-io/delta-rs/issues/1128">Roadmap</a>
   <br>
   <br>
   <a href="https://pypi.python.org/pypi/deltalake">
@@ -131,7 +129,6 @@ View the complete [feature table][feature-table].
 [open]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueNeutral.svg
 [semi-done]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/ApprovedChangesGrey.svg
 [done]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/ApprovedChanges.svg
-[roadmap]: https://github.com/delta-io/delta-rs/issues/1128
 [writer-rs]: https://github.com/delta-io/delta-rs/issues/851
 [onelake-rs]: https://github.com/delta-io/delta-rs/issues/1418
 [feature-table]: https://delta-io.github.io/delta-rs/feature-table/

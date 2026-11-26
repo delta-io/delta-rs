@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use delta_kernel::actions::{Metadata, Protocol};
+use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
@@ -111,7 +112,7 @@ impl IntoIterator for LogDataHandler<'_> {
 #[cfg(feature = "datafusion")]
 mod datafusion {
     use std::collections::HashSet;
-    use std::sync::{Arc, LazyLock};
+    use std::sync::Arc;
 
     use ::datafusion::common::Column;
     use ::datafusion::common::scalar::ScalarValue;
@@ -120,9 +121,9 @@ mod datafusion {
     use arrow_array::{Array, StringArray};
     use arrow_array::{ArrayRef, BooleanArray, UInt64Array};
     use arrow_schema::DataType as ArrowDataType;
+    use delta_kernel::EvaluationHandler;
     use delta_kernel::expressions::Expression;
     use delta_kernel::schema::{DataType, PrimitiveType};
-    use delta_kernel::{EvaluationHandler, ExpressionEvaluator};
     use itertools::Itertools;
 
     use super::*;
@@ -130,6 +131,8 @@ mod datafusion {
     use crate::{DeltaResult, DeltaTableError};
 
     use crate::kernel::ARROW_HANDLER;
+    use crate::kernel::scalars::create_escaped_binary_string;
+    use crate::kernel::snapshot::ceil_timestamps;
 
     impl LogDataHandler<'_> {
         fn pick_stats(&self, column: &Column, stats_field: &'static str) -> Option<ArrayRef> {
@@ -147,14 +150,21 @@ mod datafusion {
             {
                 Expression::column(["partitionValues_parsed", &column.name])
             } else {
-                Expression::column(["stats_parsed", stats_field, &column.name])
+                let physical_name = field.physical_name(self.config.column_mapping_mode());
+                Expression::column(["stats_parsed", stats_field, physical_name])
             };
+            let data_type = match (stats_field, field.data_type()) {
+                ("nullCount", DataType::Primitive(_)) => DataType::LONG,
+                // Before #4581, delta-rs writers stored wrong null counts for lists and maps.
+                ("nullCount", _) => return None,
+                (_, data_type) => data_type.clone(),
+            };
+            // The materialized batches are the flattened file-level rows, not the nested log
+            // schema, so derive the evaluator's input schema from the batch itself.
+            let batch_schema = self.data.first()?.schema();
+            let input_schema = Arc::new(batch_schema.as_ref().try_into_kernel().ok()?);
             let evaluator = ARROW_HANDLER
-                .new_expression_evaluator(
-                    crate::kernel::models::fields::log_schema_ref().clone(),
-                    expression.into(),
-                    field.data_type().clone(),
-                )
+                .new_expression_evaluator(input_schema, expression.into(), data_type)
                 .ok()?;
 
             let results: Vec<_> = self
@@ -194,9 +204,13 @@ mod datafusion {
                 return None;
             }
             let expression = Expression::column(["partitionValues_parsed", &column.name]);
+            // The materialized batches are the flattened file-level rows, not the nested log
+            // schema, so derive the evaluator's input schema from the batch itself.
+            let batch_schema = self.data.first()?.schema();
+            let input_schema = Arc::new(batch_schema.as_ref().try_into_kernel().ok()?);
             let evaluator = ARROW_HANDLER
                 .new_expression_evaluator(
-                    crate::kernel::models::fields::log_schema_ref().clone(),
+                    input_schema,
                     expression.into(),
                     field.data_type().clone(),
                 )
@@ -240,25 +254,21 @@ mod datafusion {
             // This means the stored bytes are the UTF-8 encoding of that escape string,
             // NOT the original raw bytes.  We must apply the same encoding to the predicate
             // scalars before comparing so that equality holds.
-            fn encode_binary_bytes(bytes: &[u8]) -> Vec<u8> {
-                bytes
-                    .iter()
-                    .flat_map(|&b| format!("\\u{b:04X}").into_bytes())
-                    .collect()
-            }
-
+            //
             // Unwrap the dictionary wrapper that `_arrow_schema` adds to binary
             // partition columns.
             fn unwrap_binary_scalar(scalar: &ScalarValue) -> Option<Vec<u8>> {
                 match scalar {
                     ScalarValue::Binary(Some(v)) | ScalarValue::LargeBinary(Some(v)) => {
-                        Some(encode_binary_bytes(v))
+                        Some(create_escaped_binary_string(v).into_bytes())
                     }
                     ScalarValue::Dictionary(_, inner) => unwrap_binary_scalar(inner),
                     _ => None,
                 }
             }
 
+            let encoded_values: Vec<Vec<u8>> =
+                values.iter().filter_map(unwrap_binary_scalar).collect();
             let mut contains = Vec::with_capacity(binary_arr.len());
             for i in 0..binary_arr.len() {
                 if binary_arr.is_null(i) {
@@ -266,12 +276,7 @@ mod datafusion {
                     contains.push(true);
                 } else {
                     let pv: &[u8] = binary_arr.value(i);
-                    contains.push(
-                        values
-                            .iter()
-                            .filter_map(unwrap_binary_scalar)
-                            .any(|encoded| encoded.as_slice() == pv),
-                    );
+                    contains.push(encoded_values.iter().any(|encoded| encoded == pv));
                 }
             }
             Some(BooleanArray::from(contains))
@@ -288,7 +293,16 @@ mod datafusion {
         /// return the maximum values for the named column, if known.
         /// Note: the returned array must contain `num_containers()` rows.
         fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-            self.pick_stats(column, "maxValues")
+            let max = self.pick_stats(column, "maxValues")?;
+            if self
+                .config
+                .metadata()
+                .partition_columns()
+                .contains(&column.name)
+            {
+                return Some(max);
+            }
+            Some(ceil_timestamps(max))
         }
 
         /// return the number of containers (e.g. row groups) being
@@ -314,37 +328,35 @@ mod datafusion {
             let partition_values = self.pick_stats(column, "__dummy__")?;
             let row_counts = self.row_counts()?;
             let row_counts = row_counts.as_any().downcast_ref::<UInt64Array>()?;
-            let mut null_counts = Vec::with_capacity(partition_values.len());
-            for i in 0..partition_values.len() {
-                let null_count = if partition_values.is_null(i) {
-                    row_counts.value(i)
+            let null_counts = row_counts.iter().enumerate().map(|(i, rows)| {
+                if partition_values.is_null(i) {
+                    rows
                 } else {
-                    0
-                };
-                null_counts.push(null_count);
-            }
-            Some(Arc::new(UInt64Array::from(null_counts)))
+                    Some(0)
+                }
+            });
+            Some(Arc::new(UInt64Array::from_iter(null_counts)))
         }
 
         /// return the number of rows in each container as an `Option<UInt64Array>`.
         ///
         /// Note: the returned array must contain `num_containers()` rows
         fn row_counts(&self) -> Option<ArrayRef> {
-            static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
-                ARROW_HANDLER
-                    .new_expression_evaluator(
-                        crate::kernel::models::fields::log_schema_ref().clone(),
-                        Expression::column(["add", "stats_parsed", "numRecords"]).into(),
-                        DataType::Primitive(PrimitiveType::Long),
-                    )
-                    .expect("Failed to create row counts evaluator")
-            });
+            let batch_schema = self.data.first()?.schema();
+            let input_schema = Arc::new(batch_schema.as_ref().try_into_kernel().ok()?);
+            let evaluator = ARROW_HANDLER
+                .new_expression_evaluator(
+                    input_schema,
+                    Expression::column(["stats_parsed", "numRecords"]).into(),
+                    DataType::LONG,
+                )
+                .ok()?;
 
             let results: Vec<_> = self
                 .data
                 .iter()
                 .map(|data| -> DeltaResult<_> {
-                    let batch = ROW_COUNTS_EVAL.evaluate_arrow(data.clone())?;
+                    let batch = evaluator.evaluate_arrow(data.clone())?;
                     Ok(arrow_cast::cast(batch.column(0), &ArrowDataType::UInt64)?)
                 })
                 .try_collect()
@@ -483,6 +495,76 @@ mod tests {
 #[cfg(all(test, feature = "datafusion"))]
 mod df_tests {
     use futures::TryStreamExt;
+
+    use crate::delta_datafusion::files_matching_predicate;
+    use ::datafusion::logical_expr::{Expr, col, lit};
+    use std::path::Path;
+
+    /// Paths of the files in a test table that `predicate` does not prune.
+    async fn files_kept(table: &str, predicate: Expr) -> Vec<String> {
+        let path = std::fs::canonicalize(Path::new("../test/tests/data").join(table)).unwrap();
+        let table = crate::open_table(url::Url::from_directory_path(path).unwrap())
+            .await
+            .unwrap();
+        let log_data = table.snapshot().unwrap().log_data();
+        files_matching_predicate(log_data, &[predicate])
+            .unwrap()
+            .map(|add| add.path)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn prune_column_mapped_column() {
+        let files = files_kept(
+            "table_with_column_mapping",
+            col("Super Name").eq(lit("Timothy Lamb")),
+        )
+        .await;
+        assert_eq!(
+            files,
+            ["8v/part-00001-69b4a452-aeac-4ffa-bf5c-a0c2833d05eb.c000.zstd.parquet"]
+        );
+    }
+
+    #[tokio::test]
+    async fn prune_is_null_on_int_column() {
+        let files = files_kept("delta-0.8.0", col("value").is_null()).await;
+        assert!(files.is_empty());
+    }
+
+    #[tokio::test]
+    async fn prune_is_null_on_partition_column() {
+        let files = files_kept("delta-2.2.0-partitioned-types", col("c1").is_null()).await;
+        assert!(files.is_empty());
+    }
+
+    #[tokio::test]
+    async fn keep_null_partition_without_stats() {
+        let files = files_kept("delta-0.8.0-null-partition", col("k").is_null()).await;
+        assert_eq!(
+            files,
+            [
+                "k=__HIVE_DEFAULT_PARTITION__/part-00001-8474ac85-360b-4f58-b3ea-23990c71b932.c000.snappy.parquet"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn keep_list_with_null_element() {
+        // One row `arr = [NULL]`, with the null count an older delta-rs writer gave it.
+        let table = tempfile::tempdir().unwrap();
+        std::fs::create_dir(table.path().join("_delta_log")).unwrap();
+        std::fs::write(
+            table.path().join("_delta_log/00000000000000000000.json"),
+            r#"{"protocol":{"minReaderVersion":1,"minWriterVersion":2}}
+{"metaData":{"id":"x","format":{"provider":"parquet","options":{}},"schemaString":"{\"type\":\"struct\",\"fields\":[{\"name\":\"arr\",\"type\":{\"type\":\"array\",\"elementType\":\"integer\",\"containsNull\":true},\"nullable\":true,\"metadata\":{}}]}","partitionColumns":[],"configuration":{},"createdTime":0}}
+{"add":{"path":"a.parquet","partitionValues":{},"size":1,"modificationTime":0,"dataChange":true,"stats":"{\"numRecords\":1,\"nullCount\":{\"arr\":1}}"}}
+"#,
+        )
+        .unwrap();
+        let files = files_kept(table.path().to_str().unwrap(), col("arr").is_not_null()).await;
+        assert_eq!(files, ["a.parquet"]);
+    }
 
     #[tokio::test]
     async fn read_delta_1_2_1_struct_stats_table() {

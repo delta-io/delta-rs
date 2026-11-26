@@ -39,10 +39,10 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use delta_kernel::schema::DataType as KernelDataType;
 use delta_kernel::table_features::TableFeature;
 use delta_kernel::{EvaluationHandler, ExpressionRef};
+use deltalake_kernel_executor::query::scan::expr_adapter::DeltaPhysicalExprAdapterFactory;
 use futures::TryStreamExt as _;
 use futures::stream::{Stream, StreamExt};
 
-use super::expr_adapter::DeltaPhysicalExprAdapterFactory;
 use super::plan::KernelScanPlan;
 use super::runtime_filter::RuntimeScanFilePruner;
 use crate::delta_datafusion::file_id::file_id_field;
@@ -1098,7 +1098,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_scan_nested() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/nested_types/delta");
+        let table = open_fs_path("../test/tests/data/nested_types");
         let provider = table.table_provider().await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1123,7 +1123,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_scan_with_file_id() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().with_file_column("file_id").await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1163,7 +1163,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_scan_with_file_id_projection() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().with_file_column("file_id").await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1228,8 +1228,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_gather_filters_for_pushdown_adapts_override_schema_predicates() -> TestResult {
-        let mut table =
-            open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let mut table = open_fs_path("../test/tests/data/multi_partitioned");
         table.load().await?;
 
         let provider = crate::delta_datafusion::table_provider::next::DeltaScan::new(
@@ -1272,7 +1271,7 @@ mod tests {
     #[tokio::test]
     async fn test_gather_filters_for_pushdown_rejects_delta_materialized_dynamic_filters()
     -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().await?;
         let session = Arc::new(create_session().into_inner());
         let scan = provider.scan(&session.state(), None, &[], None).await?;
@@ -1309,7 +1308,7 @@ mod tests {
     #[tokio::test]
     async fn test_gather_filters_for_pushdown_rejects_mixed_delta_materialized_dynamic_filters()
     -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().await?;
         let session = Arc::new(create_session().into_inner());
         let scan = provider.scan(&session.state(), None, &[], None).await?;
@@ -1493,7 +1492,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_scan_with_file_id_groupby() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().with_file_column("file_id").await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1518,7 +1517,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_scan_without_file_id() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().await?;
         let session = create_session().into_inner();
 
@@ -1544,7 +1543,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_scan_with_file_id_all_data() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().with_file_column("file_id").await?;
         let session = create_session().into_inner();
 
@@ -1610,7 +1609,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_scan_with_file_id_extract_filename() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().with_file_column("file_id").await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1646,7 +1645,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_scan_with_file_id_multiple_files() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().with_file_column("file_id").await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1707,7 +1706,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_scan_with_file_id_data_validation() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let table = open_fs_path("../test/tests/data/multi_partitioned");
         let provider = table.table_provider().with_file_column("file_id").await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -1742,8 +1741,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_statistics() -> TestResult {
-        let mut table =
-            open_fs_path("../../dat/v0.0.3/reader_tests/generated/all_primitive_types/delta");
+        let mut table = open_fs_path("../test/tests/data/all_primitive_types");
         table.load().await?;
         let provider = table.table_provider().await?;
         let session = Arc::new(create_session().into_inner());
@@ -1794,8 +1792,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_statistics_column_mapping() -> TestResult {
-        let mut table =
-            open_fs_path("../../dat/v0.0.3/reader_tests/generated/column_mapping/delta");
+        let mut table = open_fs_path("../test/tests/data/column_mapping");
         table.load().await?;
         let provider = table.table_provider().await?;
         let session = Arc::new(create_session().into_inner());
@@ -1826,8 +1823,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_statistics_partitioned() -> TestResult {
-        let mut table =
-            open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let mut table = open_fs_path("../test/tests/data/multi_partitioned");
         table.load().await?;
         let provider = table.table_provider().await?;
         let session = Arc::new(create_session().into_inner());
@@ -1867,7 +1863,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_scan_with_deletion_vectors() -> TestResult {
-        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/deletion_vectors/delta");
+        let table = open_fs_path("../test/tests/data/deletion_vectors");
         let provider = table.table_provider().await?;
         let session = Arc::new(create_session().into_inner());
 
@@ -2197,7 +2193,7 @@ mod tests {
     }
 
     // DV test helpers
-    const DV_TABLE_PATH: &str = "../../dat/v0.0.3/reader_tests/generated/deletion_vectors/delta";
+    const DV_TABLE_PATH: &str = "../test/tests/data/deletion_vectors";
 
     fn physical_dv_fixture() -> TestResult<tempfile::TempDir> {
         use delta_kernel::actions::deletion_vector_writer::{

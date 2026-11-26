@@ -84,8 +84,7 @@ markers = [
     "pyarrow: marks tests that require pyarrow",
     "no_pyarrow: marks tests that test deltalake functionality without pyarrow",
     "opentelemetry: marks tests that require opentelemetry",
-    "unitycatalog_databricks: marks tests that require unitycatalog_databricks",
-    "unitycatalog_oss: marks tests that require unitycatalog_oss",
+    "unitycatalog: marks tests that require uc-server (dependency group unitycatalog)",
     "pyspark: marks tests that require pyspark",
     "datafusion: marks tests that require datafusion"
 ]
@@ -97,6 +96,9 @@ source = ["deltalake"]
 [dependency-groups]
 dev = [
     "arro3-io",
+    "numpy",
+    # NumPy 2.3 is the first release with Windows ARM64 wheels.
+    "numpy>=2.3; sys_platform == 'win32' and platform_machine == 'ARM64'",
     "pytest",
     "pytest-benchmark",
     "pytest-cov",
@@ -106,11 +108,15 @@ dev = [
     "mypy==1.10.1",
     "ruff>=0.11.2,<0.11.12",
     "types-deprecated>=1.2.15.20250304",
+    "tzdata; sys_platform == 'win32'",
     "testcontainers[minio]>=4.13.0",
 ]
 opentelemetry = ["opentelemetry-sdk>=1.20.0", "opentelemetry-api>=1.20.0"]
 polars = ["polars==1.44.2"]
 lakefs = ["lakefs==0.8.0"]
+# uc-server, the Unity Catalog server of the tests. Not in the default groups:
+# it has no wheel for Windows on ARM64.
+unitycatalog = ["unitycatalog-rs-server==0.0.2"]
 pyspark = [
     "pyspark==4.2.0",
     "delta-spark",
@@ -134,5 +140,8 @@ bench = [
 ]
 
 [tool.uv]
-# Re-enable a Python DataFusion dependency group once DataFusion 55 wheels are published.
+# uv 0.13.4 drops the distrusted eMudhra emSign CA certificates.
+# https://discuss.python.org/t/information-for-python-users-regarding-emudhra-emsign-ca-certificate-security-incident/109576
+required-version = ">=0.13.4"
+# Re-enable a Python DataFusion dependency group once DataFusion 56 wheels are published.
 default-groups = ["dev", "opentelemetry", "polars", "lakefs", "other"]

@@ -2,6 +2,8 @@ mod factories;
 /// In-memory log store that isolates every operation, for scope tests.
 pub mod isolating_store;
 
+#[cfg(test)]
+pub(crate) mod catalog_managed;
 #[cfg(all(test, feature = "datafusion"))]
 pub(crate) mod datafusion;
 #[cfg(test)]
@@ -114,6 +116,7 @@ pub(crate) async fn file_paths_from(
 }
 
 /// Reference tables from the test data folder
+#[non_exhaustive]
 pub enum TestTables {
     /// The canonical `simple_table` fixture.
     Simple,

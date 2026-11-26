@@ -1,6 +1,6 @@
 """Write-path tests against an existing column-mapped Delta table.
 
-delta-rs cannot create/enable column mapping yet, so these round-trips run against the
+Most of these round-trips run against the
 Spark-written, name-mode, string-partitioned fixture copied into a temp dir. They cover
 append/overwrite/delete/merge under the logical schema (the data is stored under physical
 ``col-<uuid>`` names on disk) and assert that schema evolution is rejected.
@@ -12,7 +12,7 @@ import pytest
 from arro3.core import Array, DataType, Table
 from arro3.core import Field as ArrowField
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import DeltaTable, TableFeatures, write_deltalake
 from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
 
@@ -182,3 +182,124 @@ def test_column_mapping_merge_schema_evolution_rejected(tmp_path: pathlib.Path):
             .when_not_matched_insert_all()
             .execute()
         )
+
+
+def _new_column_mapping_table(tmp_path: pathlib.Path, configuration=None) -> str:
+    table_uri = str(tmp_path / "new_column_mapping")
+    write_deltalake(
+        table_uri,
+        _cm_data(["BME", "BMS"], ["Timothy Lamb", "Nathan Bennett"]),
+        configuration={"delta.columnMapping.mode": "name", **(configuration or {})},
+    )
+    return table_uri
+
+
+def _assert_column_mapping_feature(table_uri: str) -> None:
+    protocol = DeltaTable(table_uri).protocol()
+    assert (protocol.min_reader_version, protocol.min_writer_version) == (3, 7)
+    assert protocol.reader_features is not None
+    assert protocol.writer_features is not None
+    assert "columnMapping" in protocol.reader_features
+    assert "columnMapping" in protocol.writer_features
+
+
+@pytest.mark.parametrize(
+    "enable_deletion_vectors",
+    [
+        lambda dt: dt.alter.set_table_properties(
+            {"delta.enableDeletionVectors": "true"}
+        ),
+        lambda dt: dt.alter.add_feature(
+            TableFeatures.DeletionVectors, allow_protocol_versions_increase=True
+        ),
+    ],
+    ids=["set_table_properties", "add_feature"],
+)
+def test_column_mapping_kept_when_upgrading_to_table_features(
+    tmp_path: pathlib.Path, enable_deletion_vectors
+):
+    table_uri = _new_column_mapping_table(tmp_path)
+
+    enable_deletion_vectors(DeltaTable(table_uri))
+    write_deltalake(table_uri, _cm_data(["BMT"], ["New Customer"]), mode="append")
+
+    assert _cm_read(table_uri, '"Super Name"') == [
+        {"Company Very Short": "BMS", "Super Name": "Nathan Bennett"},
+        {"Company Very Short": "BMT", "Super Name": "New Customer"},
+        {"Company Very Short": "BME", "Super Name": "Timothy Lamb"},
+    ]
+    _assert_column_mapping_feature(table_uri)
+
+
+def test_create_column_mapping_table_with_deletion_vectors(tmp_path: pathlib.Path):
+    table_uri = _new_column_mapping_table(
+        tmp_path, {"delta.enableDeletionVectors": "true"}
+    )
+
+    assert _cm_read(table_uri, '"Super Name"') == [
+        {"Company Very Short": "BMS", "Super Name": "Nathan Bennett"},
+        {"Company Very Short": "BME", "Super Name": "Timothy Lamb"},
+    ]
+    _assert_column_mapping_feature(table_uri)
+    assert "deletionVectors" in DeltaTable(table_uri).protocol().reader_features
+
+
+def test_column_mapping_protocol_unchanged_without_table_features(
+    tmp_path: pathlib.Path,
+):
+    table_uri = _new_column_mapping_table(tmp_path)
+
+    DeltaTable(table_uri).alter.set_table_properties(
+        {
+            "delta.enableChangeDataFeed": "true",
+            "delta.logRetentionDuration": "interval 2 days",
+        }
+    )
+
+    protocol = DeltaTable(table_uri).protocol()
+    assert (
+        protocol.min_reader_version,
+        protocol.min_writer_version,
+        protocol.reader_features,
+        protocol.writer_features,
+    ) == (2, 5, None, None)
+
+
+def test_enable_column_mapping_on_existing_table(tmp_path: pathlib.Path):
+    """Enable name-mode column mapping on a table with data. The rows written before the change
+    stay readable, and an append adds to them."""
+
+    def data(ids: list[int], names: list[str]) -> Table:
+        return Table(
+            {
+                "id": Array(
+                    ids, ArrowField("id", type=DataType.int64(), nullable=True)
+                ),
+                "name": Array(
+                    names, ArrowField("name", type=DataType.string(), nullable=True)
+                ),
+            }
+        )
+
+    table_uri = str(tmp_path / "enable_column_mapping")
+    write_deltalake(table_uri, data([1, 2], ["a", "b"]))
+
+    DeltaTable(table_uri).alter.set_table_properties(
+        {"delta.columnMapping.mode": "name"}
+    )
+    write_deltalake(table_uri, data([3], ["c"]), mode="append")
+
+    result = (
+        QueryBuilder()
+        .register("tbl", DeltaTable(table_uri))
+        .execute("select id, name from tbl order by id")
+        .read_all()
+    )
+    assert result.to_struct_array().to_pylist() == [
+        {"id": 1, "name": "a"},
+        {"id": 2, "name": "b"},
+        {"id": 3, "name": "c"},
+    ]
+    configuration = DeltaTable(table_uri).metadata().configuration
+    assert configuration["delta.columnMapping.mode"] == "name"
+    assert configuration["delta.columnMapping.maxColumnId"] == "2"

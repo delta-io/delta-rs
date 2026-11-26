@@ -10,6 +10,7 @@ pub type DataCatalogResult<T> = Result<T, DataCatalogError>;
 
 /// Error enum that represents a CatalogError.
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum DataCatalogError {
     /// A generic error qualified in the message
     #[error("Error in {catalog} catalog: {source}")]

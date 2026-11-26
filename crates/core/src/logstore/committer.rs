@@ -20,6 +20,7 @@ use crate::kernel::transaction::TransactionError;
 
 /// How a caller must prepare the payload it hands to [`Committer::commit`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PayloadKind {
     /// The committer accepts the serialized commit as bytes and writes them atomically.
     Bytes,
@@ -29,6 +30,7 @@ pub enum PayloadKind {
 
 /// Outcome of one commit attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CommitResponse {
     /// The version was ratified.
     Committed,
@@ -65,6 +67,7 @@ pub trait Committer: Send + Sync {
 
 /// How a [`FileSystemCommitter`] writes the commit file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CommitStrategy {
     /// Put the commit bytes with a create-only (put-if-absent) request.
     ConditionalPut,

@@ -23,6 +23,8 @@ use arrow::datatypes::{DataType as ArrowDataType, SchemaRef};
 use delta_kernel::actions::{Remove, Sidecar};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
+use delta_kernel::history_manager::error::{LogHistoryError, NearestTimestamp};
+use delta_kernel::history_manager::{HistoryCommitType, get_earliest_commit, latest_version_as_of};
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::derive_macro_utils::ToDataType;
@@ -243,7 +245,7 @@ impl Snapshot {
             Ok(snapshot) => snapshot,
             Err(e) => {
                 // TODO: we should have more handling-friendly errors upstream in kernel.
-                if e.to_string().contains("No files in log segment") {
+                if matches!(e, delta_kernel::KernelError::EmptyLog) {
                     return Err(DeltaTableError::NotATable(e.to_string()));
                 } else {
                     return Err(e.into());
@@ -273,7 +275,21 @@ impl Snapshot {
         // ratified log tail; filesystem-managed stores return `None` here.
         let catalog_log_tail = log_store.catalog_log_tail().await?;
 
-        Self::try_new_with_engine_and_catalog(engine, table_root, version, catalog_log_tail).await
+        let snapshot =
+            Self::try_new_with_engine_and_catalog(engine, table_root, version, catalog_log_tail)
+                .await?;
+
+        if !log_store.is_catalog_managed() && snapshot.table_configuration().is_catalog_managed() {
+            return Err(DeltaTableError::Generic(
+                "table requires catalog-managed (coordinated) commits but was opened without a \
+                 catalog coordinator; open it through its catalog with catalog-managed commits \
+                 enabled (for Unity Catalog: `uc://catalog.schema.table` with \
+                 `catalog_managed=true`)"
+                    .to_string(),
+            ));
+        }
+
+        Ok(snapshot)
     }
 
     /// Create a [`ScanBuilder`] borrowing this snapshot to configure a read of the table.
@@ -326,20 +342,19 @@ impl Snapshot {
             inner: snapshot,
             materialized_files: None,
         });
-        if snapshot.version() as u64 == current_version {
-            // `target_version` was `None`, but there were no new commits.
-            // We may still need to pick up a checkpoint written for the current version.
-            self.refresh_same_version_checkpoint_if_needed(engine, current_version)
-                .await
-        } else {
-            match self.materialized_files() {
-                Some(materialized_files) => {
-                    snapshot
-                        .materialize_files_with_engine(engine, Some(materialized_files))
-                        .await
-                }
-                None => Ok(snapshot),
+        // The kernel adopts late checkpoints, so compare checkpoints too.
+        if snapshot.version() == current_version
+            && snapshot.checkpoint_version() == self.checkpoint_version()
+        {
+            return Ok(self);
+        }
+        match self.materialized_files() {
+            Some(materialized_files) => {
+                snapshot
+                    .materialize_files_with_engine(engine, Some(materialized_files))
+                    .await
             }
+            None => Ok(snapshot),
         }
     }
 
@@ -1042,7 +1057,7 @@ impl Snapshot {
         {
             Ok(data) => data,
             Err(err) => {
-                return Box::pin(once(ready(Err(DeltaTableError::KernelError(err)))));
+                return Box::pin(once(ready(Err(err.into()))));
             }
         };
 
@@ -1092,6 +1107,19 @@ impl Snapshot {
         Ok(None)
     }
 
+    pub(crate) async fn in_commit_timestamp(
+        &self,
+        log_store: &dyn LogStore,
+    ) -> DeltaResult<Option<i64>> {
+        let engine = log_store.engine();
+        let inner = self.inner.clone();
+        Ok(
+            spawn_blocking_with_span(move || inner.get_in_commit_timestamp(engine.as_ref()))
+                .await
+                .map_err(|e| DeltaTableError::GenericError { source: e.into() })??,
+        )
+    }
+
     /// Fetch the [domainMetadata] for a specific domain in this snapshot.
     ///
     /// This returns the latest configuration for the domain, or None if the domain does not exist.
@@ -1110,6 +1138,50 @@ impl Snapshot {
                 .await
                 .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
         Ok(metadata)
+    }
+
+    /// The latest version committed at or before `timestamp` (milliseconds since the Unix epoch).
+    ///
+    /// Commits made while in-commit timestamps are enabled are compared by their
+    /// `inCommitTimestamp`, earlier commits by the modification time of their log file. A
+    /// timestamp before the earliest available commit resolves to that commit.
+    pub(crate) async fn version_at_timestamp(
+        &self,
+        log_store: &dyn LogStore,
+        timestamp: i64,
+    ) -> DeltaResult<Version> {
+        let engine = log_store.engine();
+        let inner = self.inner.clone();
+        let version = spawn_blocking_with_span(move || {
+            match latest_version_as_of(
+                &inner,
+                engine.as_ref(),
+                timestamp,
+                HistoryCommitType::Published,
+            ) {
+                Ok(commit) => Ok(commit.version),
+                Err(delta_kernel::KernelError::LogHistory(err))
+                    if matches!(
+                        *err,
+                        LogHistoryError::TimestampOutOfRange {
+                            nearest_timestamp: NearestTimestamp::Earliest(_),
+                            ..
+                        }
+                    ) =>
+                {
+                    get_earliest_commit(
+                        engine.as_ref(),
+                        &inner.log_segment().log_root,
+                        None,
+                        HistoryCommitType::Published,
+                    )
+                }
+                Err(err) => Err(err),
+            }
+        })
+        .await
+        .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
+        Ok(version)
     }
 }
 
@@ -1157,6 +1229,26 @@ impl MaterializedFilesSeed {
             SharedRecordBatchIter::new(self.batches),
             self.existing_predicate,
         )
+    }
+
+    /// Keep only the files at these (batch, row) positions. At the seed's version each kept
+    /// file replays from its own row, as in a full replay.
+    #[cfg(feature = "datafusion")]
+    fn retain_rows(self, rows: &[(usize, usize)]) -> DeltaResult<Self> {
+        let mut keep_by_batch = std::collections::BTreeMap::new();
+        for &(batch, row) in rows {
+            keep_by_batch
+                .entry(batch)
+                .or_insert_with(|| vec![false; self.batches[batch].num_rows()])[row] = true;
+        }
+        let batches = keep_by_batch
+            .into_iter()
+            .map(|(batch, keep)| filter_record_batch(&self.batches[batch], &keep.into()))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            batches: batches.into(),
+            ..self
+        })
     }
 }
 
@@ -1254,7 +1346,7 @@ async fn read_last_checkpoint_version(
             .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
         match storage.read_files(vec![(checkpoint_path, None)])?.next() {
             Some(Ok(data)) => Ok(parse_last_checkpoint_hint(&data).map(|hint| hint.version)),
-            Some(Err(delta_kernel::Error::FileNotFound(_))) => Ok(None),
+            Some(Err(delta_kernel::KernelError::FileNotFound(_))) => Ok(None),
             Some(Err(err)) => Err(err.into()),
             None => {
                 tracing::warn!("empty _last_checkpoint file");
@@ -1512,6 +1604,7 @@ mod tests {
         test_utils::{
             TestResult, TestTables, assert_batches_sorted_eq, make_test_add,
             object_store::{
+                RecordedObjectStoreOperation,
                 drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
             },
         },
@@ -3325,7 +3418,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_snapshot_update_latest_same_version_without_changes_reuses_arc() -> TestResult {
-        let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
+        let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
+        let (log_store, mut operations) = recording_log_store(base);
         let snapshot = Arc::new(Snapshot::try_new(log_store.as_ref(), None).await?)
             .ensure_materialized_files(log_store.as_ref())
             .await?;
@@ -3334,8 +3428,10 @@ mod tests {
             .materialized_files()
             .cloned()
             .expect("expected materialized files");
+        drain_recorded_ops(&mut operations).await;
 
         let updated = snapshot.update(log_store.engine(), None).await?;
+        let update_ops = drain_recorded_ops(&mut operations).await;
 
         assert!(Arc::ptr_eq(&updated, &prior_snapshot));
         assert!(Arc::ptr_eq(
@@ -3344,6 +3440,13 @@ mod tests {
                 .expect("expected materialized files"),
             &prior_materialized
         ));
+        assert!(
+            matches!(
+                update_ops.as_slice(),
+                [RecordedObjectStoreOperation::ListWithOffset(_)]
+            ),
+            "expected a single log listing, got {update_ops:?}"
+        );
         Ok(())
     }
 

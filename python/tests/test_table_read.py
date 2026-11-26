@@ -643,6 +643,25 @@ def test_get_add_actions_on_empty_table(tmp_path: Path):
     assert dt.get_add_actions(flatten=True).num_rows == 0
 
 
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("directory", ["with space", "中文"])
+@pytest.mark.parametrize("predicate", [None, "p = 'a/b'"])
+def test_file_uris_local_directory(
+    tmp_path: Path, directory: str, predicate: str | None
+):
+    import pyarrow as pa
+
+    table_path = tmp_path / directory
+    data = pa.table({"p": ["a/b"], "value": [1]})
+    write_deltalake(table_path, data, partition_by=["p"])
+    table = DeltaTable(table_path)
+
+    files = table.file_uris(file_pruning_predicate=predicate)
+    expected = [path.as_posix() for path in table_path.rglob("*.parquet")]
+    assert len(expected) == 1
+    assert files == expected
+
+
 def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
     table_path = Path(url2pathname(urlparse(dt.table_uri).path))
     absolute_paths = [(table_path / path).as_posix() for path in expected_paths]

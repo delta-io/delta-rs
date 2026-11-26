@@ -17,7 +17,6 @@ pub(crate) const STORE_NAME: &str = "MountObjectStore";
 
 /// Error raised by storage lock client
 #[derive(thiserror::Error, Debug)]
-#[allow(dead_code)]
 pub enum LocalFileSystemError {
     /// Object exists already at path
     #[error("Object exists already at path: {} ({:?})", path, source)]
@@ -37,24 +36,6 @@ pub enum LocalFileSystemError {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
-    /// Invalid argument sent to OS call
-    #[error("Invalid argument in OS call for path: {} ({:?})", path, source)]
-    InvalidArgument {
-        /// Provided path
-        path: String,
-        /// Originating error
-        source: errno::Errno,
-    },
-
-    /// Null error for path for FFI
-    #[error("Null error in FFI for path: {} ({:?})", path, source)]
-    NullError {
-        /// Given path
-        path: String,
-        /// Originating error
-        source: std::ffi::NulError,
-    },
-
     /// Generic catch-all error for this store
     #[error("Generic error in store: {} ({:?})", store, source)]
     Generic {
@@ -62,15 +43,6 @@ pub enum LocalFileSystemError {
         store: &'static str,
         /// Originating error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-
-    /// Errors from the Tokio runtime
-    #[error("Error executing async task for path: {} ({:?})", path, source)]
-    Tokio {
-        /// Path
-        path: String,
-        /// Originating error
-        source: tokio::task::JoinError,
     },
 }
 
@@ -83,18 +55,6 @@ impl From<LocalFileSystemError> for ObjectStoreError {
             LocalFileSystemError::NotFound { path, source } => {
                 ObjectStoreError::NotFound { path, source }
             }
-            LocalFileSystemError::InvalidArgument { source, .. } => ObjectStoreError::Generic {
-                store: STORE_NAME,
-                source: Box::new(source),
-            },
-            LocalFileSystemError::NullError { source, .. } => ObjectStoreError::Generic {
-                store: STORE_NAME,
-                source: Box::new(source),
-            },
-            LocalFileSystemError::Tokio { source, .. } => ObjectStoreError::Generic {
-                store: STORE_NAME,
-                source: Box::new(source),
-            },
             LocalFileSystemError::Generic { store, source } => {
                 ObjectStoreError::Generic { store, source }
             }
@@ -115,13 +75,6 @@ impl MountFileStorageBackend {
         Ok(Self {
             inner: Arc::new(LocalFileSystem::new()),
         })
-    }
-
-    /// Return an absolute filesystem path of the given location
-    fn path_to_filesystem(&self, location: &ObjectStorePath) -> String {
-        let mut url = url::Url::parse("file:///").unwrap();
-        url.set_path(location.as_ref());
-        url.to_file_path().unwrap().to_str().unwrap().to_owned()
     }
 }
 
@@ -208,9 +161,9 @@ impl ObjectStore for MountFileStorageBackend {
         match options.target_mode {
             RenameTargetMode::Overwrite => self.inner.rename_opts(from, to, options).await,
             RenameTargetMode::Create => {
-                let path_from = self.path_to_filesystem(from);
-                let path_to = self.path_to_filesystem(to);
-                Ok(regular_rename(path_from.as_ref(), path_to.as_ref()).await?)
+                let path_from = self.inner.path_to_filesystem(from)?;
+                let path_to = self.inner.path_to_filesystem(to)?;
+                Ok(regular_rename(path_from.to_str().unwrap(), path_to.to_str().unwrap()).await?)
             }
         }
     }
@@ -284,12 +237,8 @@ mod tests {
         // successful move A to C
         assert!(a.exists());
         assert!(!c.exists());
-        match regular_rename(a.to_str().unwrap(), c.to_str().unwrap()).await {
-            Err(LocalFileSystemError::InvalidArgument { source, .. }) => panic!(
-                "expected success, got: {source:?}. Note: atomically renaming Windows files from WSL2 is not supported."
-            ),
-            Err(e) => panic!("expected success, got: {e:?}"),
-            _ => {}
+        if let Err(e) = regular_rename(a.to_str().unwrap(), c.to_str().unwrap()).await {
+            panic!("expected success, got: {e:?}");
         }
         assert!(!a.exists());
         assert!(c.exists());
@@ -304,6 +253,29 @@ mod tests {
         }
         assert!(b.exists());
         assert_eq!(std::fs::read_to_string(c).unwrap(), "a");
+    }
+
+    #[tokio::test]
+    async fn test_rename_preserves_percent_encoded_names() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let from = create_file(tmp_dir.path(), "from%20");
+        let to = tmp_dir.path().join("to%2F");
+        let store = MountFileStorageBackend::try_new().unwrap();
+
+        store
+            .rename_opts(
+                &ObjectStorePath::from_absolute_path(&from).unwrap(),
+                &ObjectStorePath::from_absolute_path(&to).unwrap(),
+                RenameOptions {
+                    target_mode: RenameTargetMode::Create,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(!from.exists());
+        assert_eq!(std::fs::read_to_string(to).unwrap(), "from%20");
     }
 
     fn create_file(dir: &Path, name: &str) -> PathBuf {

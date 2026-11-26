@@ -1,6 +1,9 @@
-import pytest
+import pathlib
 
-from deltalake import DeltaTable
+import pytest
+from arro3.core import Array, DataType, Field, Table
+
+from deltalake import DeltaTable, write_deltalake
 from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
 
@@ -61,3 +64,53 @@ def test_query_builder_session_config_still_queries_tables():
         .read_all()
     )
     assert result["id"].to_pylist() == [5, 7, 9]
+
+
+def _write_partitioned_table(path: pathlib.Path) -> None:
+    write_deltalake(
+        path,
+        Table(
+            {
+                "id": Array(
+                    [0, 1, 2, 3], type=Field("id", DataType.int64(), nullable=True)
+                ),
+                "x": Array(
+                    [0, 1, 2, None], type=Field("x", DataType.int64(), nullable=True)
+                ),
+                "p": Array(
+                    [0, 1, None, 2], type=Field("p", DataType.int32(), nullable=True)
+                ),
+                "q": Array(
+                    ["a", "b", None, "c"],
+                    type=Field("q", DataType.string(), nullable=True),
+                ),
+            }
+        ),
+        partition_by=["p", "q"],
+    )
+
+
+@pytest.mark.parametrize(
+    ("where", "expected"),
+    [
+        ("CASE WHEN p = 1 THEN true ELSE false END", [1]),
+        ("NOT coalesce(q > 'a', false)", [0, 2]),
+        ("p = 1 AND x = NULL", []),
+        ("x NOT IN (1, NULL)", []),
+        ("p = 1", [1]),
+        ("p IS NULL", [2]),
+    ],
+)
+def test_query_builder_partition_filter_follows_sql_semantics(
+    tmp_path: pathlib.Path, where: str, expected: list[int]
+):
+    _write_partitioned_table(tmp_path)
+
+    result = (
+        QueryBuilder()
+        .register("tbl", DeltaTable(tmp_path))
+        .execute(f"select id from tbl where {where}")
+        .read_all()
+    )
+
+    assert sorted(result["id"].to_pylist()) == expected

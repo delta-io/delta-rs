@@ -21,11 +21,11 @@ use crate::table::config::TablePropertiesExt as _;
 use super::state::AddContainer;
 #[cfg(feature = "datafusion")]
 use datafusion::logical_expr::Expr;
-#[cfg(feature = "datafusion")]
 use itertools::Either;
 
 /// Exceptions raised during commit conflict resolution
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum CommitConflictError {
     /// This exception occurs when a concurrent operation adds files in the same partition
     /// (or anywhere in an un-partitioned table) that your operation reads. The file additions
@@ -116,6 +116,8 @@ pub(crate) struct TransactionInfo<'a> {
     read_snapshot: ConflictReadSet<'a>,
     /// Whether the transaction tainted the whole table
     read_whole_table: bool,
+    /// Files read by the transaction, if known. Otherwise derived from `read_predicates`
+    read_files: Option<&'a [Add]>,
 }
 
 impl<'a> TransactionInfo<'a> {
@@ -163,6 +165,7 @@ impl<'a> TransactionInfo<'a> {
             actions,
             read_snapshot,
             read_whole_table,
+            read_files: None,
         }
     }
 
@@ -186,7 +189,14 @@ impl<'a> TransactionInfo<'a> {
             actions,
             read_snapshot,
             read_whole_table,
+            read_files: None,
         })
+    }
+
+    /// Set the files read by the transaction
+    pub fn with_read_files(mut self, read_files: Option<&'a [Add]>) -> Self {
+        self.read_files = read_files;
+        self
     }
 
     /// Whether the transaction changed the tables metadatas
@@ -201,8 +211,10 @@ impl<'a> TransactionInfo<'a> {
     pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
         use crate::delta_datafusion::files_matching_predicate;
 
-        if let Some(predicate) = &self.read_predicates {
-            Ok(Either::Left(
+        if let Some(read_files) = self.read_files {
+            Ok(Either::Left(read_files.iter().cloned()))
+        } else if let Some(predicate) = &self.read_predicates {
+            Ok(Either::Right(Either::Left(
                 files_matching_predicate(
                     self.read_snapshot.log_data(),
                     std::slice::from_ref(predicate),
@@ -210,7 +222,22 @@ impl<'a> TransactionInfo<'a> {
                 .map_err(|err| CommitConflictError::Predicate {
                     source: Box::new(err),
                 })?,
-            ))
+            )))
+        } else {
+            Ok(Either::Right(Either::Right(
+                self.read_snapshot
+                    .log_data()
+                    .into_iter()
+                    .map(|f| f.to_add()),
+            )))
+        }
+    }
+
+    #[cfg(not(feature = "datafusion"))]
+    /// Files read by the transaction
+    pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
+        if let Some(read_files) = self.read_files {
+            Ok(Either::Left(read_files.iter().cloned()))
         } else {
             Ok(Either::Right(
                 self.read_snapshot
@@ -219,16 +246,6 @@ impl<'a> TransactionInfo<'a> {
                     .map(|f| f.to_add()),
             ))
         }
-    }
-
-    #[cfg(not(feature = "datafusion"))]
-    /// Files read by the transaction
-    pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
-        Ok(self
-            .read_snapshot
-            .log_data()
-            .into_iter()
-            .map(|f| f.to_add()))
     }
 
     /// Whether the whole table was read during the transaction
@@ -277,9 +294,8 @@ impl WinningCommitSummary {
     pub fn metadata_updates(&self) -> Vec<Metadata> {
         self.actions
             .iter()
-            .cloned()
             .filter_map(|action| match action {
-                Action::Metadata(metadata) => Some(metadata),
+                Action::Metadata(metadata) => Some(metadata.clone()),
                 _ => None,
             })
             .collect()
@@ -288,9 +304,8 @@ impl WinningCommitSummary {
     pub fn app_level_transactions(&self) -> HashSet<String> {
         self.actions
             .iter()
-            .cloned()
             .filter_map(|action| match action {
-                Action::Txn(txn) => Some(txn.app_id),
+                Action::Txn(txn) => Some(txn.app_id.clone()),
                 _ => None,
             })
             .collect()
@@ -299,9 +314,8 @@ impl WinningCommitSummary {
     pub fn protocol(&self) -> Vec<Protocol> {
         self.actions
             .iter()
-            .cloned()
             .filter_map(|action| match action {
-                Action::Protocol(protocol) => Some(protocol),
+                Action::Protocol(protocol) => Some(protocol.clone()),
                 _ => None,
             })
             .collect()
@@ -310,9 +324,8 @@ impl WinningCommitSummary {
     pub fn removed_files(&self) -> Vec<Remove> {
         self.actions
             .iter()
-            .cloned()
             .filter_map(|action| match action {
-                Action::Remove(remove) => Some(remove),
+                Action::Remove(remove) => Some(remove.clone()),
                 _ => None,
             })
             .collect()
@@ -321,9 +334,8 @@ impl WinningCommitSummary {
     pub fn added_files(&self) -> Vec<Add> {
         self.actions
             .iter()
-            .cloned()
             .filter_map(|action| match action {
-                Action::Add(add) => Some(add),
+                Action::Add(add) => Some(add.clone()),
                 _ => None,
             })
             .collect()
@@ -611,9 +623,8 @@ impl<'a> ConflictChecker<'a> {
             .txn_info
             .actions
             .iter()
-            .cloned()
             .filter_map(|action| match action {
-                Action::Remove(remove) => Some(remove.path),
+                Action::Remove(remove) => Some(remove.path.clone()),
                 _ => None,
             })
             .collect();
@@ -621,7 +632,6 @@ impl<'a> ConflictChecker<'a> {
             .winning_commit_summary
             .removed_files()
             .iter()
-            .filter(|r| r.data_change)
             .map(|r| r.path.clone())
             .collect();
         let intersection: HashSet<&String> = txn_deleted_files
@@ -1276,21 +1286,20 @@ mod tests {
             false,
         )
         .await;
-        // Should succeed because two compaction removes (data_change=false) on the same file
-        // are physical-layout-only and do not logically delete anything — mirroring the filter
-        // on the read-delete check and matching the Spark reference implementation.
+        // Must conflict: both compactions rewrite the file's rows into their own new file, so
+        // letting both commit duplicates those rows. Spark checks every RemoveFile here too.
         assert!(
-            result.is_ok(),
-            "Concurrent compaction removes (data_change=false) on the same file should not raise ConcurrentDeleteDelete: {result:?}"
+            matches!(result, Err(CommitConflictError::ConcurrentDeleteDelete)),
+            "Concurrent compaction removes (data_change=false) on the same file should raise ConcurrentDeleteDelete: {result:?}"
         );
     }
 
     #[tokio::test]
     #[cfg(feature = "datafusion")]
-    async fn test_compaction_remove_does_not_conflict_with_real_delete() {
-        // OPTIMIZE compaction removed file F (data_change=false).
+    async fn test_compaction_remove_conflicts_with_real_delete() {
+        // OPTIMIZE compaction removed file F (data_change=false) and moved its rows into a new file.
         // Current transaction also wants to delete F (data_change=true, real logical delete).
-        // With the old unfiltered check this raised ConcurrentDeleteDelete spuriously.
+        // Removing F again would not delete those rows, so this must conflict.
         let file = simple_add(true, "1", "10");
         let mut setup_actions = init_table_actions();
         setup_actions.push(file.clone().into());
@@ -1309,11 +1318,9 @@ mod tests {
             false,
         )
         .await;
-        // The compaction removed the file physically but not logically; our real delete
-        // should be allowed through (idempotent — the file is gone either way).
         assert!(
-            result.is_ok(),
-            "Compaction remove (data_change=false) should not conflict with a concurrent real delete: {result:?}"
+            matches!(result, Err(CommitConflictError::ConcurrentDeleteDelete)),
+            "Compaction remove (data_change=false) should conflict with a concurrent real delete: {result:?}"
         );
     }
 
@@ -1379,6 +1386,33 @@ mod tests {
             result.is_ok(),
             "Disjoint partition writes should not conflict"
         );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_explicit_read_files_still_conflict_when_read_whole_table() {
+        use crate::table::state::DeltaTableState;
+
+        let file_read = simple_add(true, "1", "10");
+        let file_unread = simple_add(true, "100", "200");
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file_read.clone().into());
+        setup_actions.push(file_unread.clone().into());
+        let state = DeltaTableState::from_actions(setup_actions).await.unwrap();
+        let conflict_read_set =
+            ConflictReadSet::from_log_data_for_test(state.snapshot().log_data());
+        let actions = vec![simple_add(true, "1", "10").into()];
+        let read_files = [file_read];
+        let transaction_info = TransactionInfo::new(conflict_read_set, None, &actions, true)
+            .with_read_files(Some(&read_files));
+        let summary = WinningCommitSummary {
+            actions: vec![ActionFactory::remove(&file_unread, true).into()],
+            commit_info: None,
+        };
+        assert!(matches!(
+            ConflictChecker::new(transaction_info, summary, None).check_conflicts(),
+            Err(CommitConflictError::ConcurrentDeleteRead)
+        ));
     }
 
     #[tokio::test]

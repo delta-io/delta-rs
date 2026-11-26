@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
+use arrow_array::cast::AsArray;
 use arrow_array::types::UInt16Type;
 use arrow_array::{Array, DictionaryArray, StringArray, StringViewArray};
 use datafusion::assert_batches_sorted_eq;
@@ -14,7 +15,7 @@ use deltalake_core::delta_datafusion::create_session;
 use deltalake_core::delta_datafusion::engine::DataFusionEngine;
 use deltalake_core::kernel::Snapshot;
 use deltalake_test::TestResult;
-use deltalake_test::acceptance::read_dat_case;
+use url::Url;
 
 async fn scan_dat(case: &str) -> TestResult<(Snapshot, SessionContext)> {
     let session = create_session().into_inner();
@@ -24,15 +25,14 @@ async fn scan_dat(case: &str) -> TestResult<(Snapshot, SessionContext)> {
 
 async fn scan_dat_with_session(case: &str, session: &SessionContext) -> TestResult<Snapshot> {
     let root_dir = format!(
-        "{}/../../dat/v0.0.3/reader_tests/generated/{}/",
+        "{}/../test/tests/data/{}/",
         env!["CARGO_MANIFEST_DIR"],
         case
     );
-    let root_dir = std::fs::canonicalize(root_dir)?;
-    let case = read_dat_case(root_dir)?;
+    let table_root = Url::from_directory_path(std::fs::canonicalize(root_dir)?).unwrap();
 
     let engine = DataFusionEngine::new_from_session(&session.state());
-    let snapshot = Snapshot::try_new_with_engine(engine.clone(), case.table_root()?, None).await?;
+    let snapshot = Snapshot::try_new_with_engine(engine.clone(), table_root, None).await?;
 
     Ok(snapshot)
 }
@@ -308,6 +308,41 @@ async fn test_multi_partitioned() -> TestResult<()> {
     assert_batches_sorted_eq!(&expected, &batches);
     let n_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
     assert_eq!(n_rows, 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_null_partition_dictionary_holds_one_value_per_file() -> TestResult<()> {
+    let (snapshot, session) = scan_dat("delta-0.8.0-null-partition").await?;
+    let provider = DeltaScanNext::builder().with_snapshot(snapshot).await?;
+
+    let plan = provider.scan(&session.state(), None, &[], None).await?;
+    let batches: Vec<_> = collect_plan(plan, &session).await?;
+    let expected = vec![
+        "+---+---+",
+        "| k | v |",
+        "+---+---+",
+        "| A | 1 |",
+        "|   | 2 |",
+        "+---+---+",
+    ];
+    assert_batches_sorted_eq!(&expected, &batches);
+
+    let mut null_partition_rows = 0;
+    for batch in &batches {
+        let dict = batch
+            .column_by_name("k")
+            .expect("partition column k")
+            .as_dictionary::<UInt16Type>();
+        null_partition_rows += dict.null_count();
+        let dictionary_values_bytes = dict.values().get_buffer_memory_size();
+        assert!(
+            dictionary_values_bytes < 1024,
+            "partition dictionary values use {dictionary_values_bytes} bytes"
+        );
+    }
+    assert_eq!(null_partition_rows, 1);
 
     Ok(())
 }
