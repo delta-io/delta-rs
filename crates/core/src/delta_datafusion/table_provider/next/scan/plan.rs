@@ -82,7 +82,7 @@ impl ProjectedScanContract {
         provider_schema: SchemaRef,
         config: &DeltaScanConfig,
         row_index_column: Option<&str>,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
     ) -> Result<Self> {
         let file_id_field = config.file_id_field();
@@ -241,7 +241,7 @@ pub(crate) struct KernelScanPlan {
 impl KernelScanPlan {
     pub(crate) fn try_new(
         snapshot: &Snapshot,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         config: &DeltaScanConfig,
         skipping_predicate: Option<Vec<Expr>>,
@@ -361,7 +361,7 @@ impl DeltaScanConfig {
 
     pub(crate) fn provider_file_id_column<'a>(
         &'a self,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         result_schema: &Schema,
     ) -> Option<&'a str> {
         let name = self.file_column_name.as_deref()?;

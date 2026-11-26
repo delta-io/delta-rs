@@ -441,7 +441,10 @@ fn field_id_schema() -> StructType {
 
 /// `field` with the parquet field id `id`, as parquet-rs reads and writes it.
 fn arrow_with_id(field: ArrowField, id: i64) -> ArrowField {
-    field.with_metadata([(PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())].into())
+    field.with_metadata(std::collections::HashMap::from([(
+        PARQUET_FIELD_ID_META_KEY.to_string(),
+        id.to_string(),
+    )]))
 }
 
 /// `field` with the kernel's `parquet.field.id`.
@@ -693,14 +696,9 @@ async fn parquet_matches_ids_at_depth() {
 
 /// A map whose value struct differs from the file's: the file has an extra child, or the table
 /// added one. No field ids are involved.
-///
-/// DataFusion 55 cannot read either: its nested cast (`datafusion_common::nested_struct`) has
-/// no `Map` arm, so the plan fails with "Cannot cast struct field 'm'". DataFusion 56.0.0 adds
-/// it (apache/datafusion#23914): remove the `ignore` when we upgrade.
 #[rstest]
 #[case::file_has_an_extra_child(&["a", "b"], &["a"])]
 #[case::table_added_a_child(&["a"], &["a", "c"])]
-#[ignore = "DataFusion 55 cannot cast a map value struct to different children; fixed in 56.0.0"]
 #[tokio::test]
 async fn parquet_reads_a_map_whose_value_struct_changed(
     #[case] file_children: &[&str],
@@ -806,20 +804,9 @@ async fn parquet_matches_nested_fields_by_field_id() {
         Arc::new(child_array()),
         None,
     );
-    // DataFusion cannot cast a map value struct to fewer children (ids or not), so the map
-    // value holds only `old`.
-    let value_child = Fields::from(vec![arrow_with_id(
-        ArrowField::new("old", ArrowDataType::Int64, true),
-        10,
-    )]);
-    let value = StructArray::new(
-        value_child.clone(),
-        vec![Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef],
-        None,
-    );
     let entries = Fields::from(vec![
         ArrowField::new("key", ArrowDataType::Utf8, false),
-        ArrowField::new("value", ArrowDataType::Struct(value_child), true),
+        ArrowField::new("value", struct_type.clone(), true),
     ]);
     let map = MapArray::new(
         Arc::new(ArrowField::new(
@@ -832,7 +819,7 @@ async fn parquet_matches_nested_fields_by_field_id() {
             entries,
             vec![
                 Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef,
-                Arc::new(value) as ArrayRef,
+                Arc::new(child_array()) as ArrayRef,
             ],
             None,
         ),

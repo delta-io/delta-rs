@@ -2010,10 +2010,24 @@ impl std::future::IntoFuture for MergeBuilder {
 
             let parent = this.log_store.clone();
             let (snapshot, metrics) = with_operation(&parent, |log_store| async move {
-                let (state, _) = resolve_session_state(
+                let (mut state, _) = resolve_session_state(
                     this.state.as_deref(),
                     this.session_fallback_policy,
-                    || create_session().state(),
+                    || {
+                        let mut state = create_session().state();
+                        // Default session only (no caller session), streamed merges only: keep the
+                        // source on the build side of the join. DataFusion 56 can make a small
+                        // target the build side, and then the target scan reads every file before
+                        // the source's runtime predicates exist. This applies to every default
+                        // streamed merge, not only those that skip files, because skip_files is
+                        // computed later in `execute`. Documented in the commit message.
+                        if this.streaming {
+                            let options = state.config_mut().options_mut();
+                            options.optimizer.hash_join_single_partition_threshold = 0;
+                            options.optimizer.hash_join_single_partition_threshold_rows = 0;
+                        }
+                        state
+                    },
                     SessionResolveContext {
                         operation: "merge",
                         table_uri: Some(log_store.root_url()),
@@ -2534,23 +2548,62 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_streaming_source_target_on_build_side() {
-        // With the default session, the small target is the build side of the join. The target
-        // is read before the source statistics are known, so no file is skipped.
+        // With a session that keeps DataFusion's default join thresholds, the small target is the
+        // build side of the join. The target is read before the source statistics are known, so
+        // no file is skipped. The default streamed-merge session forces the source as build side
+        // (see `into_future`), so this case needs an explicit session.
         let schema = get_arrow_schema(&None);
         let table = setup_table(Some(vec!["modified"])).await;
         let table = write_data(table, &schema).await;
 
+        let target_build_side = Arc::new(SessionContext::new().state());
         let (table, metrics) = upsert(
             table,
             a_and_x_source(&schema),
             id_and_modified_match(),
-            None,
+            Some(target_build_side),
         )
         .await;
 
         assert_eq!(metrics.num_target_rows_updated, 1);
         assert_eq!(metrics.num_target_rows_inserted, 1);
         assert_eq!(metrics.num_target_files_scanned, 2);
+        assert_eq!(metrics.num_target_files_removed, 1);
+
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&A_AND_X_UPSERTED, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_streaming_source_default_session_keeps_source_on_build_side() {
+        // Without a caller session, the streamed merge uses the default session, which keeps the
+        // source on the build side of the join. The target scan then skips the file that cannot
+        // match the source (A is in file 1 of 2 target files for `modified`), so only one
+        // target file is scanned. This covers the default-session branch in `into_future`.
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+        let table = write_data(table, &schema).await;
+
+        let (table, metrics) = table
+            .merge(a_and_x_source(&schema), id_and_modified_match())
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_streaming(true)
+            .when_matched_update(|update| update.update("value", col("source.value")))
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        assert_eq!(metrics.num_target_rows_inserted, 1);
+        assert_eq!(metrics.num_target_files_scanned, 1);
         assert_eq!(metrics.num_target_files_removed, 1);
 
         let actual = get_data(&table).await;

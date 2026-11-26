@@ -60,7 +60,7 @@ impl TableProvider for LazyTableProvider {
     async fn scan(
         &self,
         _session: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
@@ -172,7 +172,7 @@ impl TableProvider for TokioDeltaScan {
     async fn scan(
         &self,
         session: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
@@ -320,7 +320,7 @@ mod tests {
         // Test scanning with projection (only select the id column)
         let projection = Some(vec![0]);
         let plan = provider
-            .scan(&session, projection.as_ref(), &[], None)
+            .scan(&session, projection.as_deref(), &[], None)
             .await
             .unwrap();
 
@@ -407,7 +407,7 @@ mod tests {
         let limit = Some(2); // Return only 2 rows
 
         let plan = provider
-            .scan(&session, projection.as_ref(), &filter, limit)
+            .scan(&session, projection.as_deref(), &filter, limit)
             .await
             .unwrap();
 
