@@ -797,6 +797,20 @@ def test_file_uris_dnf_filters():
     assert dt.file_uris(file_pruning_predicate=dnf) == dt.file_uris(dnf)
 
 
+@pytest.mark.parametrize("collection", [list, tuple, set])
+def test_file_uris_in_filter_collections(collection):
+    dt = DeltaTable("../crates/test/tests/data/delta-0.8.0-partitioned")
+    days = collection(["3", "20"])
+
+    uris = dt.file_uris(file_pruning_predicate=[("day", "in", days)])
+    assert set(uris) == _partitioned_table_uris((2020, 2, 3), (2021, 12, 20))
+
+    uris = dt.file_uris(file_pruning_predicate=[("day", "not in", days)])
+    assert set(uris) == _partitioned_table_uris(
+        (2020, 1, 1), (2020, 2, 5), (2021, 4, 5), (2021, 12, 4)
+    )
+
+
 def test_file_uris_predicate_equals_dnf():
     dt = DeltaTable("../crates/test/tests/data/delta-0.8.0-partitioned")
 

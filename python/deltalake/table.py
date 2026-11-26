@@ -120,7 +120,7 @@ def _encode_filter_conjunction(
     encoded: PartitionFilterType = []
     for field, op, value in conjunction:
         str_value: str | list[str]
-        if isinstance(value, (list, tuple)):
+        if isinstance(value, (list, tuple, set)):
             str_value = [encode_partition_value(val) for val in value]
         else:
             str_value = encode_partition_value(value)
