@@ -62,6 +62,7 @@
 //! footers.
 
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
@@ -69,11 +70,12 @@ use std::sync::{Arc, OnceLock};
 use arrow::compute::concat_batches;
 use arrow::record_batch::RecordBatch;
 use datafusion::common::runtime::SpawnedTask;
-use datafusion::common::tree_node::TreeNodeRecursion;
-use datafusion::common::{DFSchemaRef, Result as DataFusionResult, Statistics};
+use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion::common::{DFSchemaRef, Result as DataFusionResult, ScalarValue, Statistics};
 use datafusion::execution::TaskContext;
+use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::ptr_eq::PtrEq;
-use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore, lit};
+use datafusion::logical_expr::{Between, ColumnarValue, Expr, LogicalPlan, UserDefinedLogicalNodeCore, lit};
 use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -93,6 +95,23 @@ use crate::operations::optimize::util::flatten_join_error;
 
 type Aggregation = SpawnedTask<DataFusionResult<Vec<RecordBatch>>>;
 
+/// Default maximum number of distinct values collected for exact key IN list pruning.
+/// Matches DataFusion's default for `hash_join_inlist_pushdown_max_distinct_values`.
+pub(crate) const DEFAULT_HASH_JOIN_INLIST_PUSHDOWN_MAX_DISTINCT_VALUES: usize = 150;
+
+/// Default maximum memory size in bytes for exact key IN list pruning.
+/// Matches DataFusion's default for `hash_join_inlist_pushdown_max_size` (128 KiB).
+pub(crate) const DEFAULT_HASH_JOIN_INLIST_PUSHDOWN_MAX_SIZE: usize = 131072;
+
+#[derive(Debug)]
+pub(crate) struct ActiveKeyTracker {
+    pub target_expr: Expr,
+    pub physical_expr: Arc<dyn PhysicalExpr>,
+    pub values: BTreeSet<ScalarValue>,
+    pub total_bytes: usize,
+    pub exceeded: bool,
+}
+
 /// Shared by [`SourceStats`], [`SourceStatsExec`] and the MERGE operation.
 pub(crate) struct SourceStatsCollector {
     /// Early filter with placeholders for the source values
@@ -108,6 +127,9 @@ pub(crate) struct SourceStatsCollector {
     /// The file skipping predicates of the early filter, for the target scan
     runtime_file_filter: RuntimeFileFilter,
     early_filter: OnceLock<Expr>,
+    key_trackers: Mutex<Vec<ActiveKeyTracker>>,
+    max_distinct_values: usize,
+    max_size_bytes: usize,
 }
 
 struct CollectState {
@@ -125,6 +147,17 @@ impl SourceStatsCollector {
         target_schema: DFSchemaRef,
         target_alias: Option<String>,
     ) -> Arc<Self> {
+        let key_trackers = filter
+            .key_trackers
+            .into_iter()
+            .map(|t| ActiveKeyTracker {
+                target_expr: t.target_expr,
+                physical_expr: t.physical_expr,
+                values: BTreeSet::new(),
+                total_bytes: 0,
+                exceeded: false,
+            })
+            .collect();
         Arc::new(Self {
             filter: filter.filter,
             not_match_source_filter,
@@ -139,6 +172,9 @@ impl SourceStatsCollector {
             target_alias,
             runtime_file_filter: RuntimeFileFilter::default(),
             early_filter: OnceLock::new(),
+            key_trackers: Mutex::new(key_trackers),
+            max_distinct_values: filter.max_distinct_values,
+            max_size_bytes: filter.max_size_bytes,
         })
     }
 
@@ -150,6 +186,113 @@ impl SourceStatsCollector {
     /// The early filter, if the whole source was read and the filter was built.
     pub(crate) fn early_filter(&self) -> Option<&Expr> {
         self.early_filter.get()
+    }
+
+    /// Record a batch of source rows for exact key IN list pruning.
+    pub(crate) fn record_batch(&self, batch: &RecordBatch) {
+        if batch.num_rows() == 0 {
+            return;
+        }
+        let mut trackers = self.key_trackers.lock();
+        for tracker in trackers.iter_mut() {
+            if tracker.exceeded {
+                continue;
+            }
+            let columnar_value = match tracker.physical_expr.evaluate(batch) {
+                Ok(val) => val,
+                Err(err) => {
+                    warn!("Failed to evaluate source expr for merge exact key pruning: {err}");
+                    tracker.exceeded = true;
+                    tracker.values.clear();
+                    continue;
+                }
+            };
+            match columnar_value {
+                ColumnarValue::Array(array) => {
+                    for i in 0..array.len() {
+                        if array.is_null(i) {
+                            continue;
+                        }
+                        let scalar = match ScalarValue::try_from_array(&array, i) {
+                            Ok(s) => s,
+                            Err(_) => {
+                                tracker.exceeded = true;
+                                tracker.values.clear();
+                                break;
+                            }
+                        };
+                        if !tracker.values.contains(&scalar) {
+                            let scalar_size = scalar.size();
+                            if tracker.values.len() + 1 > self.max_distinct_values
+                                || tracker.total_bytes + scalar_size > self.max_size_bytes
+                            {
+                                tracker.exceeded = true;
+                                tracker.values.clear();
+                                break;
+                            }
+                            tracker.total_bytes += scalar_size;
+                            tracker.values.insert(scalar);
+                        }
+                    }
+                }
+                ColumnarValue::Scalar(scalar) => {
+                    if !scalar.is_null() && !tracker.values.contains(&scalar) {
+                        let scalar_size = scalar.size();
+                        if tracker.values.len() + 1 > self.max_distinct_values
+                            || tracker.total_bytes + scalar_size > self.max_size_bytes
+                        {
+                            tracker.exceeded = true;
+                            tracker.values.clear();
+                        } else {
+                            tracker.total_bytes += scalar_size;
+                            tracker.values.insert(scalar);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Replaces `Expr::Between` with `Expr::InList` for equality keys whose source values fit
+    /// within `max_distinct_values` and `max_size_bytes`.
+    pub(crate) fn apply_exact_in_list_filters(&self, filter: Expr) -> Expr {
+        let trackers = self.key_trackers.lock();
+        let valid_trackers: Vec<_> = trackers
+            .iter()
+            .filter(|t| !t.exceeded && !t.values.is_empty())
+            .collect();
+        if valid_trackers.is_empty() {
+            return filter;
+        }
+
+        filter
+            .transform(&|expr| match expr {
+                Expr::Between(Between {
+                    expr,
+                    negated: false,
+                    low,
+                    high,
+                }) => {
+                    if let Some(tracker) = valid_trackers.iter().find(|t| t.target_expr == *expr) {
+                        let list = tracker.values.iter().cloned().map(lit).collect();
+                        Ok(Transformed::yes(Expr::InList(InList {
+                            expr,
+                            list,
+                            negated: false,
+                        })))
+                    } else {
+                        Ok(Transformed::no(Expr::Between(Between {
+                            expr,
+                            negated: false,
+                            low,
+                            high,
+                        })))
+                    }
+                }
+                other => Ok(Transformed::no(other)),
+            })
+            .map(|t| t.data)
+            .unwrap_or(filter)
     }
 
     /// Start reading one source partition. Returns the channel to the aggregation.
@@ -194,12 +337,12 @@ impl SourceStatsCollector {
             Some(self.not_match_source_filter.clone().unwrap_or(lit(false)))
         } else {
             let items = concat_batches(&self.aggregate.schema(), &batches)?;
-            filter_from_placeholder_values(&self.filter, &items)?.map(|filter| {
-                match &self.not_match_source_filter {
+            filter_from_placeholder_values(&self.filter, &items)?
+                .map(|filter| self.apply_exact_in_list_filters(filter))
+                .map(|filter| match &self.not_match_source_filter {
                     Some(not_match_source_filter) => filter.or(not_match_source_filter.clone()),
                     None => filter,
-                }
-            })
+                })
         };
         let Some(filter) = filter else {
             return Ok(());
@@ -408,6 +551,7 @@ impl SourcePartition {
         self.collector
             .source_rows
             .fetch_add(batch.num_rows(), AtomicOrdering::Relaxed);
+        self.collector.record_batch(&batch);
         // When the aggregation stopped, its error is reported when it is joined.
         if batch.num_rows() > 0
             && let Some(sender) = self.batch_sender.as_mut()
@@ -416,5 +560,209 @@ impl SourcePartition {
             self.batch_sender = None;
         }
         Some((Ok(batch), self))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::StringArray;
+    use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use datafusion::logical_expr::{col, lit, Between, InList};
+    use datafusion::physical_expr::expressions::Column as PhysColumn;
+    use datafusion::physical_plan::empty::EmptyExec;
+
+    fn make_test_collector(
+        trackers: Vec<ActiveKeyTracker>,
+        max_distinct_values: usize,
+        max_size_bytes: usize,
+    ) -> SourceStatsCollector {
+        let arrow_schema = Arc::new(ArrowSchema::empty());
+        SourceStatsCollector {
+            filter: lit(true),
+            not_match_source_filter: None,
+            aggregate: Arc::new(EmptyExec::new(arrow_schema)),
+            state: Mutex::new(CollectState {
+                batch_sender: None,
+                aggregation: None,
+                open_partitions: None,
+            }),
+            source_rows: AtomicUsize::new(0),
+            target_schema: Arc::new(datafusion::common::DFSchema::empty()),
+            target_alias: None,
+            runtime_file_filter: RuntimeFileFilter::default(),
+            early_filter: OnceLock::new(),
+            key_trackers: Mutex::new(trackers),
+            max_distinct_values,
+            max_size_bytes,
+        }
+    }
+
+    #[test]
+    fn test_apply_exact_in_list_filters_converts_between_to_in_list() {
+        let target_expr = col("target.id");
+        let phys_expr = Arc::new(PhysColumn::new("id", 0));
+        let values = BTreeSet::from([
+            ScalarValue::Utf8(Some("00001".into())),
+            ScalarValue::Utf8(Some("09998".into())),
+        ]);
+        let tracker = ActiveKeyTracker {
+            target_expr: target_expr.clone(),
+            physical_expr: phys_expr,
+            values,
+            total_bytes: 100,
+            exceeded: false,
+        };
+        let collector = make_test_collector(vec![tracker], 150, 131072);
+
+        let input_filter = Expr::Between(Between {
+            expr: Box::new(target_expr.clone()),
+            negated: false,
+            low: Box::new(lit("00001")),
+            high: Box::new(lit("09998")),
+        });
+
+        let transformed = collector.apply_exact_in_list_filters(input_filter);
+        assert_eq!(
+            transformed,
+            Expr::InList(InList {
+                expr: Box::new(target_expr),
+                list: vec![lit("00001"), lit("09998")],
+                negated: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_apply_exact_in_list_filters_fallback_when_exceeded() {
+        let target_expr = col("target.id");
+        let phys_expr = Arc::new(PhysColumn::new("id", 0));
+        let tracker = ActiveKeyTracker {
+            target_expr: target_expr.clone(),
+            physical_expr: phys_expr,
+            values: BTreeSet::new(),
+            total_bytes: 0,
+            exceeded: true,
+        };
+        let collector = make_test_collector(vec![tracker], 150, 131072);
+
+        let input_filter = Expr::Between(Between {
+            expr: Box::new(target_expr.clone()),
+            negated: false,
+            low: Box::new(lit("00001")),
+            high: Box::new(lit("09998")),
+        });
+
+        let transformed = collector.apply_exact_in_list_filters(input_filter.clone());
+        assert_eq!(transformed, input_filter);
+    }
+
+    #[test]
+    fn test_record_batch_deduplicates_and_ignores_nulls() {
+        let target_expr = col("target.id");
+        let phys_expr = Arc::new(PhysColumn::new("id", 0));
+        let tracker = ActiveKeyTracker {
+            target_expr,
+            physical_expr: phys_expr,
+            values: BTreeSet::new(),
+            total_bytes: 0,
+            exceeded: false,
+        };
+        let collector = make_test_collector(vec![tracker], 150, 131072);
+
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Utf8,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![
+                Some("00001"),
+                None,
+                Some("00001"),
+                Some("09998"),
+            ]))],
+        )
+        .unwrap();
+
+        collector.record_batch(&batch);
+        let trackers = collector.key_trackers.lock();
+        assert_eq!(trackers[0].values.len(), 2);
+        assert!(!trackers[0].exceeded);
+        assert!(trackers[0]
+            .values
+            .contains(&ScalarValue::Utf8(Some("00001".into()))));
+        assert!(trackers[0]
+            .values
+            .contains(&ScalarValue::Utf8(Some("09998".into()))));
+    }
+
+    #[test]
+    fn test_record_batch_exceeds_distinct_count_limit() {
+        let target_expr = col("target.id");
+        let phys_expr = Arc::new(PhysColumn::new("id", 0));
+        let tracker = ActiveKeyTracker {
+            target_expr,
+            physical_expr: phys_expr,
+            values: BTreeSet::new(),
+            total_bytes: 0,
+            exceeded: false,
+        };
+        // Set max_distinct_values to 2
+        let collector = make_test_collector(vec![tracker], 2, 131072);
+
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Utf8,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![
+                Some("01"),
+                Some("02"),
+                Some("03"),
+            ]))],
+        )
+        .unwrap();
+
+        collector.record_batch(&batch);
+        let trackers = collector.key_trackers.lock();
+        assert!(trackers[0].exceeded);
+        assert!(trackers[0].values.is_empty());
+    }
+
+    #[test]
+    fn test_record_batch_exceeds_byte_size_limit() {
+        let target_expr = col("target.id");
+        let phys_expr = Arc::new(PhysColumn::new("id", 0));
+        let tracker = ActiveKeyTracker {
+            target_expr,
+            physical_expr: phys_expr,
+            values: BTreeSet::new(),
+            total_bytes: 0,
+            exceeded: false,
+        };
+        // Set max_size_bytes to 10 bytes (smaller than the memory of a string scalar)
+        let collector = make_test_collector(vec![tracker], 150, 10);
+
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Utf8,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![Some(
+                "a_very_long_string_that_exceeds_ten_bytes",
+            )]))],
+        )
+        .unwrap();
+
+        collector.record_batch(&batch);
+        let trackers = collector.key_trackers.lock();
+        assert!(trackers[0].exceeded);
+        assert!(trackers[0].values.is_empty());
     }
 }

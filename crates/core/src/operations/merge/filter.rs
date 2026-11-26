@@ -16,7 +16,7 @@ use datafusion::logical_expr::expr::{InList, Placeholder};
 use datafusion::logical_expr::{
     Aggregate, Between, BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator, lit,
 };
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, PhysicalExpr};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::PartitionStream;
 use either::{Left, Right};
@@ -76,6 +76,7 @@ fn construct_placeholder(
     is_partition_column: bool,
     column_name: String,
     placeholders: &mut Vec<PredicatePlaceholder>,
+    equality_keys: &mut Vec<EqualityKeyTracker>,
 ) -> Option<Expr> {
     if is_partition_column {
         let placeholder_name = format!("{column_name}_{}", placeholders.len());
@@ -122,7 +123,7 @@ fn construct_placeholder(
                     (*binary.right, *binary.left)
                 };
                 let replaced = Expr::Between(Between {
-                    expr: target_expr.into(),
+                    expr: target_expr.clone().into(),
                     negated: false,
                     low: placeholder_min.into(),
                     high: placeholder_max.into(),
@@ -134,9 +135,13 @@ fn construct_placeholder(
                     is_aggregate: true,
                 });
                 placeholders.push(PredicatePlaceholder {
-                    expr: max(source_expr),
+                    expr: max(source_expr.clone()),
                     alias: name_max,
                     is_aggregate: true,
+                });
+                equality_keys.push(EqualityKeyTracker {
+                    source_expr,
+                    target_expr,
                 });
                 Some(replaced)
             }
@@ -162,6 +167,18 @@ pub(crate) struct PredicatePlaceholder {
     pub expr: Expr,
     pub alias: String,
     pub is_aggregate: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct EqualityKeyTracker {
+    pub source_expr: Expr,
+    pub target_expr: Expr,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SourceKeyTracker {
+    pub target_expr: Expr,
+    pub physical_expr: Arc<dyn PhysicalExpr>,
 }
 
 /// Takes the predicate provided and does three things:
@@ -194,6 +211,27 @@ pub(crate) fn generalize_filter(
     placeholders: &mut Vec<PredicatePlaceholder>,
     with_placeholders: bool,
 ) -> Option<Expr> {
+    let mut equality_keys = Vec::new();
+    generalize_filter_with_keys(
+        predicate,
+        partition_columns,
+        source_name,
+        target_name,
+        placeholders,
+        with_placeholders,
+        &mut equality_keys,
+    )
+}
+
+pub(crate) fn generalize_filter_with_keys(
+    predicate: Expr,
+    partition_columns: &Vec<String>,
+    source_name: &TableReference,
+    target_name: &TableReference,
+    placeholders: &mut Vec<PredicatePlaceholder>,
+    with_placeholders: bool,
+    equality_keys: &mut Vec<EqualityKeyTracker>,
+) -> Option<Expr> {
     match predicate {
         Expr::BinaryExpr(binary) => {
             if with_placeholders {
@@ -207,6 +245,7 @@ pub(crate) fn generalize_filter(
                             partition_columns.contains(&left_target),
                             left_target,
                             placeholders,
+                            equality_keys,
                         );
                     }
                     return None;
@@ -221,27 +260,30 @@ pub(crate) fn generalize_filter(
                             partition_columns.contains(&right_target),
                             right_target,
                             placeholders,
+                            equality_keys,
                         );
                     }
                     return None;
                 }
             }
 
-            let left = generalize_filter(
+            let left = generalize_filter_with_keys(
                 *binary.left,
                 partition_columns,
                 source_name,
                 target_name,
                 placeholders,
                 with_placeholders,
+                equality_keys,
             );
-            let right = generalize_filter(
+            let right = generalize_filter_with_keys(
                 *binary.right,
                 partition_columns,
                 source_name,
                 target_name,
                 placeholders,
                 with_placeholders,
+                equality_keys,
             );
 
             match (left, right) {
@@ -267,13 +309,14 @@ pub(crate) fn generalize_filter(
             }
         }
         Expr::InList(in_list) => {
-            let compare_expr = generalize_filter(
+            let compare_expr = generalize_filter_with_keys(
                 *in_list.expr,
                 partition_columns,
                 source_name,
                 target_name,
                 placeholders,
                 with_placeholders,
+                equality_keys,
             )?;
 
             let mut list_expr = Vec::new();
@@ -282,13 +325,14 @@ pub(crate) fn generalize_filter(
                     // If it's a literal just immediately push it in list_expr so we can avoid the unnecessary generalizing
                     Expr::Literal(_, _) => list_expr.push(item),
                     _ => {
-                        if let Some(item) = generalize_filter(
+                        if let Some(item) = generalize_filter_with_keys(
                             item.clone(),
                             partition_columns,
                             source_name,
                             target_name,
                             placeholders,
                             with_placeholders,
+                            equality_keys,
                         ) {
                             list_expr.push(item)
                         }
@@ -457,6 +501,9 @@ pub(crate) struct StreamingEarlyFilter {
     /// Aggregates the placeholder values from the batches sent to `batch_sender`
     pub aggregate: Arc<dyn ExecutionPlan>,
     pub batch_sender: mpsc::Sender<RecordBatch>,
+    pub key_trackers: Vec<SourceKeyTracker>,
+    pub max_distinct_values: usize,
+    pub max_size_bytes: usize,
 }
 
 /// Plan the early filter for a source that can only be read once.
@@ -474,18 +521,45 @@ pub(crate) async fn try_construct_streaming_early_filter(
 ) -> DeltaResult<Option<StreamingEarlyFilter>> {
     let partition_columns = table_snapshot.metadata().partition_columns();
     let mut placeholders = Vec::default();
-    let Some(filter) = generalize_filter(
+    let mut equality_keys = Vec::default();
+    let Some(filter) = generalize_filter_with_keys(
         join_predicate,
         &partition_columns.to_vec(),
         source_name,
         target_name,
         &mut placeholders,
         true,
+        &mut equality_keys,
     ) else {
         return Ok(None);
     };
     if placeholders.is_empty() {
         return Ok(None);
+    }
+
+    let optimizer_options = &session_state.config().options().optimizer;
+    let max_distinct_values = if optimizer_options.hash_join_inlist_pushdown_max_distinct_values > 0
+    {
+        optimizer_options.hash_join_inlist_pushdown_max_distinct_values
+    } else {
+        super::source_stats::DEFAULT_HASH_JOIN_INLIST_PUSHDOWN_MAX_DISTINCT_VALUES
+    };
+    let max_size_bytes = if optimizer_options.hash_join_inlist_pushdown_max_size > 0 {
+        optimizer_options.hash_join_inlist_pushdown_max_size
+    } else {
+        super::source_stats::DEFAULT_HASH_JOIN_INLIST_PUSHDOWN_MAX_SIZE
+    };
+
+    let mut key_trackers = Vec::with_capacity(equality_keys.len());
+    for tracker in equality_keys {
+        if let Ok(physical_expr) =
+            session_state.create_physical_expr(tracker.source_expr, source.schema().as_ref())
+        {
+            key_trackers.push(SourceKeyTracker {
+                target_expr: tracker.target_expr,
+                physical_expr,
+            });
+        }
     }
 
     let schema = Arc::new(source.schema().as_arrow().clone());
@@ -509,6 +583,9 @@ pub(crate) async fn try_construct_streaming_early_filter(
         filter,
         aggregate,
         batch_sender,
+        key_trackers,
+        max_distinct_values,
+        max_size_bytes,
     }))
 }
 

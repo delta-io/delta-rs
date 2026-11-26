@@ -2370,7 +2370,7 @@ mod tests {
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(
             parameters["predicate"],
-            json!("id >= 'A' AND id <= 'X' AND modified = '2021-02-01'")
+            json!("id IN ('A', 'X') AND modified = '2021-02-01'")
         );
 
         let actual = get_data(&table).await;
@@ -2467,6 +2467,123 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_streaming_source_exact_keys_prunes_files() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+        // File 1 has ids A to D
+        let table = write_data(table, &schema).await;
+        // File 2 has ids M to P
+        let table = table
+            .write(vec![source_batch(
+                &schema,
+                vec!["M", "P"],
+                vec![10, 20],
+                vec!["2021-02-02", "2021-02-02"],
+            )])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        // File 3 has ids X to Y
+        let table = table
+            .write(vec![source_batch(
+                &schema,
+                vec!["X", "Y"],
+                vec![30, 40],
+                vec!["2021-02-03", "2021-02-03"],
+            )])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 3);
+
+        // Source has keys A and Y (at opposite ends of the range). File 2 (M..P) should be pruned.
+        let source = one_shot_source(
+            Arc::clone(&schema),
+            vec![vec![source_batch(
+                &schema,
+                vec!["A", "Y"],
+                vec![100, 200],
+                vec!["2021-02-01", "2021-02-03"],
+            )]],
+        );
+        let (table, metrics) = upsert(
+            table,
+            source,
+            col("target.id").eq(col("source.id")),
+            Some(source_build_side_session()),
+        )
+        .await;
+
+        assert_eq!(metrics.num_target_rows_updated, 2);
+        // Only File 1 (A..D) and File 3 (X..Y) scanned; File 2 (M..P) skipped!
+        assert_eq!(metrics.num_target_files_scanned, 2);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 1);
+        assert_eq!(metrics.num_target_files_removed, 2);
+
+        let last_commit = table.last_commit().await.unwrap();
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("id IN ('A', 'Y')"));
+    }
+
+    #[tokio::test]
+    async fn test_merge_streaming_source_fallback_to_range_when_threshold_exceeded() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+        let table = write_data(table, &schema).await;
+        let table = table
+            .write(vec![source_batch(
+                &schema,
+                vec!["M", "P"],
+                vec![10, 20],
+                vec!["2021-02-02", "2021-02-02"],
+            )])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        let table = table
+            .write(vec![source_batch(
+                &schema,
+                vec!["X", "Y"],
+                vec![30, 40],
+                vec!["2021-02-03", "2021-02-03"],
+            )])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 3);
+
+        // Configure session with max_distinct_values = 1 (so 2 distinct keys exceed the limit)
+        let mut state = source_build_side_session().as_ref().clone();
+        state.config_mut().options_mut().optimizer.hash_join_inlist_pushdown_max_distinct_values = 1;
+
+        let source = one_shot_source(
+            Arc::clone(&schema),
+            vec![vec![source_batch(
+                &schema,
+                vec!["A", "Y"],
+                vec![100, 200],
+                vec!["2021-02-01", "2021-02-03"],
+            )]],
+        );
+        let (table, metrics) = upsert(
+            table,
+            source,
+            col("target.id").eq(col("source.id")),
+            Some(Arc::new(state)),
+        )
+        .await;
+
+        assert_eq!(metrics.num_target_rows_updated, 2);
+        // Exceeded limit: falls back to range BETWEEN 'A' AND 'Y', so all 3 files scanned
+        assert_eq!(metrics.num_target_files_scanned, 3);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 0);
+
+        let last_commit = table.last_commit().await.unwrap();
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("id >= 'A' AND id <= 'Y'"));
     }
 
     #[tokio::test]
