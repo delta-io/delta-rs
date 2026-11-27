@@ -1338,15 +1338,15 @@ mod tests {
         let df = ctx.sql("select * from test").await?;
         let actual = df.collect().await?;
         let expected = vec![
-            "+--------------------+--------------------+",
-            "| test.col_1[col_1a] | test.col_1[col_1b] |",
-            "+--------------------+--------------------+",
-            "| A                  |                    |",
-            "| B                  |                    |",
-            "| E                  | E2                 |",
-            "| F                  | F2                 |",
-            "| G                  | G2                 |",
-            "+--------------------+--------------------+",
+            "+--------------------+------------------------+",
+            "| Company Very Short | Super Name             |",
+            "+--------------------+------------------------+",
+            "| BME                | Timothy Lamb           |",
+            "| BMS                | Anthony Johnson        |",
+            "| BMS                | Mr. Daniel Ferguson MD |",
+            "| BMS                | Nathan Bennett         |",
+            "| BMS                | Stephanie Mcgrath      |",
+            "+--------------------+------------------------+",
         ];
         assert_batches_sorted_eq!(&expected, &actual);
         Ok(())
