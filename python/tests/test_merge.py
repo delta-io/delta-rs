@@ -4068,3 +4068,47 @@ def test_merge_insert_predicate_skips_rejected_rows_4784(
 
     result = DeltaTable(tmp_path).to_pyarrow_table().sort_by("id").to_pylist()
     assert result == [{"id": 1, "v": 10.0}, {"id": 2, "v": 20.0}]
+
+
+@pytest.mark.pyarrow
+def test_merge_streamed_exec_exact_keys_prunes_files_5120(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    # Write 3 unpartitioned files spanning distinct ID ranges
+    write_deltalake(
+        tmp_path,
+        pa.table({"id": pa.array(["01", "02"]), "v": pa.array([0, 0])}),
+        mode="append",
+    )
+    write_deltalake(
+        tmp_path,
+        pa.table({"id": pa.array(["10", "20"]), "v": pa.array([0, 0])}),
+        mode="append",
+    )
+    write_deltalake(
+        tmp_path,
+        pa.table({"id": pa.array(["80", "90"]), "v": pa.array([0, 0])}),
+        mode="append",
+    )
+
+    dt = DeltaTable(tmp_path)
+    assert len(dt.file_uris()) == 3
+
+    # Source has keys at opposite ends: "01" and "90"
+    source = pa.table({"id": pa.array(["01", "90"]), "v": pa.array([1, 1])})
+    metrics = (
+        dt.merge(
+            source=source,
+            predicate="s.id = t.id",
+            source_alias="s",
+            target_alias="t",
+            streamed_exec=True,
+        )
+        .when_matched_update_all()
+        .execute()
+    )
+
+    # File 2 (ids "10", "20") should be pruned using exact key IN list pruning
+    assert metrics["num_target_files_scanned"] == 2
+    assert metrics["num_target_files_skipped_during_scan"] == 1
+    assert metrics["num_target_rows_updated"] == 2
