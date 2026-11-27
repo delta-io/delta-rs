@@ -1,0 +1,21 @@
+# Issue #5078 control. Negative zero is stored as a regular data column.
+
+statement ok
+CREATE TABLE baseline (id INTEGER, x DOUBLE);
+
+statement ok
+INSERT INTO baseline VALUES (1, CAST('-0.0' AS DOUBLE)), (2, 5.0);
+
+statement ok
+CREATE TABLE actual AS SELECT * FROM baseline;
+
+statement ok
+DELETE FROM actual WHERE x = 0.0;
+
+query IR rowsort survivors
+SELECT id, x FROM baseline WHERE (x = 0.0) IS NOT TRUE;
+----
+
+query IR rowsort survivors
+SELECT id, x FROM actual;
+----

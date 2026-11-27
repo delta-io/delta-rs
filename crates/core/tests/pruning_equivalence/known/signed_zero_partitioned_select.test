@@ -1,0 +1,20 @@
+# Issue #5078. Negative zero is stored as a Delta partition value.
+
+# delta: partition-by p
+
+statement ok
+CREATE TABLE baseline (id INTEGER, p DOUBLE);
+
+statement ok
+INSERT INTO baseline VALUES (1, CAST('-0.0' AS DOUBLE)), (2, 5.0);
+
+statement ok
+CREATE TABLE actual AS SELECT * FROM baseline;
+
+query IR rowsort matches
+SELECT id, p FROM baseline WHERE p = 0.0;
+----
+
+query IR rowsort matches
+SELECT id, p FROM actual WHERE p = 0.0;
+----

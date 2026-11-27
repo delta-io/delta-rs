@@ -1,0 +1,18 @@
+# Issue #5095. A file containing NaN also contains finite values below the threshold.
+
+statement ok
+CREATE TABLE baseline (id INTEGER, x DOUBLE);
+
+statement ok
+INSERT INTO baseline VALUES (1, CAST('NaN' AS DOUBLE)), (2, 1.0), (3, 2.0);
+
+statement ok
+CREATE TABLE actual AS SELECT * FROM baseline;
+
+query IR rowsort matches
+SELECT id, x FROM baseline WHERE x > 9.0;
+----
+
+query IR rowsort matches
+SELECT id, x FROM actual WHERE x > 9.0;
+----
