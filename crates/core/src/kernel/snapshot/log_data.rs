@@ -635,7 +635,6 @@ mod df_tests {
     }
 
     #[tokio::test]
-    #[ignore = "re-enable once https://github.com/delta-io/delta-kernel-rs/issues/1075 is resolved."]
     async fn df_stats_delta_1_2_1_struct_stats_table() {
         let table_path = std::path::Path::new("../test/tests/data/delta-1.2.1-only-struct-stats");
         let table_uri =
