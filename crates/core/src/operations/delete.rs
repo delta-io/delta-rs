@@ -3031,9 +3031,7 @@ mod tests {
             matches!(
                 result,
                 Err(DeltaTableError::Transaction {
-                    source: TransactionError::CommitConflict(
-                        CommitConflictError::ConcurrentDeleteDelete
-                    )
+                    source: TransactionError::CommitConflict(CommitConflictError::ConcurrentAppend)
                 })
             ),
             "stale full delete should conflict with the compaction: {result:?}"
