@@ -500,6 +500,8 @@ pub struct DeltaScan {
     file_selection: Option<FileSelection>,
     #[serde(skip)]
     runtime_file_filter: Option<RuntimeFileFilter>,
+    #[serde(skip)]
+    seed_rows: Option<Arc<[(usize, usize)]>>,
 }
 
 /// Deletion vector selection for one data file.
@@ -542,6 +544,7 @@ impl DeltaScan {
             log_store: None,
             file_selection: None,
             runtime_file_filter: None,
+            seed_rows: None,
         })
     }
 
@@ -558,6 +561,13 @@ impl DeltaScan {
     /// See [`RuntimeFileFilter`].
     pub(crate) fn with_runtime_file_filter(mut self, filter: RuntimeFileFilter) -> Self {
         self.runtime_file_filter = Some(filter);
+        self
+    }
+
+    /// Replay only the materialized files at these (batch, row) positions.
+    /// The positions must cover the file selection.
+    pub(crate) fn with_seed_rows(mut self, seed_rows: Vec<(usize, usize)>) -> Self {
+        self.seed_rows = Some(seed_rows.into());
         self
     }
 
@@ -680,9 +690,11 @@ impl DeltaScan {
         scan_plan: &KernelScanPlan,
         engine: Arc<dyn Engine>,
     ) -> SendableScanMetadataStream {
-        scan_plan
-            .scan
-            .scan_metadata_seeded(engine, self.snapshot.snapshot().materialized_files())
+        scan_plan.scan.scan_metadata_seeded(
+            engine,
+            self.snapshot.snapshot().materialized_files(),
+            self.seed_rows.as_deref(),
+        )
     }
 
     async fn resolve_file_selection(
