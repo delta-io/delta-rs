@@ -2556,8 +2556,22 @@ mod tests {
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 3);
 
         // Configure session with max_distinct_values = 1 (so 2 distinct keys exceed the limit)
-        let mut state = source_build_side_session().as_ref().clone();
-        state.config_mut().options_mut().optimizer.hash_join_inlist_pushdown_max_distinct_values = 1;
+        let config = SessionConfig::new()
+            .set_usize(
+                "datafusion.optimizer.hash_join_single_partition_threshold",
+                0,
+            )
+            .set_usize(
+                "datafusion.optimizer.hash_join_single_partition_threshold_rows",
+                0,
+            )
+            .with_repartition_file_min_size(0)
+            .set_usize(
+                "datafusion.optimizer.hash_join_inlist_pushdown_max_distinct_values",
+                1,
+            );
+        let state: Arc<dyn datafusion::catalog::Session> =
+            Arc::new(SessionContext::new_with_config(config).state());
 
         let source = one_shot_source(
             Arc::clone(&schema),
@@ -2572,7 +2586,7 @@ mod tests {
             table,
             source,
             col("target.id").eq(col("source.id")),
-            Some(Arc::new(state)),
+            Some(state),
         )
         .await;
 
