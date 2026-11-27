@@ -108,7 +108,7 @@ jobs:
       - name: Run tests
         run: uv run --no-sync pytest -m '(lakefs and integration)' --doctest-modules
 
-  test-unitycatalog-databricks:
+  test-unitycatalog:
     name: Python Build (Python 3.11 Unity Catalog Integration tests)
     runs-on: ubuntu-latest
 
@@ -118,43 +118,14 @@ jobs:
       - name: Setup Environment
         uses: ./.github/actions/setup-env
 
-      - name: Run Mockoon CLI
-        # <https://github.com/mockoon/cli-action/releases/tag/v3.0.0>
-        uses: mockoon/cli-action@b935e787f80cca275e3834423e7bffb6256180e2
-        with:
-          version: "latest"
-          data-file: ".github/mockoon_data_files/unitycatalog_databricks.json"
-          port: 8080
-
       - name: Build and install deltalake
-        run: make develop
+        run: |
+          make develop
+          # Installs uc-server, which the tests start.
+          uv pip install --group unitycatalog
 
       - name: Run tests
-        run: ../../delta-rs/.github/scripts/retry_integration_test.sh unitycatalog_databricks 5 10
-
-  test-unitycatalog-oss:
-    name: Python Build (Python 3.11 Unity Catalog Integration tests)
-    runs-on: ubuntu-latest
-
-    steps:
-      # v6.0.2
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-      - name: Setup Environment
-        uses: ./.github/actions/setup-env
-
-      - name: Run Mockoon CLI
-        # <https://github.com/mockoon/cli-action/releases/tag/v3.0.0>
-        uses: mockoon/cli-action@b935e787f80cca275e3834423e7bffb6256180e2
-        with:
-          version: "latest"
-          data-file: ".github/mockoon_data_files/unitycatalog_oss.json"
-          port: 8080
-
-      - name: Build and install deltalake
-        run: make develop
-
-      - name: Run tests
-        run: ../../delta-rs/.github/scripts/retry_integration_test.sh unitycatalog_oss 5 10
+        run: uv run --no-sync pytest -m '(unitycatalog and integration)' --doctest-modules
 
   test-pyspark:
     name: PySpark Integration Tests

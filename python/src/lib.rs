@@ -210,7 +210,7 @@ struct RawDeltaTableMetaData {
 
 type StringVec = Vec<String>;
 
-const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 55;
+const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 56;
 static FALLBACK_TASK_CTX_PROVIDER: OnceLock<Arc<SessionContext>> = OnceLock::new();
 const MAX_OPTIMIZE_TARGET_SIZE: u64 = i64::MAX as u64;
 
@@ -2625,6 +2625,8 @@ fn filestats_to_expression_next<'py>(
                 match value {
                     // TODO: Handle nested field statistics.
                     Scalar::Struct(_) => {}
+                    // No statistic for this column in this file, so no bound.
+                    Scalar::Null(_) => {}
                     _ => {
                         let maybe_minimum =
                             cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, schema);
@@ -2654,6 +2656,8 @@ fn filestats_to_expression_next<'py>(
                 match value {
                     // TODO: Handle nested field statistics.
                     Scalar::Struct(_) => {}
+                    // No statistic for this column in this file, so no bound.
+                    Scalar::Null(_) => {}
                     _ => {
                         let maybe_maximum =
                             cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, schema);

@@ -342,20 +342,19 @@ impl Snapshot {
             inner: snapshot,
             materialized_files: None,
         });
-        if snapshot.version() as u64 == current_version {
-            // `target_version` was `None`, but there were no new commits.
-            // We may still need to pick up a checkpoint written for the current version.
-            self.refresh_same_version_checkpoint_if_needed(engine, current_version)
-                .await
-        } else {
-            match self.materialized_files() {
-                Some(materialized_files) => {
-                    snapshot
-                        .materialize_files_with_engine(engine, Some(materialized_files))
-                        .await
-                }
-                None => Ok(snapshot),
+        // The kernel adopts late checkpoints, so compare checkpoints too.
+        if snapshot.version() == current_version
+            && snapshot.checkpoint_version() == self.checkpoint_version()
+        {
+            return Ok(self);
+        }
+        match self.materialized_files() {
+            Some(materialized_files) => {
+                snapshot
+                    .materialize_files_with_engine(engine, Some(materialized_files))
+                    .await
             }
+            None => Ok(snapshot),
         }
     }
 
@@ -1231,6 +1230,26 @@ impl MaterializedFilesSeed {
             self.existing_predicate,
         )
     }
+
+    /// Keep only the files at these (batch, row) positions. At the seed's version each kept
+    /// file replays from its own row, as in a full replay.
+    #[cfg(feature = "datafusion")]
+    fn retain_rows(self, rows: &[(usize, usize)]) -> DeltaResult<Self> {
+        let mut keep_by_batch = std::collections::BTreeMap::new();
+        for &(batch, row) in rows {
+            keep_by_batch
+                .entry(batch)
+                .or_insert_with(|| vec![false; self.batches[batch].num_rows()])[row] = true;
+        }
+        let batches = keep_by_batch
+            .into_iter()
+            .map(|(batch, keep)| filter_record_batch(&self.batches[batch], &keep.into()))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            batches: batches.into(),
+            ..self
+        })
+    }
 }
 
 impl IntoIterator for MaterializedFilesSeed {
@@ -1585,6 +1604,7 @@ mod tests {
         test_utils::{
             TestResult, TestTables, assert_batches_sorted_eq, make_test_add,
             object_store::{
+                RecordedObjectStoreOperation,
                 drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
             },
         },
@@ -3398,7 +3418,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_snapshot_update_latest_same_version_without_changes_reuses_arc() -> TestResult {
-        let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
+        let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
+        let (log_store, mut operations) = recording_log_store(base);
         let snapshot = Arc::new(Snapshot::try_new(log_store.as_ref(), None).await?)
             .ensure_materialized_files(log_store.as_ref())
             .await?;
@@ -3407,8 +3428,10 @@ mod tests {
             .materialized_files()
             .cloned()
             .expect("expected materialized files");
+        drain_recorded_ops(&mut operations).await;
 
         let updated = snapshot.update(log_store.engine(), None).await?;
+        let update_ops = drain_recorded_ops(&mut operations).await;
 
         assert!(Arc::ptr_eq(&updated, &prior_snapshot));
         assert!(Arc::ptr_eq(
@@ -3417,6 +3440,13 @@ mod tests {
                 .expect("expected materialized files"),
             &prior_materialized
         ));
+        assert!(
+            matches!(
+                update_ops.as_slice(),
+                [RecordedObjectStoreOperation::ListWithOffset(_)]
+            ),
+            "expected a single log listing, got {update_ops:?}"
+        );
         Ok(())
     }
 
