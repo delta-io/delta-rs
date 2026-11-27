@@ -25,6 +25,122 @@ def test_safe_cast(tmp_path):
 
 
 @pytest.mark.parametrize("schema_mode", [None, "merge"])
+def test_append_unsigned_to_wider_signed_column(tmp_path, schema_mode):
+    write_deltalake(
+        tmp_path, Table.from_pydict({"foo": Array([1, 2], DataType.int16())})
+    )
+    kwargs = {} if schema_mode is None else {"schema_mode": schema_mode}
+    # 200 doesn't fit in int8 but does fit in the existing int16 column
+    write_deltalake(
+        tmp_path,
+        Table.from_pydict({"foo": Array([3, 200], DataType.uint8())}),
+        mode="append",
+        **kwargs,
+    )
+
+    dt = DeltaTable(tmp_path)
+    result = (
+        QueryBuilder().register("tbl", dt).execute("select foo from tbl").read_all()
+    )
+    assert result.schema.field("foo").type == DataType.int16()
+    assert sorted(result["foo"].to_pylist()) == [1, 2, 3, 200]
+
+
+def test_append_unsigned_int_overflows_signed_column(tmp_path):
+    write_deltalake(
+        tmp_path, Table.from_pydict({"foo": Array([1, 2], DataType.int8())})
+    )
+    with pytest.raises(DeltaError, match="Can't cast value 200 to type Int8"):
+        write_deltalake(
+            tmp_path,
+            Table.from_pydict({"foo": Array([3, 200], DataType.uint8())}),
+            mode="append",
+        )
+
+
+def test_append_unsigned_int_to_float_column(tmp_path):
+    write_deltalake(
+        tmp_path, Table.from_pydict({"foo": Array([1.0, 2.0], DataType.float64())})
+    )
+    write_deltalake(
+        tmp_path,
+        Table.from_pydict({"foo": Array([3, 200], DataType.uint8())}),
+        mode="append",
+    )
+
+    dt = DeltaTable(tmp_path)
+    result = (
+        QueryBuilder().register("tbl", dt).execute("select foo from tbl").read_all()
+    )
+    assert result.schema.field("foo").type == DataType.float64()
+    assert sorted(result["foo"].to_pylist()) == [1.0, 2.0, 3.0, 200.0]
+
+
+def test_append_unsigned_with_generated_column(tmp_path):
+    from deltalake import Field as DeltaField
+    from deltalake import Schema as DeltaSchema
+
+    schema = DeltaSchema(
+        [
+            DeltaField("a", "long"),
+            DeltaField("b", "long"),
+            DeltaField("c", "long", metadata={"delta.generationExpression": "a - b"}),
+        ]
+    )
+    DeltaTable.create(tmp_path, schema)
+    write_deltalake(
+        tmp_path,
+        Table.from_pydict(
+            {
+                "a": Array([0, 200], DataType.uint8()),
+                "b": Array([1, 250], DataType.uint8()),
+            }
+        ),
+        mode="append",
+    )
+
+    dt = DeltaTable(tmp_path)
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select a, b, c from tbl order by a")
+        .read_all()
+    )
+    assert result["a"].to_pylist() == [0, 200]
+    assert result["b"].to_pylist() == [1, 250]
+    assert result["c"].to_pylist() == [-1, -50]
+
+
+def test_overwrite_schema_with_unsigned_column(tmp_path):
+    write_deltalake(
+        tmp_path, Table.from_pydict({"foo": Array([1, 2], DataType.int64())})
+    )
+    # Overwriting the schema tries to write as the signed type with the
+    # same width, leading to overflow.
+    with pytest.raises(DeltaError, match="Can't cast value 200 to type Int8"):
+        write_deltalake(
+            tmp_path,
+            Table.from_pydict({"foo": Array([3, 200], DataType.uint8())}),
+            mode="overwrite",
+            schema_mode="overwrite",
+        )
+
+    # Overwrite without overflow succeeds, resulting in the same-width signed type
+    write_deltalake(
+        tmp_path,
+        Table.from_pydict({"foo": Array([3, 4], DataType.uint8())}),
+        mode="overwrite",
+        schema_mode="overwrite",
+    )
+    dt = DeltaTable(tmp_path)
+    result = (
+        QueryBuilder().register("tbl", dt).execute("select foo from tbl").read_all()
+    )
+    assert result.schema.field("foo").type == DataType.int8()
+    assert sorted(result["foo"].to_pylist()) == [3, 4]
+
+
+@pytest.mark.parametrize("schema_mode", [None, "merge"])
 def test_append_fractional_float64_to_int64_rejected(tmp_path, schema_mode):
     """Appending fractional float64 values into an int64 column must raise
     instead of silently truncating the values.
