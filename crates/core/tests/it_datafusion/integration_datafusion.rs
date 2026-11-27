@@ -1945,6 +1945,68 @@ async fn test_generated_column_spark_trunc_append_generates_date() {
     );
 }
 
+#[tokio::test]
+async fn test_generated_column_uses_table_types_for_narrow_source() {
+    let ctx = SessionContext::new();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let table_uri = tmp_dir.path().to_str().unwrap();
+    let table_schema = StructType::try_new(vec![
+        StructField::new(
+            "a".to_string(),
+            DataType::Primitive(PrimitiveType::Long),
+            false,
+        ),
+        StructField::new(
+            "b".to_string(),
+            DataType::Primitive(PrimitiveType::Long),
+            false,
+        ),
+        StructField::new(
+            "c".to_string(),
+            DataType::Primitive(PrimitiveType::Long),
+            false,
+        )
+        .with_metadata(vec![(
+            ColumnMetadataKey::GenerationExpression.as_ref().to_string(),
+            MetadataValue::String("a + b".to_string()),
+        )]),
+    ])
+    .unwrap();
+    let table = create_table_with_schema(table_uri, &table_schema).await;
+    let batch = RecordBatch::try_from_iter([
+        (
+            "a",
+            Arc::new(Int32Array::from(vec![2_000_000_000])) as ArrayRef,
+        ),
+        (
+            "b",
+            Arc::new(Int32Array::from(vec![2_000_000_000])) as ArrayRef,
+        ),
+    ])
+    .unwrap();
+
+    let table = table.write(vec![batch]).await.unwrap();
+    let batches = ctx
+        .read_table(table.table_provider().await.unwrap())
+        .unwrap()
+        .select_exprs(&["c"])
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    assert_batches_sorted_eq!(
+        &[
+            "+------------+",
+            "| c          |",
+            "+------------+",
+            "| 4000000000 |",
+            "+------------+",
+        ],
+        &batches
+    );
+}
+
 /// The first write to a location creates the table, so the generated columns come from the
 /// metadata this write commits rather than from a snapshot.
 #[tokio::test]

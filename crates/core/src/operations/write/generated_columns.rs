@@ -1,11 +1,14 @@
-use arrow_schema::Schema;
+use arrow::compute::can_cast_types;
+use arrow_schema::{DataType, Schema};
 use datafusion::catalog::Session;
-use datafusion::common::{Result, ScalarValue};
-use datafusion::logical_expr::{ExprSchemable, LogicalPlan, LogicalPlanBuilder, ident, when};
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::{DFSchema, Result, ScalarValue};
+use datafusion::logical_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ident, when};
 use datafusion::prelude::DataFrame;
-use datafusion::prelude::{cast, lit};
+use datafusion::prelude::{cast, lit, try_cast};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::table_features::TableFeature;
+use std::sync::Arc;
 use tracing::debug;
 
 use crate::{
@@ -35,11 +38,63 @@ fn is_column_resolution_error(err: &crate::DeltaTableError) -> bool {
     msg.contains("No field named") || msg.contains("Schema error")
 }
 
+/// The table type a primitive (non-nested) input column is cast to before a generation
+/// expression reads it, so the expression sees the same types as data validation.
+fn input_cast_type<'a>(
+    name: &str,
+    source_type: &DataType,
+    table_schema: &'a Schema,
+) -> Option<&'a DataType> {
+    let target = table_schema.field_with_name(name).ok()?.data_type();
+    let castable = !source_type.is_nested() && !target.is_nested();
+    (castable && target != source_type && can_cast_types(source_type, target)).then_some(target)
+}
+
+fn with_input_cast_types(plan_schema: &DFSchema, table_schema: &Schema) -> Result<DFSchema> {
+    let fields = plan_schema
+        .iter()
+        .map(|(qualifier, field)| {
+            let field = match input_cast_type(field.name(), field.data_type(), table_schema) {
+                Some(data_type) => {
+                    Arc::new(field.as_ref().clone().with_data_type(data_type.clone()))
+                }
+                None => Arc::clone(field),
+            };
+            (qualifier.cloned(), field)
+        })
+        .collect();
+    DFSchema::new_with_metadata(fields, plan_schema.metadata().clone())?
+        .with_functional_dependencies(plan_schema.functional_dependencies().clone())
+}
+
+fn cast_columns_to_table_types(
+    expr: Expr,
+    plan_schema: &DFSchema,
+    table_schema: &Schema,
+    safe_cast: bool,
+) -> Result<Expr> {
+    expr.transform(|expr| {
+        let Expr::Column(column) = &expr else {
+            return Ok(Transformed::no(expr));
+        };
+        let source_type = expr.get_type(plan_schema)?;
+        Ok(
+            match input_cast_type(&column.name, &source_type, table_schema) {
+                Some(data_type) if safe_cast => Transformed::yes(try_cast(expr, data_type.clone())),
+                Some(data_type) => Transformed::yes(cast(expr, data_type.clone())),
+                None => Transformed::no(expr),
+            },
+        )
+    })
+    .map(|transformed| transformed.data)
+}
+
 pub fn with_generated_columns(
     session: &dyn Session,
     plan: LogicalPlan,
     table_schema: &Schema,
     generated_cols: &Vec<GeneratedColumn>,
+    safe_cast: bool,
 ) -> Result<LogicalPlan> {
     if generated_cols.is_empty() {
         return Ok(plan);
@@ -53,6 +108,7 @@ pub fn with_generated_columns(
         .iter()
         .map(|f| ident(f.name()))
         .collect();
+    let input_types = with_input_cast_types(plan.schema(), table_schema)?;
 
     for generated_col in generated_cols {
         let name = generated_col.get_name();
@@ -61,15 +117,19 @@ pub fn with_generated_columns(
         }
 
         debug!("Adding missing generated column {}.", name);
-        // Try to resolve the generation expression against the current plan schema.
+        // Resolve the generation expression against the plan schema, with input columns
+        // typed as in the table.
         // In `SchemaMode::Merge`, the input batch may omit nullable columns
         // referenced by the expression. In that case,
         // parse_generated_column_expression fails because the column is not present yet.
         // A typed NULL placeholder keeps the pipeline moving. Schema evolution adds
         // the missing base columns as NULL later, and DataValidationExec evaluates
         // NULL IS NOT DISTINCT FROM NULL as true.
-        let expr = match parse_generated_column_expression(plan.schema(), generated_col, session) {
-            Ok(resolved) => resolved.alias(name),
+        let expr = match parse_generated_column_expression(&input_types, generated_col, session) {
+            Ok(resolved) => {
+                cast_columns_to_table_types(resolved, plan.schema(), table_schema, safe_cast)?
+                    .alias(name)
+            }
             Err(ref err) if is_column_resolution_error(err) => {
                 debug!(
                     "Could not resolve generation expression for column {} ({}), \
@@ -151,7 +211,7 @@ pub fn add_generated_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Date32Array, Int32Array};
+    use arrow::array::{Date32Array, Int32Array, Int64Array, StringArray};
     use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
     use arrow_array::RecordBatch;
     use datafusion::assert_batches_eq;
@@ -197,6 +257,7 @@ mod tests {
             df.clone().into_unoptimized_plan(),
             &table_schema,
             &generated_cols,
+            false,
         )?;
         let batches = ctx.execute_logical_plan(plan).await?.collect().await?;
         assert_eq!(batches[0].schema().field(0).name(), source_name);
@@ -273,7 +334,13 @@ mod tests {
 
         let generated_cols = vec![];
 
-        let result = with_generated_columns(&session, plan.clone(), &table_schema, &generated_cols);
+        let result = with_generated_columns(
+            &session,
+            plan.clone(),
+            &table_schema,
+            &generated_cols,
+            false,
+        );
         assert!(result.is_ok());
         // When no generated columns, the plan should be returned unchanged
         let result_plan = result.unwrap();
@@ -301,7 +368,7 @@ mod tests {
             &KernelDataType::INTEGER,
         )];
 
-        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols);
+        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols, false);
         assert!(result.is_ok());
 
         let result_plan = result.unwrap();
@@ -333,7 +400,7 @@ mod tests {
             &KernelDataType::DATE,
         )];
 
-        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols);
+        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols, false);
         assert!(result.is_ok(), "unexpected planning error: {result:?}");
         let result_plan = result.unwrap();
         assert!(
@@ -375,7 +442,7 @@ mod tests {
 
         let generated_cols = vec![];
 
-        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols);
+        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols, false);
         assert!(result.is_ok());
 
         let result_plan = result.unwrap();
@@ -411,7 +478,7 @@ mod tests {
             GeneratedColumn::new("product", "id * value", &KernelDataType::INTEGER),
         ];
 
-        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols);
+        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols, false);
         assert!(result.is_ok());
 
         let result_plan = result.unwrap();
@@ -448,7 +515,7 @@ mod tests {
             &KernelDataType::LONG,
         )];
 
-        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols);
+        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols, false);
         assert!(result.is_ok());
 
         let result_plan = result.unwrap();
@@ -479,6 +546,105 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_generated_column_uses_table_types_for_inputs() -> DeltaResult<()> {
+        let ctx = SessionContext::new();
+        let schema = Arc::new(Schema::new(vec![
+            ArrowField::new("a", ArrowDataType::Int32, false),
+            ArrowField::new("b", ArrowDataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![2_000_000_000])),
+                Arc::new(Int32Array::from(vec![2_000_000_000])),
+            ],
+        )?;
+        let plan = ctx.read_batch(batch)?.into_unoptimized_plan();
+        let table_schema = Schema::new(vec![
+            ArrowField::new("a", ArrowDataType::Int64, false),
+            ArrowField::new("b", ArrowDataType::Int64, false),
+            ArrowField::new("c", ArrowDataType::Int64, false),
+        ]);
+        let generated_cols = vec![GeneratedColumn::new("c", "a + b", &KernelDataType::LONG)];
+
+        let plan =
+            with_generated_columns(&ctx.state(), plan, &table_schema, &generated_cols, false)?;
+        let batches = ctx.execute_logical_plan(plan).await?.collect().await?;
+        assert!(!batches[0].schema().field_with_name("c")?.is_nullable());
+        assert_eq!(
+            batches[0].column_by_name("c").unwrap().as_ref(),
+            &Int64Array::from(vec![4_000_000_000])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_input_cast_type_skips_nested_types() {
+        let list = ArrowDataType::new_list(ArrowDataType::Int32, true);
+        let table_schema = Schema::new(vec![
+            ArrowField::new("a", ArrowDataType::Utf8, true),
+            ArrowField::new("b", list.clone(), true),
+            ArrowField::new("c", ArrowDataType::Int64, true),
+        ]);
+        assert_eq!(input_cast_type("a", &list, &table_schema), None);
+        assert_eq!(
+            input_cast_type("b", &ArrowDataType::Utf8, &table_schema),
+            None
+        );
+        assert_eq!(
+            input_cast_type("c", &ArrowDataType::Int64, &table_schema),
+            None
+        );
+        assert_eq!(
+            input_cast_type("c", &ArrowDataType::Int32, &table_schema),
+            Some(&ArrowDataType::Int64)
+        );
+    }
+
+    #[rstest::rstest]
+    #[case(false, true)]
+    #[case(true, false)]
+    #[tokio::test]
+    async fn test_generated_column_input_cast_respects_safe_cast(
+        #[case] safe_cast: bool,
+        #[case] expect_error: bool,
+    ) -> DeltaResult<()> {
+        let ctx = SessionContext::new();
+        let schema = Arc::new(Schema::new(vec![ArrowField::new(
+            "a",
+            ArrowDataType::Utf8,
+            true,
+        )]));
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec![Some("x")]))])?;
+        let plan = ctx.read_batch(batch)?.into_unoptimized_plan();
+        let table_schema = Schema::new(vec![
+            ArrowField::new("a", ArrowDataType::Int64, true),
+            ArrowField::new("c", ArrowDataType::Int64, true),
+        ]);
+        let generated_cols = vec![GeneratedColumn::new("c", "a + 1", &KernelDataType::LONG)];
+
+        let plan = with_generated_columns(
+            &ctx.state(),
+            plan,
+            &table_schema,
+            &generated_cols,
+            safe_cast,
+        )?;
+        let result = ctx.execute_logical_plan(plan).await?.collect().await;
+        if expect_error {
+            assert!(result.is_err());
+        } else {
+            let batches = result?;
+            assert_eq!(
+                batches[0].column_by_name("c").unwrap().as_ref(),
+                &Int64Array::from(vec![None])
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn test_mixed_existing_and_generated_columns() {
         let session = create_test_session();
@@ -497,7 +663,7 @@ mod tests {
             &KernelDataType::INTEGER,
         )];
 
-        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols);
+        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols, false);
         assert!(result.is_ok());
 
         let result_plan = result.unwrap();
@@ -542,7 +708,7 @@ mod tests {
             &KernelDataType::INTEGER,
         )];
 
-        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols);
+        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols, false);
         assert!(result.is_ok());
 
         let result_plan = result.unwrap();
@@ -597,7 +763,7 @@ mod tests {
         )];
 
         // Previously this would fail with "column user not found"
-        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols);
+        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols, false);
         assert!(
             result.is_ok(),
             "should not fail when generated column references a missing column: {:?}",
