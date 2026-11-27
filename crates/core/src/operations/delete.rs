@@ -984,7 +984,7 @@ mod tests {
             .options_mut()
             .execution
             .parquet
-            .compression = Some("gzip(6)".into());
+            .compression = Some("gzip(6)".parse().unwrap());
 
         for (path, metadata) in delete_and_read_footers(Some(Arc::new(state))).await {
             assert!(path.as_ref().ends_with(".gz.parquet"), "{path}");

@@ -55,10 +55,11 @@ use crate::delta_datafusion::{
 use crate::errors::{ColumnMappingOperation, DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
 use crate::kernel::{Action, Add, DataType, PartitionsExt, Remove, StructType, Version};
-use crate::kernel::{EagerSnapshot, resolve_snapshot};
+use crate::kernel::{EagerSnapshot, LogicalFileView, resolve_snapshot};
 use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
+use crate::protocol::checkpoints::catalog_managed_maintenance_error;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
@@ -426,6 +427,11 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
 
         Box::pin(async move {
             let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
+
+            if this.log_store.is_catalog_managed() {
+                return Err(catalog_managed_maintenance_error("OPTIMIZE"));
+            }
+
             if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
                 return Err(DeltaTableError::unsupported_column_mapping(
                     ColumnMappingOperation::Write,
@@ -625,24 +631,47 @@ struct SelectedFileScanFactory {
     snapshot: EagerSnapshot,
     log_store: LogStoreRef,
     scan_config: DeltaScanConfig,
+    row_by_path: Arc<HashMap<String, (usize, usize)>>,
 }
 
 impl SelectedFileScanFactory {
     fn new(snapshot: &EagerSnapshot, log_store: LogStoreRef, scan_config: DeltaScanConfig) -> Self {
+        let row_by_path = snapshot
+            .snapshot()
+            .materialized_files()
+            .into_iter()
+            .flat_map(|materialized_files| materialized_files.batches.iter().enumerate())
+            .flat_map(|(batch_index, batch)| {
+                (0..batch.num_rows()).map(move |row| {
+                    let path = LogicalFileView::new(batch.clone(), row).path().into_owned();
+                    (path, (batch_index, row))
+                })
+            })
+            .collect();
         Self {
             snapshot: snapshot.clone(),
             log_store,
             scan_config,
+            row_by_path: Arc::new(row_by_path),
         }
     }
 
-    fn provider_for(
-        &self,
-        adds: impl IntoIterator<Item = Add>,
-    ) -> Result<DeltaScanNext, DeltaTableError> {
+    fn provider_for(&self, files: &MergeBin) -> Result<DeltaScanNext, DeltaTableError> {
         let provider = DeltaScanNext::new(self.snapshot.clone(), self.scan_config.clone())?
             .with_log_store(self.log_store.clone());
-        Ok(provider.with_adds(adds))
+        let provider = match self.seed_rows(files) {
+            Some(seed_rows) => provider.with_seed_rows(seed_rows),
+            None => provider,
+        };
+        Ok(provider.with_adds(files.iter().cloned()))
+    }
+
+    /// Positions of the bin's files, or `None` if one is not materialized.
+    fn seed_rows(&self, files: &MergeBin) -> Option<Vec<(usize, usize)>> {
+        files
+            .iter()
+            .map(|add| self.row_by_path.get(&add.path).copied())
+            .collect()
     }
 }
 
@@ -744,7 +773,7 @@ impl MergePlan {
         context: Arc<SessionContext>,
         scan_factory: SelectedFileScanFactory,
     ) -> Result<ParquetReadStream, DeltaTableError> {
-        let provider = scan_factory.provider_for(files.iter().cloned())?;
+        let provider = scan_factory.provider_for(&files)?;
         let df = context.read_table(Arc::new(provider))?;
         let stream = df
             .execute_stream()
@@ -768,7 +797,7 @@ impl MergePlan {
         use datafusion::logical_expr::expr::ScalarFunction;
         use datafusion::logical_expr::{Expr, ScalarUDF, ident};
 
-        let provider = scan_factory.provider_for(files.iter().cloned())?;
+        let provider = scan_factory.provider_for(&files)?;
         let df = context.ctx.read_table(Arc::new(provider))?;
 
         let cols = context
@@ -1496,6 +1525,46 @@ mod compact_planner_tests {
         let err = crate::protocol::DeltaOperation::try_from(input).unwrap_err();
         assert!(err.to_string().contains("optimize target_size"));
         assert!(err.to_string().contains("i64::MAX"));
+    }
+
+    #[tokio::test]
+    async fn test_bin_scan_replays_only_the_bin_files() -> DeltaResult<()> {
+        use crate::delta_datafusion::{FileSelection, MissingSelectedFilePolicy, create_session};
+        use crate::test_utils::TestTables;
+
+        let table = TestTables::Delta0_8_0SpecialPartitioned
+            .table_builder()?
+            .load()
+            .await?;
+        let snapshot = table.snapshot()?.snapshot();
+        let adds: Vec<_> = snapshot
+            .try_log_data()?
+            .iter()
+            .map(|file| file.to_add())
+            .collect();
+        let bin_file = adds
+            .iter()
+            .find(|add| add.partition_values["x"].as_deref() == Some("B B"))
+            .expect("file for partition B B");
+        let factory =
+            SelectedFileScanFactory::new(snapshot, table.log_store(), DeltaScanConfig::default());
+        let bin = MergeBin::from_file(bin_file.clone());
+        let provider = factory.provider_for(&bin)?;
+
+        // Request both files so the bin's seed alone determines which rows are visible.
+        let selection = FileSelection::from_adds(adds)
+            .with_missing_file_policy(MissingSelectedFilePolicy::Ignore);
+        let batches = create_session()
+            .into_inner()
+            .read_table(Arc::new(provider.with_file_selection(selection)))?
+            .select_columns(&["x"])?
+            .collect()
+            .await?;
+        datafusion::assert_batches_eq!(
+            &["+-----+", "| x   |", "+-----+", "| B B |", "+-----+"],
+            &batches
+        );
+        Ok(())
     }
 }
 

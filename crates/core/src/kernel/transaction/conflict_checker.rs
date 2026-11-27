@@ -294,9 +294,8 @@ impl WinningCommitSummary {
     pub fn metadata_updates(&self) -> Vec<Metadata> {
         self.actions
             .iter()
-            .cloned()
             .filter_map(|action| match action {
-                Action::Metadata(metadata) => Some(metadata),
+                Action::Metadata(metadata) => Some(metadata.clone()),
                 _ => None,
             })
             .collect()
@@ -305,9 +304,8 @@ impl WinningCommitSummary {
     pub fn app_level_transactions(&self) -> HashSet<String> {
         self.actions
             .iter()
-            .cloned()
             .filter_map(|action| match action {
-                Action::Txn(txn) => Some(txn.app_id),
+                Action::Txn(txn) => Some(txn.app_id.clone()),
                 _ => None,
             })
             .collect()
@@ -316,9 +314,8 @@ impl WinningCommitSummary {
     pub fn protocol(&self) -> Vec<Protocol> {
         self.actions
             .iter()
-            .cloned()
             .filter_map(|action| match action {
-                Action::Protocol(protocol) => Some(protocol),
+                Action::Protocol(protocol) => Some(protocol.clone()),
                 _ => None,
             })
             .collect()
@@ -327,9 +324,8 @@ impl WinningCommitSummary {
     pub fn removed_files(&self) -> Vec<Remove> {
         self.actions
             .iter()
-            .cloned()
             .filter_map(|action| match action {
-                Action::Remove(remove) => Some(remove),
+                Action::Remove(remove) => Some(remove.clone()),
                 _ => None,
             })
             .collect()
@@ -338,9 +334,8 @@ impl WinningCommitSummary {
     pub fn added_files(&self) -> Vec<Add> {
         self.actions
             .iter()
-            .cloned()
             .filter_map(|action| match action {
-                Action::Add(add) => Some(add),
+                Action::Add(add) => Some(add.clone()),
                 _ => None,
             })
             .collect()
@@ -628,9 +623,8 @@ impl<'a> ConflictChecker<'a> {
             .txn_info
             .actions
             .iter()
-            .cloned()
             .filter_map(|action| match action {
-                Action::Remove(remove) => Some(remove.path),
+                Action::Remove(remove) => Some(remove.path.clone()),
                 _ => None,
             })
             .collect();
