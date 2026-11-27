@@ -14,7 +14,7 @@ def _datafusion_major_version() -> int | None:
         return None
 
 
-@pytest.mark.parametrize("installed", ["53.0.0", "54.0.0", "56.0.0", "invalid"])
+@pytest.mark.parametrize("installed", ["53.0.0", "54.0.0", "55.0.0", "invalid"])
 def test_datafusion_table_provider_incompatible_version_errors(
     tmp_path, monkeypatch, installed
 ):
@@ -38,7 +38,7 @@ def test_datafusion_table_provider_incompatible_version_errors(
                 "incompatible consumers must be rejected before accessing their session"
             )
 
-    with pytest.raises(RuntimeError, match="datafusion==55"):
+    with pytest.raises(RuntimeError, match="datafusion==56"):
         dt.__datafusion_table_provider__(session=UnreachableSession())
     assert calls == ["datafusion"]
 
@@ -69,7 +69,7 @@ def test_datafusion_table_provider_accepts_session_keyword_argument(
 ):
     def fake_version(pkg: str) -> str:
         assert pkg == "datafusion"
-        return "55.0.0"
+        return "56.0.0"
 
     monkeypatch.setattr("importlib.metadata.version", fake_version)
 
@@ -91,7 +91,7 @@ def test_datafusion_table_provider_invalid_task_ctx_capsule_name_errors(
 
     def fake_version(pkg: str) -> str:
         assert pkg == "datafusion"
-        return "55.0.0"
+        return "56.0.0"
 
     monkeypatch.setattr("importlib.metadata.version", fake_version)
 
@@ -122,10 +122,10 @@ def test_datafusion_table_provider(tmp_path):
             "DataFusion Python integration tests are disabled by default; set DELTALAKE_RUN_DATAFUSION_TESTS=1"
         )
 
-    # Skip until matching wheels are available; the runtime guard requires major 55.
+    # Skip until matching wheels are available; the runtime guard requires major 56.
     datafusion_major = _datafusion_major_version()
-    if datafusion_major != 55:
-        pytest.skip("DataFusion Python integration requires datafusion==55.x wheels")
+    if datafusion_major != 56:
+        pytest.skip("DataFusion Python integration requires datafusion==56.x wheels")
     nrows = 5
     table = Table(
         {

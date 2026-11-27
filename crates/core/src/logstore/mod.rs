@@ -211,9 +211,14 @@ pub fn logstore_for(location: &Url, storage_config: StorageConfig) -> DeltaResul
     let scheme = Url::parse(&format!("{}://", location.scheme()))
         .map_err(|_| DeltaTableError::InvalidTableLocation(location.clone().into()))?;
 
-    if let Some(entry) = object_store_factories().get(&scheme) {
+    // Clone the factory and release the registry entry before the call. A factory that registers
+    // handlers needs write lock that might cause a deadlock.
+    let factory = object_store_factories()
+        .get(&scheme)
+        .map(|entry| entry.value().clone());
+    if let Some(factory) = factory {
         debug!("Found a storage provider for {scheme} ({location})");
-        let (root_store, _prefix) = entry.value().parse_url_opts(location, &storage_config)?;
+        let (root_store, _prefix) = factory.parse_url_opts(location, &storage_config)?;
         return logstore_with(root_store, location, storage_config);
     }
 

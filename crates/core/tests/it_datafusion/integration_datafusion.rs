@@ -1361,7 +1361,7 @@ mod local {
                     .schema()
                     .as_ref()
                     .clone()
-                    .with_metadata(Default::default())
+                    .with_metadata(std::collections::HashMap::<String, String>::new())
             )
         );
 

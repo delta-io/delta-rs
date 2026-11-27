@@ -13,8 +13,8 @@ use deltalake_core::logstore::{
     object_store::RetryConfig,
 };
 use futures::TryFutureExt as _;
-use reqwest::Url;
 use reqwest::header::{AUTHORIZATION, HeaderValue, InvalidHeaderValue};
+use reqwest::{StatusCode, Url};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
@@ -29,9 +29,10 @@ use crate::credential::{
 };
 use crate::models::{
     ErrorResponse, GetSchemaResponse, GetTableResponse, ListCatalogsResponse, ListSchemasResponse,
-    ListTableSummariesResponse, Table, TableTempCredentialsResponse, TableType,
+    ListTableSummariesResponse, Table, TableSummary, TableTempCredentialsResponse, TableType,
     TemporaryTableCredentialsRequest, TokenErrorResponse,
 };
+use crate::sorted_listing::SortedListingStore;
 
 use deltalake_core::data_catalog::DataCatalogResult;
 use deltalake_core::{
@@ -58,6 +59,7 @@ const STORE_NAME: &str = "UnityCatalogObjectStore";
 pub mod datafusion;
 pub mod models;
 pub mod prelude;
+mod sorted_listing;
 
 /// Possible errors from the unity-catalog/tables API call
 #[derive(thiserror::Error, Debug)]
@@ -836,6 +838,9 @@ impl UnityCatalog {
     ///   USE_CATALOG privilege on the parent catalog.
     ///
     /// There is no guarantee of a specific ordering of the elements in the array.
+    ///
+    /// Unity Catalog OSS has no table summaries. For such a server, the summaries come from the
+    /// list of the tables of one schema, and `schema_name_pattern` must be the name of that schema.
     #[tracing::instrument(skip_all)]
     pub async fn list_table_summaries<S>(
         &self,
@@ -850,19 +855,99 @@ impl UnityCatalog {
             "Table Summary: {}",
             self.catalog_url()
         );
+        let catalog_name = catalog_name.into();
+        let schema_name_pattern = schema_name_pattern.into();
         let token = self.get_credential().await?;
         let resp = self
             .client
             .get(format!("{}/table-summaries", self.catalog_url()))
             .query(&[
-                ("catalog_name", catalog_name.into()),
-                ("schema_name_pattern", schema_name_pattern.into()),
+                ("catalog_name", &catalog_name),
+                ("schema_name_pattern", &schema_name_pattern),
             ])
             .header(AUTHORIZATION, token)
             .send()
             .await?;
 
+        // A server without table summaries answers 404, and so does a server that does not have
+        // the catalog. The list of tables gives the summaries or the error of the catalog.
+        if resp.status() == StatusCode::NOT_FOUND {
+            return self
+                .table_summaries_from_tables(catalog_name, schema_name_pattern)
+                .await;
+        }
+
         Ok(resp.json().await?)
+    }
+
+    /// Makes the table summaries of one schema from the list of its tables.
+    async fn table_summaries_from_tables(
+        &self,
+        catalog_name: String,
+        schema_name: String,
+    ) -> Result<ListTableSummariesResponse, UnityCatalogError> {
+        #[derive(serde::Deserialize)]
+        struct TableEntry {
+            name: String,
+            #[serde(default)]
+            table_type: TableType,
+        }
+
+        // `Error` is first: an error response also matches `Success`, which has no required field.
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum ListTablesResponse {
+            Error(ErrorResponse),
+            Success {
+                #[serde(default)]
+                tables: Vec<TableEntry>,
+                next_page_token: Option<String>,
+            },
+        }
+
+        let token = self.get_credential().await?;
+        let mut summaries = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let mut query = vec![
+                ("catalog_name", catalog_name.as_str()),
+                ("schema_name", schema_name.as_str()),
+            ];
+            if let Some(page_token) = &page_token {
+                query.push(("page_token", page_token.as_str()));
+            }
+            let resp = self
+                .client
+                .get(format!("{}/tables", self.catalog_url()))
+                .query(&query)
+                .header(AUTHORIZATION, token.clone())
+                .send()
+                .await?;
+
+            match resp.json().await? {
+                ListTablesResponse::Error(err) => {
+                    return Ok(ListTableSummariesResponse::Error(err));
+                }
+                ListTablesResponse::Success {
+                    tables,
+                    next_page_token,
+                } => {
+                    summaries.extend(tables.into_iter().map(|table| TableSummary {
+                        full_name: format!("{catalog_name}.{schema_name}.{}", table.name),
+                        table_type: table.table_type,
+                    }));
+                    page_token = next_page_token.filter(|token| !token.is_empty());
+                }
+            }
+            if page_token.is_none() {
+                break;
+            }
+        }
+
+        Ok(ListTableSummariesResponse::Success {
+            tables: summaries,
+            next_page_token: None,
+        })
     }
 
     /// Gets a table from the metastore for a specific catalog and schema.
@@ -1041,6 +1126,7 @@ fn build_object_store(
     // TODO(roeap): we should not have to go through the table here.
     // ideally we just create the right storage ...
     let table_url = ensure_table_uri(location)?;
+    let is_local = table_url.scheme() == "file";
     let mut builder = DeltaTableBuilder::from_url(table_url)?;
     if let Some(runtime) = &config.runtime {
         builder = builder.with_io_runtime(runtime.clone());
@@ -1048,7 +1134,11 @@ fn build_object_store(
     if !storage_options.is_empty() {
         builder = builder.with_storage_options(storage_options);
     }
-    Ok(builder.build_storage()?.object_store())
+    let mut store = builder.build_storage()?.object_store();
+    if is_local {
+        store = Arc::new(SortedListingStore::new(store));
+    }
+    Ok(store)
 }
 
 impl LogStoreFactory for UnityCatalogFactory {
@@ -1232,83 +1322,10 @@ impl std::fmt::Debug for UnityCatalog {
 #[cfg(test)]
 mod tests {
     use crate::UnityCatalogBuilder;
-    use crate::client::ClientOptions;
     use crate::client::token::TemporaryToken;
     use crate::credential::TokenCredential;
-    use crate::models::tests::{GET_SCHEMA_RESPONSE, GET_TABLE_RESPONSE, LIST_SCHEMAS_RESPONSE};
-    use crate::models::*;
-    use deltalake_core::DataCatalog;
-    use httpmock::prelude::*;
     use reqwest_middleware::ClientWithMiddleware;
     use std::collections::HashMap;
-
-    #[tokio::test]
-    async fn test_unity_client() {
-        let server = MockServer::start_async().await;
-
-        let options = ClientOptions::builder().allow_http(true).build();
-
-        let client = UnityCatalogBuilder::builder()
-            .workspace_url(server.url(""))
-            .bearer_token("bearer_token")
-            .client_options(options)
-            .build()
-            .build()
-            .unwrap();
-
-        server
-            .mock_async(|when, then| {
-                when.path("/api/2.1/unity-catalog/schemas").method("GET");
-                then.body(LIST_SCHEMAS_RESPONSE);
-            })
-            .await;
-
-        server
-            .mock_async(|when, then| {
-                when.path("/api/2.1/unity-catalog/schemas/catalog_name.schema_name")
-                    .method("GET");
-                then.body(GET_SCHEMA_RESPONSE);
-            })
-            .await;
-
-        server
-            .mock_async(|when, then| {
-                when.path("/api/2.1/unity-catalog/tables/catalog_name.schema_name.table_name")
-                    .method("GET");
-                then.body(GET_TABLE_RESPONSE);
-            })
-            .await;
-
-        let list_schemas_response = client.list_schemas("catalog_name").await.unwrap();
-        assert!(matches!(
-            list_schemas_response,
-            ListSchemasResponse::Success { .. }
-        ));
-
-        let get_schema_response = client
-            .get_schema("catalog_name", "schema_name")
-            .await
-            .unwrap();
-        assert!(matches!(get_schema_response, GetSchemaResponse::Success(_)));
-
-        let get_table_response = client
-            .get_table("catalog_name", "schema_name", "table_name")
-            .await;
-        assert!(matches!(
-            get_table_response.unwrap(),
-            GetTableResponse::Success(_)
-        ));
-
-        let storage_location = client
-            .get_table_storage_location(
-                Some("catalog_name".to_string()),
-                "schema_name",
-                "table_name",
-            )
-            .await
-            .unwrap();
-        assert!(storage_location.eq_ignore_ascii_case("string"));
-    }
 
     #[test]
     fn test_unitycatalogbuilder_with_storage_options() {

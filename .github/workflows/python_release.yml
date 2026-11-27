@@ -31,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         target: [x86_64-apple-darwin, aarch64-apple-darwin]
-    runs-on: macos-14
+    runs-on: macos-26
     steps:
       # v6.0.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd

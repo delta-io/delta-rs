@@ -192,6 +192,11 @@ impl LogicalFileView {
             })
     }
 
+    /// Returns the tags stored in the log for this file, if any.
+    pub fn tags(&self) -> Option<HashMap<String, Option<String>>> {
+        self.file_constant_map(FIELD_NAME_TAGS)
+    }
+
     fn file_constant_values(&self) -> Option<&StructArray> {
         self.files
             .column_by_name(FIELD_NAME_FILE_CONSTANT_VALUES)
@@ -330,7 +335,7 @@ impl LogicalFileView {
             modification_time: self.modification_time(),
             data_change: true,
             stats: self.stats(),
-            tags: self.file_constant_map(FIELD_NAME_TAGS),
+            tags: self.tags(),
             deletion_vector: self.deletion_vector().map(|dv| dv.descriptor()),
             base_row_id: self.file_constant_i64(FIELD_NAME_BASE_ROW_ID),
             default_row_commit_version: self
@@ -602,10 +607,7 @@ mod tests {
     use futures::TryStreamExt;
     use std::sync::Arc;
 
-    fn logical_file_view_with_stats(
-        raw_stats_json: Option<&str>,
-        stats_parsed: StructArray,
-    ) -> LogicalFileView {
+    fn base_scan_row_columns() -> (arrow_schema::Schema, Vec<ArrayRef>) {
         let base_schema: arrow_schema::Schema =
             scan_row_schema().as_ref().try_into_arrow().unwrap();
         let mut columns: Vec<ArrayRef> = base_schema
@@ -618,6 +620,14 @@ mod tests {
         columns[base_schema.index_of("size").unwrap()] = Arc::new(Int64Array::from(vec![1]));
         columns[base_schema.index_of("modificationTime").unwrap()] =
             Arc::new(Int64Array::from(vec![1]));
+        (base_schema, columns)
+    }
+
+    fn logical_file_view_with_stats(
+        raw_stats_json: Option<&str>,
+        stats_parsed: StructArray,
+    ) -> LogicalFileView {
+        let (base_schema, mut columns) = base_scan_row_columns();
         columns[base_schema.index_of("stats").unwrap()] =
             Arc::new(StringArray::from(vec![raw_stats_json]));
 
@@ -708,6 +718,46 @@ mod tests {
         ]);
 
         logical_file_view_with_stats(None, full_stats)
+    }
+
+    fn logical_file_view_with_tags(tags: &[(&str, Option<&str>)]) -> LogicalFileView {
+        use arrow_array::builder::{MapBuilder, MapFieldNames, StringBuilder};
+
+        let (base_schema, mut columns) = base_scan_row_columns();
+
+        let fcv_idx = base_schema.index_of("fileConstantValues").unwrap();
+        let ArrowDataType::Struct(fcv_fields) = base_schema.field(fcv_idx).data_type().clone()
+        else {
+            panic!("fileConstantValues should be a struct");
+        };
+        let map_names = MapFieldNames {
+            entry: "key_value".into(),
+            key: "key".into(),
+            value: "value".into(),
+        };
+        let children: Vec<ArrayRef> = fcv_fields
+            .iter()
+            .map(|field| match field.name().as_str() {
+                "tags" => {
+                    let mut map = MapBuilder::new(
+                        Some(map_names.clone()),
+                        StringBuilder::new(),
+                        StringBuilder::new(),
+                    );
+                    for (key, value) in tags {
+                        map.keys().append_value(key);
+                        map.values().append_option(*value);
+                    }
+                    map.append(true).unwrap();
+                    Arc::new(map.finish()) as ArrayRef
+                }
+                _ => new_null_array(field.data_type(), 1),
+            })
+            .collect();
+        columns[fcv_idx] = Arc::new(StructArray::new(fcv_fields, children, None));
+
+        let batch = RecordBatch::try_new(Arc::new(base_schema), columns).unwrap();
+        LogicalFileView::new(batch, 0)
     }
 
     fn partition_identity_schema() -> StructType {
@@ -996,6 +1046,24 @@ mod tests {
         assert_eq!(view.add_action().stats.as_deref(), Some(full_stats_json));
         assert_eq!(view.num_records(), Some(11));
         assert!(view.min_values().is_none());
+    }
+
+    #[test]
+    fn logical_file_view_reads_tags_from_file_constant_values() {
+        let view = logical_file_view_with_tags(&[("foo", Some("bar")), ("no-value", None)]);
+
+        let tags = view.tags().expect("tags map should be present");
+        assert_eq!(tags.get("foo"), Some(&Some("bar".to_string())));
+        assert_eq!(tags.get("no-value"), Some(&None));
+        // to_add must preserve the tags
+        assert_eq!(view.to_add().tags, Some(tags));
+    }
+
+    #[test]
+    fn logical_file_view_tags_absent_when_file_constant_values_null() {
+        let view = logical_file_view_without_raw_stats();
+        assert!(view.tags().is_none());
+        assert!(view.to_add().tags.is_none());
     }
 
     #[test]

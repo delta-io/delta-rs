@@ -94,7 +94,7 @@ impl std::future::IntoFuture for LoadBuilder {
             let stream = crate::datafile::datafusion_ext::coalesce_provider_scan(
                 &provider,
                 session.as_ref(),
-                projection.as_ref(),
+                projection.as_deref(),
                 None,
             )
             .await?;
