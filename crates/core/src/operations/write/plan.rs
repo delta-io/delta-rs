@@ -301,6 +301,7 @@ pub(super) fn prepare_write(input: WritePreparationInput<'_>) -> DeltaResult<Pre
             source,
             &table_schema,
             &snapshot.schema().get_generated_columns()?,
+            safe_cast,
         )?;
     }
 
