@@ -1635,4 +1635,122 @@ mod tests {
 
         Ok(())
     }
+
+    // ------------------------------------------------------------------
+    // Deletion-vector metadata-scan regression checks
+    // ------------------------------------------------------------------
+
+    /// Return the number of files carrying a deletion vector and the total
+    /// logical mask entry count across those selection vectors.
+    fn dv_selection_vector_entry_counts(exec: &DeltaScanMetaExec) -> (usize, usize) {
+        let total_mask_entries: usize = exec
+            .selection_vectors
+            .iter()
+            .map(|entry| entry.value().len())
+            .sum();
+        let dv_count = exec.selection_vectors.len();
+        (dv_count, total_mask_entries)
+    }
+
+    fn short_mask_padded_files_count(exec: &DeltaScanMetaExec) -> Option<usize> {
+        let metrics = exec.metrics()?;
+        metrics
+            .sum_by_name("dv_short_mask_padded_files_total")
+            .map(|value| value.as_usize())
+    }
+
+    #[tokio::test]
+    async fn test_dv_metadata_scan_populates_selection_vectors() -> TestResult {
+        let table = TestTables::WithDvSmall.table_builder()?.load().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider
+            .scan(&session.state(), Some(&vec![]), &[], None)
+            .await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected metadata-only scan with DVs")
+            .clone();
+
+        let (dv_count, total_mask_entries) = dv_selection_vector_entry_counts(&exec);
+
+        assert!(
+            dv_count > 0,
+            "expected at least one file with a deletion vector, got {dv_count}"
+        );
+        assert!(
+            total_mask_entries > 0,
+            "expected non-zero DV selection-vector entries, got {total_mask_entries}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dv_short_mask_counter_stays_zero_for_full_length_mask() -> TestResult {
+        // The dv_short_mask_padded_files_total counter is registered when
+        // DeltaScanMetaStream::new runs. WithDvSmall has a full-length mask so
+        // padded_rows stays 0 and the counter must remain at 0.
+        let table = TestTables::WithDvSmall.table_builder()?.load().await?;
+        let provider = table.table_provider().await?;
+        let session = create_session();
+        let state = session.state();
+        let scan = provider.scan(&state, Some(&vec![]), &[], None).await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected metadata-only scan with DVs")
+            .clone();
+
+        let task_ctx = state.task_ctx();
+        let stream = exec.execute(0, task_ctx)?;
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        assert_eq!(batches.len(), 1, "expected one batch from WithDvSmall");
+        let row_count = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+        assert_eq!(row_count, 8, "WithDvSmall: 10 rows minus 2 deleted = 8");
+
+        assert_eq!(
+            short_mask_padded_files_count(&exec),
+            Some(0),
+            "full-length mask should register dv_short_mask_padded_files_total at 0"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dv_short_mask_counter_increments_for_short_mask() -> TestResult {
+        let table = TestTables::WithDvSmall.table_builder()?.load().await?;
+        let provider = table.table_provider().await?;
+        let session = create_session();
+        let state = session.state();
+        let scan = provider.scan(&state, Some(&vec![]), &[], None).await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected metadata-only scan with DVs")
+            .clone();
+
+        // Truncate the selection vector shorter than the 10-row file so
+        // apply_selection_vector must pad the trailing rows as kept.
+        for mut entry in exec.selection_vectors.iter_mut() {
+            *entry.value_mut() = vec![false, true];
+        }
+
+        let task_ctx = state.task_ctx();
+        let stream = exec.execute(0, task_ctx)?;
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        assert_eq!(batches.len(), 1);
+        let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(
+            row_count, 9,
+            "10 rows with short mask [false, true] padded with 8 trues = 9 kept rows"
+        );
+
+        assert_eq!(
+            short_mask_padded_files_count(&exec),
+            Some(1),
+            "short mask must increment dv_short_mask_padded_files_total to 1"
+        );
+
+        Ok(())
+    }
 }
