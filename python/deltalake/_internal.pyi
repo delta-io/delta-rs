@@ -71,6 +71,7 @@ class RawDeltaTableMetaData:
     partition_columns: list[str]
     created_time: int
     configuration: dict[str, str]
+    format_options: dict[str, str]
 
 class CommitInfoIterator:
     @property
@@ -314,6 +315,7 @@ class RawDeltaTable:
         name: str | None,
         description: str | None,
         configuration: Mapping[str, str | None] | None,
+        format_options: Mapping[str, str] | None,
         writer_properties: WriterProperties | None,
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
@@ -347,6 +349,7 @@ def write_to_deltalake(
     name: str | None,
     description: str | None,
     configuration: Mapping[str, str | None] | None,
+    format_options: Mapping[str, str] | None,
     storage_options: dict[str, str] | None,
     writer_properties: WriterProperties | None,
     commit_properties: CommitProperties | None,
@@ -376,6 +379,7 @@ def create_deltalake(
     storage_options: dict[str, str] | None,
     commit_properties: CommitProperties | None,
     post_commithook_properties: PostCommitHookProperties | None,
+    format_options: Mapping[str, str] | None,
 ) -> None: ...
 def get_num_idx_cols_and_stats_columns(
     table: RawDeltaTable | None, configuration: Mapping[str, str | None] | None

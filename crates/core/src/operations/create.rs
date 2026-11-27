@@ -15,6 +15,7 @@ use crate::kernel::{Action, DataType, MetadataExt, ProtocolExt as _, StructField
 use crate::kernel::{ProtocolInner, new_metadata};
 use crate::logstore::LogStoreRef;
 use crate::logstore::with_operation;
+use crate::parquet_utils::validate_format_options;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
@@ -85,6 +86,7 @@ pub struct CreateBuilder {
     actions: Vec<Action>,
     log_store: Option<LogStoreRef>,
     configuration: HashMap<String, Option<String>>,
+    format_options: HashMap<String, String>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     raise_if_key_not_exists: bool,
@@ -110,6 +112,7 @@ impl CreateBuilder {
             actions: Default::default(),
             log_store: None,
             configuration: Default::default(),
+            format_options: Default::default(),
             commit_properties: CommitProperties::default(),
             raise_if_key_not_exists: true,
         }
@@ -227,6 +230,21 @@ impl CreateBuilder {
         self
     }
 
+    /// Set the `format.options` map stored on the table's `Metadata`.
+    ///
+    /// Format options are passed to the parquet writer when files are produced (e.g. enabling
+    /// content-defined chunking via `contentDefinedChunking.enabled = "true"`).
+    pub fn with_format_options(
+        mut self,
+        options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.format_options = options
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect();
+        self
+    }
+
     /// Additional metadata to be added to commit info
     pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
         self.commit_properties = commit_properties;
@@ -339,11 +357,13 @@ impl CreateBuilder {
             schema
         };
 
+        validate_format_options(&self.format_options)?;
         let mut metadata = new_metadata(
             &schema,
             self.partition_columns.unwrap_or_default(),
             configuration,
-        )?;
+        )?
+        .with_format_options(self.format_options)?;
         if let Some(name) = self.name {
             metadata = metadata.with_name(name)?;
         }
@@ -817,6 +837,27 @@ mod tests {
                 .unwrap()
                 .clone();
             assert_eq!(String::from("value"), value);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_rejects_invalid_content_defined_chunking_options() {
+        let invalid = [
+            ("contentDefinedChunking.enabled", "yes"),
+            ("contentDefinedChunking.minChunkSize", "64KiB"),
+            ("contentDefinedChunking.minChunkSize", "0"),
+            // above the default maximum chunk size of 1 MiB
+            ("contentDefinedChunking.minChunkSize", "2097152"),
+            ("contentDefinedChunking.normLevel", "high"),
+            ("contentDefinedChunking.minChunksize", "65536"),
+        ];
+        for (key, value) in invalid {
+            let result = CreateBuilder::new()
+                .with_location("memory:///")
+                .with_columns(get_delta_schema().fields().cloned())
+                .with_format_options([("contentDefinedChunking.enabled", "true"), (key, value)])
+                .await;
+            assert!(result.is_err(), "expected {key}={value} to be rejected");
         }
     }
 }
