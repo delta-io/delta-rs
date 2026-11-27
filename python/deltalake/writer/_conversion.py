@@ -8,13 +8,12 @@ def _convert_arro3_schema_to_delta(
     schema: Arro3Schema,
     existing_schema: Arro3Schema | None = None,
     replacing_existing_schema: bool = False,
-    convert_unsigned: bool = True,
 ) -> Arro3Schema:
     """Convert an arro3 schema to a schema compatible with Delta Lake. Converts unsigned integers
     to the type of an existing numeric column (signed integer, floating-point, or decimal) when
-    not replacing the existing schema, or otherwise to their signed equivalent unless
-    ``convert_unsigned`` is False, and converts all timestamps to `us` timestamps, except
-    nanosecond timestamps when the experimental nanosecond timestamp feature is enabled.
+    not replacing the existing schema, or otherwise to their signed equivalent, and converts all
+    timestamps to `us` timestamps, except nanosecond timestamps when the experimental nanosecond
+    timestamp feature is enabled.
     Also handles null column types by converting them to match
     corresponding fields in the existing table schema.
 
@@ -23,8 +22,6 @@ def _convert_arro3_schema_to_delta(
         existing_schema (Arro3Schema, optional): Existing table schema to match null and unsigned types against. Defaults to None.
         replacing_existing_schema (bool): Whether the write replaces the existing schema rather than keeping it,
             in which case unsigned integers are converted to their signed equivalent rather than matching existing numeric columns. Defaults to False.
-        convert_unsigned (bool): Whether to convert unsigned integer types to signed equivalents.
-            Set to False for operations like MERGE where Rust casts all source expressions directly. Defaults to True.
 
     Returns:
         Arro3Schema: Delta-compatible schema with converted types.
@@ -60,8 +57,6 @@ def _convert_arro3_schema_to_delta(
         elif DataType.is_fixed_size_binary(dtype):
             return DataType.binary()
         elif DataType.is_unsigned_integer(dtype):
-            if not convert_unsigned:
-                return dtype
             if (
                 not replacing_existing_schema
                 and existing_dtype is not None
