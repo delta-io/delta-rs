@@ -179,6 +179,72 @@ def test_write_to_table_generating_data(table_with_gc: DeltaTable):
     assert result.schema == expected_data.schema
 
 
+@pytest.mark.parametrize(
+    ("source_name", "generated_name"),
+    [("InputValue", "ComputedValue"), ("input.value", "computed.value")],
+    ids=["mixed_case", "dotted"],
+)
+@pytest.mark.parametrize("operation", ["write", "merge"])
+@pytest.mark.parametrize("supplied", [False, True], ids=["generated", "supplied"])
+def test_generated_column_preserves_identifiers(
+    tmp_path, source_name, generated_name, operation, supplied
+):
+    dt = DeltaTable.create(
+        tmp_path,
+        schema=DeltaSchema(
+            [
+                Field(source_name, PrimitiveType("integer")),
+                Field(
+                    generated_name,
+                    PrimitiveType("integer"),
+                    metadata={"delta.generationExpression": f'"{source_name}" + 1'},
+                ),
+            ]
+        ),
+    )
+    values = {source_name: Array([1, 2], type=DataType.int32())}
+    if supplied:
+        values[generated_name] = Array([2, 3], type=DataType.int32())
+    data = Table.from_pydict(values)
+
+    def apply(data):
+        if operation == "write":
+            write_deltalake(dt, data, mode="append")
+        else:
+            (
+                dt.merge(
+                    data,
+                    predicate=f's."{source_name}" = t."{source_name}"',
+                    source_alias="s",
+                    target_alias="t",
+                )
+                .when_not_matched_insert_all()
+                .execute()
+            )
+
+    apply(data)
+    result = (
+        QueryBuilder()
+        .register("tbl", DeltaTable(tmp_path))
+        .execute(f'SELECT * FROM tbl ORDER BY "{source_name}"')
+        .read_all()
+    )
+    assert result.column(source_name).to_pylist() == [1, 2]
+    assert result.column(generated_name).to_pylist() == [2, 3]
+
+    if supplied:
+        version = DeltaTable(tmp_path).version()
+        invalid = Table.from_pydict(
+            {
+                source_name: Array([3], type=DataType.int32()),
+                generated_name: Array([99], type=DataType.int32()),
+            }
+        )
+        with pytest.raises(DeltaError, match="failed validation check"):
+            apply(invalid)
+        assert DeltaTable(tmp_path).version() == version
+
+
 @pytest.mark.pyarrow
 def test_write_to_table_generating_data_with_spark_trunc_gc(tmp_path):
     import pyarrow as pa

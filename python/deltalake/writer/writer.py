@@ -127,7 +127,9 @@ def write_deltalake(
         existing_schema = table.schema().to_arrow()
 
     compatible_delta_schema = _convert_arro3_schema_to_delta(
-        data.schema, existing_schema
+        data.schema,
+        existing_schema,
+        replacing_existing_schema=schema_mode == "overwrite",
     )
 
     if table:

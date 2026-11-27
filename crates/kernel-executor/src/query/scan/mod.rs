@@ -310,7 +310,7 @@ impl TableProvider for FileScanProvider {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
@@ -326,7 +326,7 @@ impl TableProvider for FileScanProvider {
                 };
                 let config = builder
                     .with_file_groups(store.file_groups.clone())
-                    .with_projection_indices(projection.cloned())?
+                    .with_projection_indices(projection.map(|p| p.to_vec()))?
                     .with_limit(limit)
                     .build();
                 Ok(DataSourceExec::from_data_source(config) as Arc<dyn ExecutionPlan>)

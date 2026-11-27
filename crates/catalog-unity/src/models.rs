@@ -237,7 +237,8 @@ pub struct Schema {
     /// Full name of schema, in form of catalog_name.schema_name.
     pub full_name: String,
 
-    /// The type of the parent catalog.
+    /// The type of the parent catalog. Unity Catalog OSS does not return it.
+    #[serde(default)]
     pub catalog_type: String,
 
     /// Name of parent catalog.
@@ -271,7 +272,8 @@ pub struct Schema {
     #[serde(default)]
     pub updated_at: i64,
 
-    /// Unique identifier of parent metastore.
+    /// Unique identifier of parent metastore. Unity Catalog OSS does not return it.
+    #[serde(default)]
     pub metastore_id: String,
 }
 
@@ -519,11 +521,15 @@ impl TemporaryTableCredentials {
         None
     }
 
+    /// Returns the storage options that give access to the table location.
+    ///
+    /// A table on the local file system needs no credentials, so the options are empty.
     pub fn get_credentials(self) -> Option<HashMap<String, String>> {
         self.get_aws_credentials()
             .or(self.get_azure_credentials())
             .or(self.get_gcp_credentials())
             .or(self.get_r2_credentials())
+            .or_else(|| self.url.starts_with("file:").then(HashMap::new))
     }
 }
 
@@ -891,6 +897,45 @@ pub(crate) mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn test_local_table_needs_no_credentials() {
+        let credentials = |body: &str| {
+            let TableTempCredentialsResponse::Success(creds) = serde_json::from_str(body).unwrap()
+            else {
+                panic!("expected Success");
+            };
+            creds.get_credentials()
+        };
+
+        assert_eq!(
+            credentials(r#"{"url":"file:///tmp/t"}"#),
+            Some(HashMap::new())
+        );
+        assert_eq!(credentials(r#"{"url":"s3://bucket/t"}"#), None);
+    }
+
+    #[test]
+    fn test_schema_response_of_unity_catalog_oss() {
+        // Unity Catalog OSS returns no `catalog_type` and no `metastore_id`.
+        let body = r#"{
+            "name": "default",
+            "catalog_name": "unity",
+            "properties": {},
+            "full_name": "unity.default",
+            "created_at": 1795275730773,
+            "updated_at": 1795275730773,
+            "schema_id": "565a2cae-aa4e-402d-92d5-19a4a398d9f1"
+        }"#;
+        let GetSchemaResponse::Success(schema) = serde_json::from_str(body).unwrap() else {
+            panic!("expected Success");
+        };
+        assert_eq!(schema.full_name, "unity.default");
+
+        let list: ListSchemasResponse =
+            serde_json::from_str(&format!(r#"{{"schemas": [{body}]}}"#)).unwrap();
+        assert!(matches!(list, ListSchemasResponse::Success { schemas } if schemas.len() == 1));
     }
 
     #[test]

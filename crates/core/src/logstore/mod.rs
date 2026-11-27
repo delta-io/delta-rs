@@ -211,9 +211,14 @@ pub fn logstore_for(location: &Url, storage_config: StorageConfig) -> DeltaResul
     let scheme = Url::parse(&format!("{}://", location.scheme()))
         .map_err(|_| DeltaTableError::InvalidTableLocation(location.clone().into()))?;
 
-    if let Some(entry) = object_store_factories().get(&scheme) {
+    // Clone the factory and release the registry entry before the call. A factory that registers
+    // handlers needs write lock that might cause a deadlock.
+    let factory = object_store_factories()
+        .get(&scheme)
+        .map(|entry| entry.value().clone());
+    if let Some(factory) = factory {
         debug!("Found a storage provider for {scheme} ({location})");
-        let (root_store, _prefix) = entry.value().parse_url_opts(location, &storage_config)?;
+        let (root_store, _prefix) = factory.parse_url_opts(location, &storage_config)?;
         return logstore_with(root_store, location, storage_config);
     }
 
@@ -415,6 +420,17 @@ pub trait LogStore: Send + Sync + AsAny {
         Ok(None)
     }
 
+    /// Whether commits to this table are ratified by a catalog.
+    fn is_catalog_managed(&self) -> bool {
+        false
+    }
+
+    /// Publish catalog-ratified commits up to `up_to` to the delta log.
+    async fn publish_logs(&self, up_to: Version) -> DeltaResult<()> {
+        let _ = up_to;
+        Ok(())
+    }
+
     /// Get the object store rooted at the table root (`_delta_log/` is a child).
     fn object_store(&self) -> Arc<dyn ObjectStore>;
 
@@ -561,6 +577,14 @@ impl<T: LogStore + ?Sized> LogStore for Arc<T> {
 
     async fn catalog_log_tail(&self) -> DeltaResult<Option<CatalogLogTail>> {
         T::catalog_log_tail(self).await
+    }
+
+    fn is_catalog_managed(&self) -> bool {
+        T::is_catalog_managed(self)
+    }
+
+    async fn publish_logs(&self, up_to: Version) -> DeltaResult<()> {
+        T::publish_logs(self, up_to).await
     }
 
     fn object_store(&self) -> Arc<dyn ObjectStore> {

@@ -33,7 +33,7 @@ use tracing::*;
 use url::Url;
 
 use super::committer::{CommitResponse, Committer, PayloadKind};
-use super::{CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef};
+use super::{CatalogLogTail, CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef};
 use crate::kernel::Version;
 use crate::kernel::transaction::TransactionError;
 use crate::{DeltaResult, DeltaTableError};
@@ -350,6 +350,18 @@ impl LogStore for ScopedLogStore {
         self.parent.get_latest_version(start_version).await
     }
 
+    async fn catalog_log_tail(&self) -> DeltaResult<Option<CatalogLogTail>> {
+        self.parent.catalog_log_tail().await
+    }
+
+    fn is_catalog_managed(&self) -> bool {
+        self.parent.is_catalog_managed()
+    }
+
+    async fn publish_logs(&self, up_to: Version) -> DeltaResult<()> {
+        self.parent.publish_logs(up_to).await
+    }
+
     fn object_store(&self) -> Arc<dyn ObjectStore> {
         self.object_store.clone()
     }
@@ -358,16 +370,16 @@ impl LogStore for ScopedLogStore {
         self.root_object_store.clone()
     }
 
-    fn write_root_url(&self) -> Url {
-        self.write_root.clone()
-    }
-
     fn committer(&self) -> Arc<dyn Committer> {
         self.committer.clone()
     }
 
     async fn begin_operation(&self) -> DeltaResult<Option<OperationContext>> {
         self.parent.begin_operation().await
+    }
+
+    fn write_root_url(&self) -> Url {
+        self.write_root.clone()
     }
 
     async fn is_delta_table_location(&self) -> DeltaResult<bool> {
