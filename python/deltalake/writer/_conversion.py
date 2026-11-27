@@ -7,16 +7,21 @@ from arro3.core import Schema as Arro3Schema
 def _convert_arro3_schema_to_delta(
     schema: Arro3Schema,
     existing_schema: Arro3Schema | None = None,
+    replacing_existing_schema: bool = False,
 ) -> Arro3Schema:
-    """Convert a arro3 schema to a schema compatible with Delta Lake. Converts unsigned to signed equivalent, and
-    converts all timestamps to `us` timestamps, except nanosecond timestamps when the experimental nanosecond
+    """Convert an arro3 schema to a schema compatible with Delta Lake. Converts unsigned integers
+    to the type of an existing numeric column (signed integer, floating-point, or decimal) when
+    not replacing the existing schema, or otherwise to their signed equivalent, and converts all
+    timestamps to `us` timestamps, except nanosecond timestamps when the experimental nanosecond
     timestamp feature is enabled.
     Also handles null column types by converting them to match
     corresponding fields in the existing table schema.
 
     Args:
         schema (Arro3Schema): Source schema.
-        existing_schema (Arro3Schema, optional): Existing table schema to match null types against. Defaults to None.
+        existing_schema (Arro3Schema, optional): Existing table schema to match null and unsigned types against. Defaults to None.
+        replacing_existing_schema (bool): Whether the write replaces the existing schema rather than keeping it,
+            in which case unsigned integers are converted to their signed equivalent rather than matching existing numeric columns. Defaults to False.
 
     Returns:
         Arro3Schema: Delta-compatible schema with converted types.
@@ -52,6 +57,20 @@ def _convert_arro3_schema_to_delta(
         elif DataType.is_fixed_size_binary(dtype):
             return DataType.binary()
         elif DataType.is_unsigned_integer(dtype):
+            if (
+                not replacing_existing_schema
+                and existing_dtype is not None
+                and (
+                    DataType.is_signed_integer(existing_dtype)
+                    or DataType.is_floating(existing_dtype)
+                    or DataType.is_decimal(existing_dtype)
+                )
+            ):
+                # Cast directly to the existing numeric column's type rather than going through
+                # the signed type of the same width (which can overflow when a direct cast to a
+                # wider type would succeed) or leaving it unsigned (which changes arithmetic in
+                # generated column expressions such as `a - b`).
+                return existing_dtype
             if DataType.is_uint16(dtype):
                 return DataType.int16()
             elif DataType.is_uint32(dtype):
