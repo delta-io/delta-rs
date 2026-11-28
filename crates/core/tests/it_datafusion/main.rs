@@ -19,6 +19,7 @@ mod integration_datafusion;
 #[cfg(feature = "nanosecond-timestamps")]
 mod nanosecond_timestamps;
 mod operation_scope;
+mod pruning_fuzz;
 mod read_delta_log_test;
 mod read_delta_partitions_test;
 mod scan_file_statistics;
