@@ -8,12 +8,11 @@ use arrow_schema::SchemaRef as ArrowSchemaRef;
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use object_store::path::Path;
-use parquet::file::metadata::ParquetMetaData;
 use tokio::task::JoinSet;
 use tracing::*;
 
 use crate::datafile::writer::WriteError;
-use crate::datafile::writer::file::LazyArrowWriter;
+use crate::datafile::writer::file::{LazyArrowWriter, WrittenFileMetadata};
 use crate::datafile::writer::upload_budget::UploadBudget;
 use crate::datafile::{DEFAULT_WRITE_BATCH_SIZE, DataFileWriter, DeltaWriterProperties};
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -154,7 +153,7 @@ pub struct PartitionWriter {
     pub(super) config: PartitionWriterConfig,
     writer: LazyArrowWriter,
     part_counter: usize,
-    in_flight_writers: JoinSet<DeltaResult<(Path, usize, ParquetMetaData)>>,
+    in_flight_writers: JoinSet<DeltaResult<(Path, usize, WrittenFileMetadata)>>,
     /// Approximate encoded size of files already rolled to background upload;
     /// keeps `buffered_size` monotonic across rolls.
     rolled_bytes: usize,
@@ -378,9 +377,10 @@ impl PartitionWriter {
                     &self.config.partition_values,
                     path.to_string(),
                     file_size as i64,
-                    &metadata,
+                    &metadata.parquet,
                     self.config.writer_properties.stats().num_indexed_cols,
                     &self.config.writer_properties.stats().stats_columns,
+                    &metadata.columns_with_nan,
                 )
                 .map_err(|err| WriteError::CreateAdd {
                     source: Box::new(err),
@@ -440,6 +440,94 @@ mod tests {
     use std::sync::Arc;
 
     use crate::datafile::writer::ArrowWriterOptions;
+
+    #[tokio::test]
+    async fn test_nan_columns_omit_bounds_for_their_file() {
+        use arrow::array::{Float32Array, Float64Array, StructArray};
+        use arrow::buffer::NullBuffer;
+        use serde_json::{Value, json};
+
+        let nested = StructArray::new(
+            vec![
+                Field::new("mixed", DataType::Float64, true),
+                Field::new("finite", DataType::Float64, true),
+            ]
+            .into(),
+            vec![
+                Arc::new(Float64Array::from(vec![1.0, f64::NAN, 3.0, 4.0, 5.0, 6.0])),
+                Arc::new(Float64Array::from(vec![
+                    10.0,
+                    20.0,
+                    f64::NAN,
+                    40.0,
+                    50.0,
+                    60.0,
+                ])),
+            ],
+            Some(NullBuffer::from(vec![true, true, false, true, true, true])),
+        );
+        let batch = RecordBatch::try_from_iter([
+            (
+                "float",
+                Arc::new(Float32Array::from(vec![
+                    Some(998.0),
+                    Some(f32::NAN),
+                    None,
+                    Some(7.0),
+                    Some(8.0),
+                    Some(9.0),
+                ])) as ArrayRef,
+            ),
+            (
+                "double",
+                Arc::new(Float64Array::from(vec![
+                    998.0,
+                    f64::NAN,
+                    998.0,
+                    7.0,
+                    8.0,
+                    9.0,
+                ])) as ArrayRef,
+            ),
+            ("nested", Arc::new(nested) as ArrayRef),
+        ])
+        .unwrap();
+        let object_store = Arc::new(object_store::memory::InMemory::new());
+        let properties = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(1))
+            .build();
+        let mut writer = get_partition_writer(
+            object_store,
+            &batch,
+            Some(properties),
+            NonZeroU64::new(1),
+            Some(3),
+        );
+        writer.config.roll_on_row_group_boundary = false;
+        writer.write(&batch).await.unwrap();
+
+        let adds = writer.close().await.unwrap();
+        assert_eq!(adds.len(), 2);
+        let stats =
+            |add: &Add| -> Value { serde_json::from_str(add.stats.as_deref().unwrap()).unwrap() };
+        let first = stats(&adds[0]);
+        assert_eq!(first["numRecords"], json!(3));
+        assert_eq!(first["nullCount"]["float"], json!(1));
+        assert_eq!(first["nullCount"]["double"], json!(0));
+        for bounds in ["minValues", "maxValues"] {
+            assert!(first[bounds].get("float").is_none(), "{first}");
+            assert!(first[bounds].get("double").is_none(), "{first}");
+            assert!(first[bounds]["nested"].get("mixed").is_none(), "{first}");
+        }
+        assert_eq!(first["minValues"]["nested"]["finite"], json!(10.0));
+        assert_eq!(first["maxValues"]["nested"]["finite"], json!(20.0));
+        let second = stats(&adds[1]);
+        for column in ["float", "double"] {
+            assert_eq!(second["minValues"][column], json!(7.0));
+            assert_eq!(second["maxValues"][column], json!(9.0));
+        }
+        assert_eq!(second["maxValues"]["nested"]["mixed"], json!(6.0));
+    }
 
     fn get_partition_writer(
         object_store: ObjectStoreRef,
