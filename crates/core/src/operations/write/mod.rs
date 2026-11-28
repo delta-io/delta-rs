@@ -693,6 +693,7 @@ mod tests {
     use crate::TableProperty;
     use crate::ensure_table_uri;
     use crate::kernel::CommitInfo;
+    use crate::kernel::transaction::{CommitConflictError, TransactionError};
     use crate::logstore::get_actions;
     use crate::operations::collect_sendable_stream;
     use crate::protocol::SaveMode;
@@ -1931,6 +1932,93 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await;
         assert!(table.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_conflicts_with_concurrent_append() -> TestResult {
+        let batch = get_record_batch(None, false);
+        let new_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "x",
+            DataType::Utf8,
+            true,
+        )]));
+        let new_schema_batch = RecordBatch::try_new(
+            new_schema,
+            vec![Arc::new(StringArray::from(vec![Some("x")]))],
+        )?;
+
+        for (overwrite_batch, schema_mode) in [
+            (batch.clone(), None),
+            (new_schema_batch, Some(SchemaMode::Overwrite)),
+        ] {
+            let table = DeltaTable::new_in_memory()
+                .write(vec![batch.clone()])
+                .await?;
+            let stale_snapshot = table.snapshot()?.snapshot().clone();
+            let log_store = table.log_store();
+            let mut table = table
+                .write(vec![batch.clone()])
+                .with_save_mode(SaveMode::Append)
+                .await?;
+
+            let mut overwrite = WriteBuilder::new(log_store, Some(stale_snapshot))
+                .with_input_batches(vec![overwrite_batch])
+                .with_save_mode(SaveMode::Overwrite);
+            if let Some(schema_mode) = schema_mode {
+                overwrite = overwrite.with_schema_mode(schema_mode);
+            }
+            let result = overwrite.await;
+
+            assert!(
+                matches!(
+                    result,
+                    Err(DeltaTableError::Transaction {
+                        source: TransactionError::CommitConflict(
+                            CommitConflictError::ConcurrentAppend
+                        )
+                    })
+                ),
+                "schema overwrite {}: {result:?}",
+                schema_mode.is_some()
+            );
+            table.update_state().await?;
+            assert_eq!(table.version(), Some(1));
+            assert_eq!(table.snapshot()?.log_data().num_files(), 2);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_ignores_concurrent_append_outside_predicate() -> TestResult {
+        let batch = get_record_batch(None, false);
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch.clone()])
+            .await?;
+        let stale_snapshot = table.snapshot()?.snapshot().clone();
+        let log_store = table.log_store();
+        let mut table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+        let replacement = RecordBatch::try_new(
+            get_arrow_schema(&None),
+            vec![
+                Arc::new(StringArray::from(vec!["Z"])),
+                Arc::new(Int32Array::from(vec![50])),
+                Arc::new(StringArray::from(vec!["2021-02-02"])),
+            ],
+        )?;
+
+        let overwritten = WriteBuilder::new(log_store, Some(stale_snapshot))
+            .with_input_batches(vec![replacement])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where(col("id").eq(lit("Z")))
+            .await?;
+
+        assert_eq!(overwritten.version(), Some(2));
+        table.update_state().await?;
+        assert_eq!(table.snapshot()?.log_data().num_files(), 3);
+        Ok(())
     }
 
     #[tokio::test]
