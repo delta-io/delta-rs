@@ -599,6 +599,3 @@ def test_cleanup_metadata_with_incomplete_multipart_checkpoint(
 
     # cleanup must keep commits 0 and 1 so the table still loads
     assert read_x() == [1, 2, 3]
-
-
-@pytest.mark.pyarrow
