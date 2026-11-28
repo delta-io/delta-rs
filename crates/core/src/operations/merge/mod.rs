@@ -1624,6 +1624,10 @@ async fn execute(
                     .when(col(TARGET_UPDATE_COLUMN).is_null(), lit("update"))
                     .end()?,
             )?
+            // A source row that no clause accepts has no change type. Drop it here, as the
+            // plan without the change data feed does, so the write doesn't check its null
+            // values against the table's NOT NULL columns.
+            .filter(col(CDC_COLUMN_NAME).is_not_null())?
             .drop_columns(&[file_column.as_str()])? // Avoid unnest schema errors.
             .with_column(
                 "__delta_rs_update_expanded",
@@ -5800,6 +5804,117 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_cdf_enabled_drops_unmatched_source_rows_before_validation() {
+        // A delete marker for a key the table doesn't have matches no clause. With the change
+        // data feed on, its all-null row must not reach the NOT NULL checks.
+        use crate::kernel::{DataType as DeltaDataType, PrimitiveType, StructField};
+
+        let fields = vec![
+            StructField::new("id", DeltaDataType::Primitive(PrimitiveType::Long), false),
+            StructField::new(
+                "name",
+                DeltaDataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                "deleted",
+                DeltaDataType::Primitive(PrimitiveType::Long),
+                true,
+            ),
+        ];
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Int64, false),
+            Field::new("name", ArrowDataType::Utf8, true),
+            Field::new("deleted", ArrowDataType::Int64, true),
+        ]));
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(fields)
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        let target = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::Int64Array::from(vec![1, 2])),
+                Arc::new(arrow::array::StringArray::from(vec!["a", "b"])),
+                Arc::new(arrow::array::Int64Array::from(vec![None::<i64>, None])),
+            ],
+        )
+        .unwrap();
+        let table = table
+            .write(vec![target])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+
+        // 9 is a delete for a key the table doesn't have, 3 is an insert and 2 is a delete.
+        let source = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::Int64Array::from(vec![9, 3, 2])),
+                Arc::new(arrow::array::StringArray::from(vec![None, Some("c"), None])),
+                Arc::new(arrow::array::Int64Array::from(vec![Some(1), None, Some(1)])),
+            ],
+        )
+        .unwrap();
+        let ctx = SessionContext::new();
+        let (table, metrics) = table
+            .merge(ctx.read_batch(source).unwrap(), "target.id = source.id")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_delete(|delete| delete.predicate("source.deleted IS NOT NULL"))
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .predicate("source.deleted IS NULL")
+                    .set("id", "source.id")
+                    .set("name", "source.name")
+                    .set("deleted", "source.deleted")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), Some(2));
+        assert_eq!(metrics.num_source_rows, 3);
+        assert_eq!(metrics.num_target_rows_inserted, 1);
+        assert_eq!(metrics.num_target_rows_deleted, 1);
+        assert_eq!(metrics.num_target_rows_copied, 1);
+
+        let expected = vec![
+            "+----+------+---------+",
+            "| id | name | deleted |",
+            "+----+------+---------+",
+            "| 1  | a    |         |",
+            "| 3  | c    |         |",
+            "+----+------+---------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        let cdf = table
+            .scan_cdf()
+            .with_starting_version(2)
+            .build(&ctx.state(), None)
+            .await
+            .expect("Failed to load CDF");
+        let mut batches = collect(cdf, ctx.task_ctx())
+            .await
+            .expect("Failed to collect CDF batches");
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();
+        let expected_cdf = vec![
+            "+----+------+---------+--------------+-----------------+",
+            "| id | name | deleted | _change_type | _commit_version |",
+            "+----+------+---------+--------------+-----------------+",
+            "| 2  | b    |         | delete       | 2               |",
+            "| 3  | c    |         | insert       | 2               |",
+            "+----+------+---------+--------------+-----------------+",
+        ];
+        assert_batches_sorted_eq!(&expected_cdf, &batches);
     }
 
     #[tokio::test]
