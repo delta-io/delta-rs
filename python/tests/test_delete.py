@@ -323,6 +323,3 @@ def test_delete_without_predicate_conflicts_with_concurrent_merge(
 
     with pytest.raises(CommitFailedError):
         stale.delete()
-
-
-@pytest.mark.pyarrow
