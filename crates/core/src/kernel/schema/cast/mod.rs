@@ -438,6 +438,18 @@ mod tests {
     use crate::symmetric_differences;
 
     #[test]
+    fn test_merge_arrow_schema_with_type_widening() {
+        let left_schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Int16, false)]));
+        let right_schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Float32, true)]));
+
+        let result = merge_arrow_schema(left_schema, right_schema, true).unwrap();
+        assert_eq!(result.fields().len(), 1);
+        let delta_type: DeltaDataType = result.fields()[0].data_type().try_into_kernel().unwrap();
+        assert_eq!(delta_type, DeltaDataType::FLOAT);
+        assert!(!result.fields()[0].is_nullable());
+    }
+
+    #[test]
     fn test_merge_arrow_schema_with_dict() {
         let left_schema = Arc::new(Schema::new(vec![Field::new(
             "f",

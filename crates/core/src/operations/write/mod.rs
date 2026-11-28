@@ -990,6 +990,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_type_widening() {
+        let table =
+            setup_table_with_configuration(TableProperty::EnableTypeWidening, Some("true")).await;
+        // let batch = get_record_batch(None, false);
+        // // Append
+        // let table = write_batch(table, batch.clone()).await;
+
+        let new_type_batch = RecordBatch::try_new(
+            Arc::clone(&Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Utf8, true),
+                Field::new("value", DataType::Decimal128(38, 10), true),
+                Field::new("modified", DataType::Utf8, true),
+            ]))),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "C"])),
+                Arc::new(arrow::array::Decimal128Array::from(vec![1, 20, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2021-02-03",
+                    "2021-02-02",
+                    "2021-02-04",
+                ])),
+            ],
+        )
+        .unwrap();
+
+        dbg!(&new_type_batch);
+        let table_with_type = write_batch(table, new_type_batch.clone()).await;
+
+        // The table's `value` column should have been widened to Decimal128(38, 10).
+        let schema = table_with_type
+            .snapshot()
+            .unwrap()
+            .metadata()
+            .parse_schema()
+            .unwrap();
+        let value = schema.field("value").unwrap();
+        assert_eq!(
+            value.data_type(),
+            &delta_kernel::schema::DataType::Primitive(
+                delta_kernel::schema::PrimitiveType::decimal(38, 10).unwrap()
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn test_write_different_types() {
         // Ensure write data is casted when data of a different type from the table is provided.
 
