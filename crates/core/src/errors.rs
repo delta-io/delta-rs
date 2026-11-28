@@ -226,7 +226,7 @@ pub enum DeltaTableError {
     #[error("Invalid version. Start version {start} is greater than end version {end}")]
     ChangeDataInvalidVersionRange { start: Version, end: Version },
 
-    #[error("End timestamp {ending_timestamp} is greater than latest commit timestamp")]
+    #[error("Starting timestamp {ending_timestamp} is greater than latest commit timestamp")]
     ChangeDataTimestampGreaterThanCommit { ending_timestamp: DateTime<Utc> },
 
     #[error("No starting version or timestamp provided for CDC")]

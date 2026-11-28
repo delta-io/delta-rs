@@ -257,7 +257,9 @@ impl CdfLoadBuilder {
             return if self.allow_out_of_range {
                 Ok((change_files, add_files, remove_files, resolved_pairs))
             } else {
-                Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit { ending_timestamp })
+                Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit {
+                    ending_timestamp: starting_timestamp,
+                })
             };
         }
 
