@@ -1,5 +1,5 @@
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import pytest
@@ -826,13 +826,15 @@ def test_read_timestamp_cdf_out_of_range():
 
 def test_read_timestamp_cdf_out_of_range_reports_starting_timestamp():
     dt = DeltaTable("../crates/test/tests/data/cdf-table/")
-    start = "2033-12-22T17:10:21.675Z"
+    start = (datetime.now(timezone.utc) + timedelta(days=5 * 365)).replace(
+        microsecond=0
+    )
 
     with pytest.raises(DeltaError) as e:
-        dt.load_cdf(starting_timestamp=start).read_all()
+        dt.load_cdf(starting_timestamp=start.strftime("%Y-%m-%dT%H:%M:%SZ")).read_all()
 
     assert (
-        "Starting timestamp 2033-12-22 17:10:21.675 UTC is greater than latest commit timestamp"
+        f"Starting timestamp {start:%Y-%m-%d %H:%M:%S} UTC is greater than latest commit timestamp"
         in str(e.value)
     )
 
