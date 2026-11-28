@@ -877,3 +877,21 @@ def test_read_cdf_write_stream(tmp_path):
     data = dt.load_cdf(0, 3, predicate="birthday = '2023-12-25'")
 
     write_deltalake(tmp_path, data)
+
+
+@pytest.mark.pyarrow
+def test_load_cdf_raises_when_cdf_not_enabled_at_start_version(tmp_path):
+    """https://github.com/delta-io/delta-rs/issues/4991
+
+    load_cdf must raise when change data feed was not enabled at the starting
+    version, not only when the start version happens to carry a metaData
+    action. Reading a rewritten file's remove and add as a delete and insert
+    of every row reports unchanged rows as changed.
+    """
+    import pyarrow as pa
+
+    write_deltalake(tmp_path, pa.table({"x": [1, 2]}))
+    DeltaTable(tmp_path).update({"x": "x + 10"}, predicate="x = 1")
+
+    with pytest.raises(DeltaError):
+        DeltaTable(tmp_path).load_cdf(starting_version=1).read_all()
