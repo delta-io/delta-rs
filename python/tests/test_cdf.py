@@ -824,6 +824,19 @@ def test_read_timestamp_cdf_out_of_range():
     assert "is greater than latest commit timestamp" in str(e).lower()
 
 
+def test_read_timestamp_cdf_out_of_range_reports_starting_timestamp():
+    dt = DeltaTable("../crates/test/tests/data/cdf-table/")
+    start = "2033-12-22T17:10:21.675Z"
+
+    with pytest.raises(DeltaError) as e:
+        dt.load_cdf(starting_timestamp=start).read_all()
+
+    assert (
+        "Starting timestamp 2033-12-22 17:10:21.675 UTC is greater than latest commit timestamp"
+        in str(e.value)
+    )
+
+
 def test_read_timestamp_cdf_out_of_range_with_flag():
     dt = DeltaTable("../crates/test/tests/data/cdf-table/")
 
