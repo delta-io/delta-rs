@@ -255,6 +255,14 @@ def test_field_serialization():
     assert f.metadata == {"key": "value"}
 
 
+def test_field_metadata_boolean():
+    f = Field("x", "integer", metadata={"flag": True})
+    assert f.metadata == {"flag": True}
+    assert f == Field.from_json(
+        '{"name":"x","type":"integer","nullable":true,"metadata":{"flag":true}}'
+    )
+
+
 # <https://github.com/delta-io/delta-rs/issues/1947>
 @pytest.mark.pyarrow
 def test_void_type_to_arrow():

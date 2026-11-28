@@ -574,6 +574,7 @@ impl Field {
                         MetadataValue::Number,
                     ),
                     serde_json::Value::String(s) => MetadataValue::String(s.to_string()),
+                    serde_json::Value::Bool(b) => MetadataValue::Boolean(*b),
                     other => MetadataValue::String(other.to_string()),
                 },
             )
