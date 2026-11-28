@@ -16,7 +16,7 @@ from deltalake.writer._conversion import _convert_arro3_schema_to_delta
 from deltalake.writer._utils import try_get_table_and_table_uri
 
 if TYPE_CHECKING:
-    from deltalake.table import DeltaTable, WriterProperties
+    from deltalake.table import DeltaTable, FilterType, WriterProperties
     from deltalake.transaction import (
         CommitProperties,
         PostCommitHookProperties,
@@ -54,7 +54,7 @@ def write_deltalake(
     configuration: Mapping[str, str | None] | None = ...,
     schema_mode: Literal["merge", "overwrite"] | None = ...,
     storage_options: dict[str, str] | None = ...,
-    predicate: str | None = ...,
+    predicate: str | FilterType | None = ...,
     target_file_size: int | None = ...,
     writer_properties: WriterProperties | None = ...,
     commit_properties: CommitProperties | None = ...,
@@ -73,7 +73,7 @@ def write_deltalake(
     configuration: Mapping[str, str | None] | None = None,
     schema_mode: Literal["merge", "overwrite"] | None = None,
     storage_options: dict[str, str] | None = None,
-    predicate: str | None = None,
+    predicate: str | FilterType | None = None,
     target_file_size: int | None = None,
     writer_properties: WriterProperties | None = None,
     commit_properties: CommitProperties | None = None,
@@ -106,6 +106,11 @@ def write_deltalake(
         commit_properties: properties of the transaction commit. If None, default values are used.
         post_commithook_properties: properties for the post commit hook. If None, default values are used.
     """
+    if predicate is not None and not isinstance(predicate, str):
+        from deltalake.table import _filters_to_sql_predicate
+
+        predicate = _filters_to_sql_predicate(predicate)
+
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
     if table is not None:
         storage_options = table._storage_options or {}
