@@ -286,25 +286,19 @@ impl CdfLoadBuilder {
                     .iter()
                     .find(|a| matches!(a, Action::CommitInfo(_)));
 
-                match version_commit {
-                    Some(Action::CommitInfo(CommitInfo {
-                        in_commit_timestamp: Some(t),
-                        ..
-                    })) if starting_timestamp.timestamp_millis() > *t
-                        || *t > ending_timestamp.timestamp_millis() =>
-                    {
-                        log::debug!("Version: {version} skipped, due to in commit timestamp");
-                        continue;
-                    }
-                    Some(Action::CommitInfo(CommitInfo {
-                        timestamp: Some(t), ..
-                    })) if starting_timestamp.timestamp_millis() > *t
-                        || *t > ending_timestamp.timestamp_millis() =>
-                    {
-                        log::debug!("Version: {version} skipped, due to commit timestamp");
-                        continue;
-                    }
-                    _ => {}
+                // `inCommitTimestamp` replaces `commitInfo.timestamp` rather than
+                // supplementing it, so only fall back when it is absent. Testing both in
+                // turn lets a stale `timestamp` skip a commit whose in-commit timestamp
+                // sits inside the requested window.
+                if let Some(Action::CommitInfo(commit_info)) = version_commit
+                    && let Some(t) = commit_info.in_commit_timestamp.or(commit_info.timestamp)
+                    && (starting_timestamp.timestamp_millis() > t
+                        || t > ending_timestamp.timestamp_millis())
+                {
+                    log::debug!(
+                        "Version: {version} skipped, outside the requested timestamp range"
+                    );
+                    continue;
                 }
             }
 
@@ -1270,6 +1264,41 @@ pub(crate) mod tests {
             "| Steve | 40  | 1986      | update_preimage  | 3               | 2026-07-12T16:36:53.881 |",
             "| Steve | 41  | 1986      | update_postimage | 3               | 2026-07-12T16:36:53.881 |",
             "+-------+-----+-----------+------------------+-----------------+-------------------------+",
+        ], &batches }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ict_in_range_is_not_skipped_by_stale_commit_timestamp() -> TestResult {
+        // Version 1 of this table carries an `inCommitTimestamp` of 1683874206883
+        // (2023-05-12) and a legacy `commitInfo.timestamp` of 1783874206883
+        // (2026-07-12). A window holding the in-commit timestamp but not the legacy
+        // one must still return version 1, because the in-commit timestamp is the
+        // authoritative one once the table writes it.
+        let ctx = SessionContext::new();
+        let table_path = Path::new("../test/tests/data/cdc_ict_table");
+        let starting_timestamp = NaiveDateTime::from_str("2023-05-01T00:00:00.000")?;
+        let ending_timestamp = NaiveDateTime::from_str("2023-06-01T00:00:00.000")?;
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri)
+            .await?
+            .scan_cdf()
+            .with_starting_timestamp(starting_timestamp.and_utc())
+            .with_ending_timestamp(ending_timestamp.and_utc())
+            .build(&ctx.state(), None)
+            .await?;
+
+        let batches = collect(table, ctx.task_ctx()).await?;
+        assert_batches_sorted_eq! {
+                            [
+            "+-------+-----+-----------+--------------+-----------------+-------------------------+",
+            "| name  | age | birthyear | _change_type | _commit_version | _commit_timestamp       |",
+            "+-------+-----+-----------+--------------+-----------------+-------------------------+",
+            "| Dan   | 14  | 1995      | insert       | 1               | 2023-05-12T06:50:06.883 |",
+            "| Dave  | 22  | 1995      | insert       | 1               | 2023-05-12T06:50:06.883 |",
+            "| Kate  | 36  | 1995      | insert       | 1               | 2023-05-12T06:50:06.883 |",
+            "| Steve | 40  | 1986      | insert       | 1               | 2023-05-12T06:50:06.883 |",
+            "+-------+-----+-----------+--------------+-----------------+-------------------------+",
         ], &batches }
         Ok(())
     }
