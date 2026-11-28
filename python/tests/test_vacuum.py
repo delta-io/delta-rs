@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import pytest
 from arro3.core import Table
 
-from deltalake import CommitProperties, DeltaTable, write_deltalake
+from deltalake import CommitProperties, DeltaTable, QueryBuilder, write_deltalake
 
 
 def test_vacuum_dry_run_simple_table():
@@ -457,3 +457,37 @@ def test_vacuum_null_partition(tmp_path: pathlib.Path):
 
     # Vacuum the table
     dt.vacuum(retention_hours=0, dry_run=False, enforce_retention_duration=False)
+
+
+@pytest.mark.pyarrow
+def test_vacuum_full_keeps_files_committed_after_table_load(
+    tmp_path: pathlib.Path,
+):
+    """https://github.com/delta-io/delta-rs/issues/4981
+
+    vacuum(full=True) must keep every file the latest version references, even
+    files committed by another writer after this DeltaTable was loaded.
+    """
+    import pyarrow as pa
+
+    table_path = tmp_path / "t"
+    write_deltalake(table_path, pa.table({"x": [1]}))
+    dt = DeltaTable(table_path)
+    # a second writer commits a file the loaded snapshot has not seen
+    write_deltalake(table_path, pa.table({"x": [2]}), mode="append")
+
+    removed = dt.vacuum(
+        full=True,
+        retention_hours=0,
+        enforce_retention_duration=False,
+        dry_run=False,
+    )
+    assert removed == []
+
+    result = (
+        QueryBuilder()
+        .register("tbl", DeltaTable(table_path))
+        .execute("select x from tbl order by x")
+        .read_all()
+    )
+    assert result["x"].to_pylist() == [1, 2]
