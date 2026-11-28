@@ -69,6 +69,33 @@ fn is_non_null_literal(expr: &Expr) -> bool {
     matches!(expr, Expr::Literal(v, _) if !v.is_null())
 }
 
+/// Returns whether this comparison is unsafe to evaluate with min/max statistics.
+///
+/// Existing Parquet and Delta bounds can omit NaNs, even when a file has a matching NaN row.
+pub fn is_null_safe_comparison_with_nan(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::BinaryExpr(BinaryExpr {
+            op: Operator::IsDistinctFrom | Operator::IsNotDistinctFrom,
+            left,
+            right,
+        }) if is_nan_literal(left) || is_nan_literal(right)
+    )
+}
+
+fn is_nan_literal(expr: &Expr) -> bool {
+    matches!(expr, Expr::Literal(value, _) if is_float_nan(value))
+}
+
+/// Returns whether a floating-point scalar contains NaN.
+pub fn is_float_nan(value: &ScalarValue) -> bool {
+    match value {
+        ScalarValue::Float32(Some(value)) => value.is_nan(),
+        ScalarValue::Float64(Some(value)) => value.is_nan(),
+        _ => false,
+    }
+}
+
 /// Converts `x [NOT] IN (a, b, ...)` into one flat junction, so depth does not grow with
 /// the list length. Lists with NULL or non-literal items are not converted.
 fn in_list_to_delta_predicate(in_list: &InList) -> Result<Predicate> {
@@ -107,6 +134,9 @@ pub fn to_delta_expression(expr: &Expr) -> Result<Expression> {
         Expr::Column(column) => Ok(Expression::Column(ColumnName::new([column.name.as_str()]))),
         Expr::Literal(scalar, _meta) => {
             Ok(Expression::Literal(datafusion_scalar_to_scalar(scalar)?))
+        }
+        expr if is_null_safe_comparison_with_nan(expr) => {
+            plan_err!("Cannot use a null-safe comparison with NaN for file skipping")
         }
         Expr::InList(in_list) => Ok(Expression::Predicate(Box::new(in_list_to_delta_predicate(
             in_list,

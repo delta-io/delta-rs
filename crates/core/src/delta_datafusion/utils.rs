@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
-use datafusion::common::DFSchemaRef;
+use arrow_schema::DataType;
 use datafusion::common::tree_node::{Transformed, TreeNode as _};
+use datafusion::common::{DFSchemaRef, ScalarValue, plan_datafusion_err};
 use datafusion::error::Result;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::{BinaryExpr, Expr, ExprSchemable as _};
 use datafusion::logical_expr_common::operator::Operator;
+use datafusion::logical_expr_common::type_coercion::binary::comparison_coercion;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::{catalog::Session, common::DFSchema};
 
@@ -24,12 +26,30 @@ pub enum Expression {
 
 impl Expression {
     pub(crate) fn resolve(&self, session: &dyn Session, schema: DFSchemaRef) -> Result<Expr> {
+        self.resolve_with_coercion(session, schema, true)
+    }
+
+    pub(crate) fn resolve_for_constraint(
+        &self,
+        session: &dyn Session,
+        schema: DFSchemaRef,
+    ) -> Result<Expr> {
+        // Constraints are serialized as portable SQL and parsed again for validation.
+        self.resolve_with_coercion(session, schema, false)
+    }
+
+    fn resolve_with_coercion(
+        &self,
+        session: &dyn Session,
+        schema: DFSchemaRef,
+        coerce_null_safe: bool,
+    ) -> Result<Expr> {
         let expr = match self {
             Expression::DataFusion(expr) => expr.clone(),
             Expression::String(s) => parse_predicate_expression(schema.as_ref(), s, session)?,
         };
         // Coerce literal types to match schema column types for parsed string predicates
-        let expr = coerce_predicate_literals(expr, schema.as_ref())?;
+        let expr = coerce_predicate_literals_impl(expr, schema.as_ref(), coerce_null_safe)?;
         let execution_props = session.execution_props();
         let context = SimplifyContext::builder()
             .with_schema(schema.clone())
@@ -45,7 +65,7 @@ impl Expression {
         let expr = simplifier.simplify(expr)?;
         // Simplification folds constant expressions such as `CAST('...' AS TIMESTAMP)` into
         // literals, so the literals that need coercing only show up after it has run.
-        coerce_predicate_literals(expr, schema.as_ref())
+        coerce_predicate_literals_impl(expr, schema.as_ref(), coerce_null_safe)
     }
 }
 
@@ -101,19 +121,31 @@ pub(crate) fn maybe_into_expr(
 /// # Returns
 /// The transformed expression with literals properly cast to match column types
 pub(crate) fn coerce_predicate_literals(expr: Expr, schema: &DFSchema) -> Result<Expr> {
+    coerce_predicate_literals_impl(expr, schema, true)
+}
+
+fn coerce_predicate_literals_impl(
+    expr: Expr,
+    schema: &DFSchema,
+    coerce_null_safe: bool,
+) -> Result<Expr> {
     expr.transform(&|e| {
         match &e {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                let null_safe =
+                    matches!(op, Operator::IsDistinctFrom | Operator::IsNotDistinctFrom);
                 // Only coerce for comparison operators
-                if !matches!(
-                    op,
-                    Operator::Eq
-                        | Operator::NotEq
-                        | Operator::Lt
-                        | Operator::LtEq
-                        | Operator::Gt
-                        | Operator::GtEq
-                ) {
+                if !(null_safe && coerce_null_safe)
+                    && !matches!(
+                        op,
+                        Operator::Eq
+                            | Operator::NotEq
+                            | Operator::Lt
+                            | Operator::LtEq
+                            | Operator::Gt
+                            | Operator::GtEq
+                    )
+                {
                     return Ok(Transformed::no(e));
                 }
 
@@ -129,22 +161,22 @@ pub(crate) fn coerce_predicate_literals(expr: Expr, schema: &DFSchema) -> Result
                     return Ok(Transformed::no(e));
                 }
 
-                let lit_expr = Expr::Literal(lit_value.cast_to(&expr_type)?, None);
-                let new_binary = if expr_on_left {
-                    Expr::BinaryExpr(BinaryExpr {
-                        left: left.clone(),
-                        op: *op,
-                        right: Box::new(lit_expr),
-                    })
+                let (expr, literal) = if null_safe {
+                    coerce_null_safe_comparison(expr, &expr_type, lit_value, schema, *op)?
                 } else {
-                    Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(lit_expr),
-                        op: *op,
-                        right: right.clone(),
-                    })
+                    (expr.clone(), lit_value.cast_to(&expr_type)?)
                 };
-
-                Ok(Transformed::yes(new_binary))
+                let literal = Expr::Literal(literal, None);
+                let (left, right) = if expr_on_left {
+                    (expr, literal)
+                } else {
+                    (literal, expr)
+                };
+                Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(left),
+                    *op,
+                    Box::new(right),
+                ))))
             }
             Expr::Between(between) => {
                 let expr_type = between.expr.get_type(schema)?;
@@ -209,6 +241,71 @@ pub(crate) fn coerce_predicate_literals(expr: Expr, schema: &DFSchema) -> Result
         }
     })
     .map(|transformed| transformed.data)
+}
+
+fn coerce_null_safe_comparison(
+    expr: &Expr,
+    expr_type: &DataType,
+    literal: &ScalarValue,
+    schema: &DFSchema,
+    op: Operator,
+) -> Result<(Expr, ScalarValue)> {
+    let literal_type = literal.data_type();
+    let comparison_type = comparison_coercion(expr_type, &literal_type).ok_or_else(|| {
+        plan_datafusion_err!("Cannot compare {expr_type} and {literal_type} with {op}")
+    })?;
+    let comparison_literal = literal.cast_to(&comparison_type)?;
+    if expr_type == &comparison_type {
+        return Ok((expr.clone(), comparison_literal));
+    }
+
+    // Keep file skipping available only if narrowing preserves the same equality test.
+    // A round trip for the literal alone is insufficient when casting the column can
+    // collapse distinct values, such as adjacent Int64 values above 2^53.
+    if preserves_comparison_values(expr_type, &comparison_type)
+        && !matches!(&comparison_literal, ScalarValue::Float64(Some(value)) if value.is_nan())
+        && let Ok(narrowed) = comparison_literal.cast_to(expr_type)
+        && narrowed
+            .cast_to(&comparison_type)
+            .is_ok_and(|value| value == comparison_literal)
+    {
+        return Ok((expr.clone(), narrowed));
+    }
+
+    // The kernel cannot translate this cast. The existing scan fallback then evaluates
+    // the predicate in DataFusion without using mismatched file statistics.
+    Ok((
+        expr.clone().cast_to(&comparison_type, schema)?,
+        comparison_literal,
+    ))
+}
+
+fn preserves_comparison_values(input: &DataType, comparison: &DataType) -> bool {
+    if input.is_integer() && comparison.is_integer() {
+        return input
+            .primitive_width()
+            .zip(comparison.primitive_width())
+            .is_some_and(|(from, to)| {
+                match (input.is_signed_integer(), comparison.is_signed_integer()) {
+                    (true, false) => false,
+                    (false, true) => from < to,
+                    _ => from <= to,
+                }
+            });
+    }
+
+    match (input, comparison) {
+        (DataType::Float32, DataType::Float64) => true,
+        (
+            DataType::Decimal128(from_precision, from_scale),
+            DataType::Decimal128(to_precision, to_scale),
+        ) => {
+            from_scale <= to_scale
+                && i16::from(*from_precision) - i16::from(*from_scale)
+                    <= i16::from(*to_precision) - i16::from(*to_scale)
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]

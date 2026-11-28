@@ -36,7 +36,8 @@ use tracing::debug;
 
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::engine::{
-    is_exact_partition_predicate, to_datafusion_expr, to_delta_expression, to_delta_predicate,
+    is_exact_partition_predicate, is_null_safe_comparison_with_nan, to_datafusion_expr,
+    to_delta_expression, to_delta_predicate,
 };
 use crate::delta_datafusion::table_provider::next::FILE_ID_COLUMN_DEFAULT;
 use crate::kernel::{Scan, Snapshot};
@@ -580,9 +581,13 @@ fn process_predicate<'a>(
         only_partition_refs || expr.column_refs().iter().any(|c| cols.contains(&c.name));
     let has_file_id = expr.column_refs().iter().any(|c| file_id_column == c.name);
 
-    if has_file_id {
-        // file-id filters cannot be evaluated in kernel and must not be pushed to parquet.
-        // Mark as Unsupported so DataFusion keeps a post-scan filter for correctness.
+    if has_file_id
+        || expr
+            .exists(|node| Ok(is_null_safe_comparison_with_nan(node)))
+            .unwrap_or(true)
+    {
+        // Keep file-ID filters and null-safe NaN comparisons above the scan.
+        // Both Delta and Parquet min/max bounds can omit NaNs.
         return ProcessedPredicate {
             pushdown: TableProviderFilterPushDown::Unsupported,
             kernel_predicate: None,
@@ -1463,6 +1468,46 @@ mod tests {
             vec![TableProviderFilterPushDown::Unsupported]
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_null_safe_nan_comparisons_remain_post_scan_filters() -> TestResult {
+        use crate::operations::create::CreateBuilder;
+        use datafusion::logical_expr::{Operator, binary_expr};
+
+        let table = CreateBuilder::new()
+            .with_location("memory:///")
+            .with_columns(vec![
+                StructField::nullable("f32", KernelDataType::FLOAT),
+                StructField::nullable("f64", KernelDataType::DOUBLE),
+            ])
+            .await?;
+        let config = table.snapshot()?.snapshot().table_configuration();
+        let scan_config = DeltaScanConfig {
+            enable_parquet_pushdown: true,
+            ..Default::default()
+        };
+
+        for (column, nan, finite) in [
+            ("f32", lit(f32::NAN), lit(1.0_f32)),
+            ("f64", lit(f64::NAN), lit(1.0_f64)),
+        ] {
+            let filter = binary_expr(col(column), Operator::IsNotDistinctFrom, nan);
+            let finite_filter = col(column).eq(finite);
+            assert_eq!(
+                supports_filters_pushdown(&[&filter, &finite_filter], config, &scan_config),
+                [
+                    TableProviderFilterPushDown::Unsupported,
+                    TableProviderFilterPushDown::Inexact,
+                ],
+            );
+            let (kernel, parquet) =
+                process_filters(&[filter, finite_filter.clone()], config, &scan_config)?;
+            let expected = Predicate::and_from([to_delta_predicate(&finite_filter)?]);
+            assert_eq!(kernel.as_deref(), Some(&expected));
+            assert_eq!(parquet, Some(finite_filter));
+        }
         Ok(())
     }
 

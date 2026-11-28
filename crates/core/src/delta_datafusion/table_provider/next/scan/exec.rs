@@ -15,12 +15,13 @@ use arrow_array::StringViewArray;
 use arrow_array::{Array, ArrayRef, BooleanArray, UInt64Array};
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
-use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{
     ColumnStatistics, HashMap, exec_err, internal_datafusion_err, internal_err, plan_err,
 };
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::expressions::Column;
+use datafusion::logical_expr::Operator;
+use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion::physical_expr::utils::collect_columns;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties};
 use datafusion::physical_plan::execution_plan::{CardinalityEffect, PlanProperties};
@@ -45,12 +46,26 @@ use futures::stream::{Stream, StreamExt};
 
 use super::plan::KernelScanPlan;
 use super::runtime_filter::RuntimeScanFilePruner;
+use crate::delta_datafusion::engine::is_float_nan;
 use crate::delta_datafusion::file_id::file_id_field;
 use crate::kernel::ARROW_HANDLER;
 use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
 
 const DELTA_MATERIALIZED_PUSHDOWN_SENTINEL: &str =
     "__delta_rs_unpushable_delta_materialized_filter";
+
+fn is_null_safe_physical_comparison_with_nan(expr: &dyn PhysicalExpr) -> bool {
+    let Some(binary) = expr.downcast_ref::<BinaryExpr>() else {
+        return false;
+    };
+    matches!(
+        binary.op(),
+        Operator::IsDistinctFrom | Operator::IsNotDistinctFrom
+    ) && [binary.left(), binary.right()]
+        .into_iter()
+        .filter_map(|operand| operand.downcast_ref::<Literal>())
+        .any(|literal| is_float_nan(literal.value()))
+}
 
 /// Deletion-vector inputs for [`DeltaScanExec`].
 #[derive(Clone, Debug)]
@@ -670,7 +685,13 @@ impl ExecutionPlan for DeltaScanExec {
                 parent_filters
                     .iter()
                     .map(|filter| {
-                        if self.references_delta_materialized_column(filter) {
+                        // Parquet can use parent filters for pruning even when row filtering
+                        // is disabled. Keep null-safe NaN comparisons above that scan.
+                        if self.references_delta_materialized_column(filter)
+                            || filter.exists(|expr| {
+                                Ok(is_null_safe_physical_comparison_with_nan(expr.as_ref()))
+                            })?
+                        {
                             // DataFusion has no public API for mixed parent filter support.
                             // Pass an impossible child column to `from_children`; DataFusion
                             // reports this parent filter as unsupported.
@@ -1421,6 +1442,127 @@ mod tests {
         assert_eq!(child_filters[0].len(), 2);
         assert!(matches!(child_filters[0][0].discriminant, PushedDown::No));
         assert!(matches!(child_filters[0][1].discriminant, PushedDown::Yes));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_null_safe_nan_filter_keeps_legacy_parquet_row() -> TestResult {
+        use arrow_array::{Float32Array, Int32Array};
+        use datafusion::logical_expr::binary_expr;
+        use datafusion::physical_plan::filter::FilterExec;
+        use datafusion::prelude::SessionContext;
+        use object_store::{ObjectStoreExt as _, path::Path};
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::statistics::Statistics as ParquetStatistics;
+        use serde_json::json;
+
+        use crate::kernel::{Action, Add, StructField, transaction::CommitBuilder};
+        use crate::operations::create::CreateBuilder;
+        use crate::protocol::{DeltaOperation, SaveMode};
+
+        let mut table = CreateBuilder::new()
+            .with_location("memory:///")
+            .with_columns(vec![
+                StructField::new("id", KernelDataType::INTEGER, false),
+                StructField::nullable("value", KernelDataType::FLOAT),
+            ])
+            .await?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Float32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(Float32Array::from(vec![1.0, f32::NAN])),
+            ],
+        )?;
+        let mut parquet = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut parquet, schema, None)?;
+        writer.write(&batch)?;
+        let metadata = writer.close()?;
+        let Some(ParquetStatistics::Float(bounds)) = metadata.row_group(0).column(1).statistics()
+        else {
+            panic!("expected float statistics in the Parquet footer");
+        };
+        assert_eq!(bounds.min_opt(), Some(&1.0));
+        assert_eq!(bounds.max_opt(), Some(&1.0));
+
+        let log_store = table.log_store();
+        let store = log_store.object_store();
+        let path = "legacy.parquet";
+        let size = parquet.len() as i64;
+        store.put(&Path::from(path), parquet.into()).await?;
+        CommitBuilder::default()
+            .with_actions(vec![Action::Add(Add {
+                path: path.into(),
+                size,
+                data_change: true,
+                stats: Some(
+                    json!({
+                        "numRecords": 2,
+                        "minValues": { "value": 1.0 },
+                        "maxValues": { "value": 1.0 },
+                        "nullCount": { "value": 0 },
+                    })
+                    .to_string(),
+                ),
+                ..Default::default()
+            })])
+            .build(
+                Some(table.snapshot()?),
+                log_store.clone(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+        table.load().await?;
+
+        let mut config = SessionConfig::new().with_parquet_pruning(true);
+        config.options_mut().execution.parquet.pushdown_filters = false;
+        let session = SessionContext::new_with_config(config);
+        session
+            .runtime_env()
+            .register_object_store(log_store.root_url(), store);
+        session.register_table("legacy_nan", table.table_provider().await?)?;
+        let filter = binary_expr(col("value"), Operator::IsNotDistinctFrom, lit(f32::NAN));
+        let plan = session
+            .table("legacy_nan")
+            .await?
+            .filter(filter.and(col("id").gt(lit(0_i32))))?
+            .create_physical_plan()
+            .await?;
+        let batches = collect(Arc::clone(&plan), session.task_ctx()).await?;
+        assert_batches_sorted_eq!(
+            &[
+                "+----+-------+",
+                "| id | value |",
+                "+----+-------+",
+                "| 2  | NaN   |",
+                "+----+-------+",
+            ],
+            &batches
+        );
+        assert!(plan.exists(|node| {
+            Ok(node
+                .downcast_ref::<FilterExec>()
+                .is_some_and(|filter| filter.predicate().to_string().contains("NaN")))
+        })?);
+        assert!(plan.exists(|node| {
+            Ok(node
+                .downcast_ref::<DataSourceExec>()
+                .and_then(|source| source.data_source().downcast_ref::<FileScanConfig>())
+                .and_then(|scan| scan.file_source.filter())
+                .is_some_and(|filter| {
+                    let display = filter.to_string();
+                    display.contains("id") && !display.contains("NaN")
+                }))
+        })?);
 
         Ok(())
     }

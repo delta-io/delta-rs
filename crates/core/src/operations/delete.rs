@@ -1312,6 +1312,57 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
+    #[rstest]
+    #[case::integer_distinct("value IS DISTINCT FROM 5", &[1])]
+    #[case::integer_not_distinct("value IS NOT DISTINCT FROM 5", &[2, 3])]
+    #[case::date_distinct("day IS DISTINCT FROM '1970-01-01'", &[1])]
+    #[case::fractional_distinct("value IS DISTINCT FROM 5.5", &[])]
+    #[case::fractional_not_distinct("value IS NOT DISTINCT FROM 5.5", &[1, 2, 3])]
+    #[case::rounded_column("large IS DISTINCT FROM CAST(9007199254740992 AS DOUBLE)", &[1, 2])]
+    #[tokio::test]
+    async fn test_delete_null_safe_literal_coercion(
+        #[case] predicate: &str,
+        #[case] remaining_ids: &[i32],
+    ) -> DeltaResult<()> {
+        use arrow::array::{Date32Array, Int64Array};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Int32, true),
+            Field::new("day", DataType::Date32, true),
+            Field::new("large", DataType::Int64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![Some(5), Some(7), None])),
+                Arc::new(Date32Array::from(vec![Some(0), Some(1), None])),
+                Arc::new(Int64Array::from(vec![
+                    Some(1_i64 << 53),
+                    Some((1_i64 << 53) + 1),
+                    None,
+                ])),
+            ],
+        )?;
+        let table = DeltaTable::new_in_memory().write(vec![batch]).await?;
+        let (table, _) = table.delete().with_predicate(predicate).await?;
+
+        let mut ids = Vec::new();
+        for batch in get_data(&table).await {
+            let column = batch
+                .column_by_name("id")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            ids.extend_from_slice(column.values());
+        }
+        ids.sort_unstable();
+        assert_eq!(ids, remaining_ids);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_delete_on_partition_column() {
         // Perform a delete where the predicate only contains partition columns
