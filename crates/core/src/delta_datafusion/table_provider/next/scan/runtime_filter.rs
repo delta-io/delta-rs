@@ -174,8 +174,11 @@ impl RuntimeScanFilePruner {
             // we don't parse stats beyond what file skipping needs
             .with_stats_materialization(FileStatsMaterialization::query(StatsProjection::none()))
             .build()?;
-        let stream =
-            scan.scan_metadata_seeded(Arc::clone(&self.engine), snapshot.materialized_files());
+        let stream = scan.scan_metadata_seeded(
+            Arc::clone(&self.engine),
+            snapshot.materialized_files(),
+            None,
+        );
 
         let mut keep = vec![false; self.file_indexes.len()];
         super::for_each_selected_file(scan.table_root(), stream, |file_url| {
