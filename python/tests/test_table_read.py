@@ -662,6 +662,20 @@ def test_file_uris_local_directory(
     assert files == expected
 
 
+@pytest.mark.pyarrow
+def test_file_uris_in_predicate_with_empty_string(tmp_path: Path):
+    import pyarrow as pa
+
+    data = pa.table({"s": pa.array([None, None, None, ""], pa.string())})
+    write_deltalake(tmp_path, data)
+    dt = DeltaTable(tmp_path)
+
+    eq_files = dt.file_uris(file_pruning_predicate=[("s", "=", "")])
+    in_files = dt.file_uris(file_pruning_predicate=[("s", "in", [""])])
+    assert len(eq_files) == 1
+    assert in_files == eq_files
+
+
 def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
     table_path = Path(url2pathname(urlparse(dt.table_uri).path))
     absolute_paths = [(table_path / path).as_posix() for path in expected_paths]

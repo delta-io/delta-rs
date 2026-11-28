@@ -1329,6 +1329,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_select_from_column_mapping() -> DeltaResult<()> {
+        let table = open_fs_path("../test/tests/data/table_with_column_mapping");
+        let provider = table.table_provider().await.unwrap();
+        let ctx: SessionContext = DeltaSessionContext::default().into();
+        ctx.register_table("test", provider).unwrap();
+
+        let df = ctx.sql("select * from test").await?;
+        let actual = df.collect().await?;
+        let expected = vec![
+            "+--------------------+------------------------+",
+            "| Company Very Short | Super Name             |",
+            "+--------------------+------------------------+",
+            "| BME                | Timothy Lamb           |",
+            "| BMS                | Anthony Johnson        |",
+            "| BMS                | Mr. Daniel Ferguson MD |",
+            "| BMS                | Nathan Bennett         |",
+            "| BMS                | Stephanie Mcgrath      |",
+            "+--------------------+------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_multiple_predicate_pushdown() {
         let schema = Arc::new(ArrowSchema::new(vec![
             Field::new("moDified", ArrowDataType::Utf8, true),
