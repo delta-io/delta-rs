@@ -1,6 +1,7 @@
 //! Helper module to check if a transaction can be committed in case of conflicting commits.
 use std::collections::HashSet;
 
+use bytes::Bytes;
 use delta_kernel::table_features::TableFeature;
 use delta_kernel::table_properties::IsolationLevel;
 
@@ -259,6 +260,8 @@ impl<'a> TransactionInfo<'a> {
 pub(crate) struct WinningCommitSummary {
     pub actions: Vec<Action>,
     pub commit_info: Option<CommitInfo>,
+    /// The commit file exactly as it is stored in the log.
+    pub bytes: Bytes,
 }
 
 impl WinningCommitSummary {
@@ -285,6 +288,7 @@ impl WinningCommitSummary {
                 Ok(Self {
                     actions,
                     commit_info,
+                    bytes,
                 })
             }
             None => Err(DeltaTableError::InvalidVersion(winning_commit_version)),
@@ -801,6 +805,7 @@ mod tests {
         let summary = WinningCommitSummary {
             actions: concurrent,
             commit_info: None,
+            bytes: Bytes::new(),
         };
         let checker = ConflictChecker::new(transaction_info, summary, None);
         checker.check_conflicts()
@@ -1408,6 +1413,7 @@ mod tests {
         let summary = WinningCommitSummary {
             actions: vec![ActionFactory::remove(&file_unread, true).into()],
             commit_info: None,
+            bytes: Bytes::new(),
         };
         assert!(matches!(
             ConflictChecker::new(transaction_info, summary, None).check_conflicts(),

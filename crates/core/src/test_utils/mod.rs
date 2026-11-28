@@ -8,6 +8,8 @@ pub(crate) mod catalog_managed;
 pub(crate) mod datafusion;
 #[cfg(test)]
 pub(crate) mod failing_store;
+#[cfg(all(test, feature = "datafusion"))]
+pub(crate) mod lost_response_store;
 #[cfg(test)]
 pub(crate) mod object_store;
 #[cfg(test)]

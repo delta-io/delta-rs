@@ -228,6 +228,9 @@ enum Release {
     FailBefore,
     /// Write, then fail, like a response lost after the put landed.
     FailAfter,
+    /// Write, then report the version as taken, like an S3 client retrying a put whose response
+    /// was lost and finding its own commit.
+    LandReportExists,
 }
 
 #[derive(Debug)]
@@ -247,7 +250,7 @@ struct Scheduler {
     changed: Notify,
     /// Releases in the order they happened, for printing a failing seed.
     trace: Mutex<Vec<String>>,
-    /// Writers that had at least one commit put fail.
+    /// Writers that had a commit put fail in a way they cannot tell apart from it not landing.
     faulted: Mutex<BTreeSet<usize>>,
 }
 
@@ -303,12 +306,15 @@ impl Scheduler {
                     let writer = waiting[rng.below(waiting.len() as u64) as usize];
                     let mut release = Release::Land;
                     if fault_percent > 0 && rng.chance(fault_percent) {
-                        release = if rng.chance(50) {
-                            Release::FailBefore
-                        } else {
-                            Release::FailAfter
+                        release = match rng.below(3) {
+                            0 => Release::FailBefore,
+                            1 => Release::FailAfter,
+                            _ => Release::LandReportExists,
                         };
-                        self.faulted.lock().unwrap().insert(writer);
+                        // A writer told its own commit is there can always tell it landed.
+                        if release != Release::LandReportExists {
+                            self.faulted.lock().unwrap().insert(writer);
+                        }
                     }
                     let Slot::Waiting {
                         version,
@@ -419,6 +425,13 @@ impl ObjectStore for GatedStore {
                     Release::FailAfter => {
                         self.inner.put_opts(location, payload, opts).await?;
                         return Err(injected_failure("after"));
+                    }
+                    Release::LandReportExists => {
+                        self.inner.put_opts(location, payload, opts).await?;
+                        return Err(object_store::Error::AlreadyExists {
+                            path: location.to_string(),
+                            source: "injected: the retried put found its own commit".into(),
+                        });
                     }
                 }
             }
@@ -890,6 +903,12 @@ async fn dst_concurrent_commits_smoke() {
 #[tokio::test(flavor = "current_thread")]
 async fn dst_concurrent_commits_regressions(#[case] seed: u64) {
     check_seeds(vec![seed], 0, 0).await;
+}
+
+/// A seed where a writer's commit lands but is reported as taken, which used to commit it twice.
+#[tokio::test(flavor = "current_thread")]
+async fn dst_lost_commit_response_5086() {
+    check_seeds(vec![297], 25, 0).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
